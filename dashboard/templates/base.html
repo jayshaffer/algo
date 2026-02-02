@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Alpaca Trading{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .sentiment-bullish { color: #22c55e; }
+        .sentiment-bearish { color: #ef4444; }
+        .sentiment-neutral { color: #6b7280; }
+        .bg-bullish { background-color: #dcfce7; }
+        .bg-bearish { background-color: #fee2e2; }
+        .bg-neutral { background-color: #f3f4f6; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <nav class="bg-gray-800 text-white p-4">
+        <div class="container mx-auto flex items-center justify-between">
+            <a href="/" class="text-xl font-bold">Alpaca Trading</a>
+            <div class="space-x-4">
+                <a href="/" class="hover:text-gray-300">Portfolio</a>
+                <a href="/signals" class="hover:text-gray-300">Signals</a>
+                <a href="/decisions" class="hover:text-gray-300">Decisions</a>
+                <a href="/performance" class="hover:text-gray-300">Performance</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto p-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-gray-800 text-gray-400 p-4 mt-8">
+        <div class="container mx-auto text-center text-sm">
+            Alpaca Learning Platform - Paper Trading
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Portfolio Overview</h1>
+
+<!-- Account Summary -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Portfolio Value</div>
+        <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.portfolio_value|float) if snapshot else "0.00" }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Cash</div>
+        <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.cash|float) if snapshot else "0.00" }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Buying Power</div>
+        <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.buying_power|float) if snapshot else "0.00" }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Long Market Value</div>
+        <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.long_market_value|float) if snapshot else "0.00" }}</div>
+    </div>
+</div>
+
+<!-- Positions -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Positions</h2>
+    </div>
+    <div class="p-4">
+        {% if positions %}
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Ticker</th>
+                    <th class="pb-2">Shares</th>
+                    <th class="pb-2">Avg Cost</th>
+                    <th class="pb-2">Total Value</th>
+                    <th class="pb-2">Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pos in positions %}
+                <tr class="border-t">
+                    <td class="py-2 font-semibold">{{ pos.ticker }}</td>
+                    <td class="py-2">{{ pos.shares }}</td>
+                    <td class="py-2">${{ "%.2f"|format(pos.avg_cost|float) }}</td>
+                    <td class="py-2">${{ "%.2f"|format((pos.shares|float * pos.avg_cost|float)) }}</td>
+                    <td class="py-2 text-gray-500 text-sm">{{ pos.updated_at.strftime('%Y-%m-%d %H:%M') if pos.updated_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No open positions</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Strategy -->
+{% if strategy %}
+<div class="bg-white rounded-lg shadow mt-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Current Strategy</h2>
+    </div>
+    <div class="p-4">
+        <p class="mb-2">{{ strategy.description or 'No description' }}</p>
+        <div class="flex gap-4 text-sm">
+            <span class="bg-gray-100 px-2 py-1 rounded">Risk: {{ strategy.risk_tolerance or 'Not set' }}</span>
+            {% if strategy.focus_sectors %}
+            <span class="bg-gray-100 px-2 py-1 rounded">Sectors: {{ strategy.focus_sectors|join(', ') }}</span>
+            {% endif %}
+            {% if strategy.watchlist %}
+            <span class="bg-gray-100 px-2 py-1 rounded">Watchlist: {{ strategy.watchlist|join(', ') }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

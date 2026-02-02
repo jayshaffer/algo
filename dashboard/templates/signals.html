@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Signals - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Market Signals</h1>
+
+<!-- Signal Summary -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">7-Day Signal Summary</h2>
+    </div>
+    <div class="p-4">
+        {% if signal_summary %}
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {% for summary in signal_summary %}
+            <div class="border rounded p-3">
+                <div class="font-bold text-lg">{{ summary.ticker }}</div>
+                <div class="flex gap-2 text-sm mt-1">
+                    <span class="sentiment-bullish">+{{ summary.bullish }}</span>
+                    <span class="sentiment-bearish">-{{ summary.bearish }}</span>
+                    <span class="sentiment-neutral">={{ summary.neutral }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No signals in the last 7 days</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Macro Signals -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Macro Signals</h2>
+    </div>
+    <div class="p-4">
+        {% if macro_signals %}
+        <div class="space-y-3">
+            {% for signal in macro_signals %}
+            <div class="border-l-4 pl-3 py-1 {% if signal.sentiment == 'bullish' %}border-green-500 bg-bullish{% elif signal.sentiment == 'bearish' %}border-red-500 bg-bearish{% else %}border-gray-400 bg-neutral{% endif %}">
+                <div class="font-medium">{{ signal.headline }}</div>
+                <div class="text-sm text-gray-600 flex gap-3 mt-1">
+                    <span class="bg-gray-200 px-2 py-0.5 rounded">{{ signal.category }}</span>
+                    <span class="sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</span>
+                    {% if signal.affected_sectors %}
+                    <span>Sectors: {{ signal.affected_sectors|join(', ') }}</span>
+                    {% endif %}
+                    <span class="text-gray-400">{{ signal.published_at.strftime('%m/%d %H:%M') if signal.published_at else '' }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No macro signals</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Ticker Signals -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Ticker Signals</h2>
+    </div>
+    <div class="p-4">
+        {% if ticker_signals %}
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Ticker</th>
+                    <th class="pb-2">Headline</th>
+                    <th class="pb-2">Category</th>
+                    <th class="pb-2">Sentiment</th>
+                    <th class="pb-2">Confidence</th>
+                    <th class="pb-2">Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for signal in ticker_signals %}
+                <tr class="border-t">
+                    <td class="py-2 font-semibold">{{ signal.ticker }}</td>
+                    <td class="py-2 text-sm">{{ signal.headline[:60] }}{% if signal.headline|length > 60 %}...{% endif %}</td>
+                    <td class="py-2"><span class="bg-gray-100 px-2 py-0.5 rounded text-sm">{{ signal.category }}</span></td>
+                    <td class="py-2 sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</td>
+                    <td class="py-2 text-sm text-gray-600">{{ signal.confidence }}</td>
+                    <td class="py-2 text-sm text-gray-500">{{ signal.published_at.strftime('%m/%d %H:%M') if signal.published_at else '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No ticker signals</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

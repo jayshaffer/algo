@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Decisions - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Decision History</h1>
+
+<!-- Decision Stats -->
+{% if stats %}
+<div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Total Decisions</div>
+        <div class="text-2xl font-bold">{{ stats.total_decisions or 0 }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Buys</div>
+        <div class="text-2xl font-bold text-green-600">{{ stats.buys or 0 }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Sells</div>
+        <div class="text-2xl font-bold text-red-600">{{ stats.sells or 0 }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Holds</div>
+        <div class="text-2xl font-bold text-gray-600">{{ stats.holds or 0 }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Avg 7d Outcome</div>
+        <div class="text-2xl font-bold {% if stats.avg_outcome_7d and stats.avg_outcome_7d > 0 %}text-green-600{% elif stats.avg_outcome_7d and stats.avg_outcome_7d < 0 %}text-red-600{% endif %}">
+            {{ "%.2f"|format(stats.avg_outcome_7d|float) if stats.avg_outcome_7d else '-' }}%
+        </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Avg 30d Outcome</div>
+        <div class="text-2xl font-bold {% if stats.avg_outcome_30d and stats.avg_outcome_30d > 0 %}text-green-600{% elif stats.avg_outcome_30d and stats.avg_outcome_30d < 0 %}text-red-600{% endif %}">
+            {{ "%.2f"|format(stats.avg_outcome_30d|float) if stats.avg_outcome_30d else '-' }}%
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Decisions Table -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Recent Decisions (30 days)</h2>
+    </div>
+    <div class="p-4 overflow-x-auto">
+        {% if decisions %}
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Date</th>
+                    <th class="pb-2">Ticker</th>
+                    <th class="pb-2">Action</th>
+                    <th class="pb-2">Qty</th>
+                    <th class="pb-2">Price</th>
+                    <th class="pb-2">Account Equity</th>
+                    <th class="pb-2">7d</th>
+                    <th class="pb-2">30d</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in decisions %}
+                <tr class="border-t hover:bg-gray-50">
+                    <td class="py-2">{{ d.date.strftime('%Y-%m-%d') if d.date else '' }}</td>
+                    <td class="py-2 font-semibold">{{ d.ticker }}</td>
+                    <td class="py-2">
+                        <span class="px-2 py-0.5 rounded text-sm {% if d.action == 'buy' %}bg-green-100 text-green-800{% elif d.action == 'sell' %}bg-red-100 text-red-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                            {{ d.action|upper }}
+                        </span>
+                    </td>
+                    <td class="py-2">{{ d.quantity or '-' }}</td>
+                    <td class="py-2">{{ "$%.2f"|format(d.price|float) if d.price else '-' }}</td>
+                    <td class="py-2 text-sm text-gray-600">${{ "%.0f"|format(d.account_equity|float) if d.account_equity else '-' }}</td>
+                    <td class="py-2 {% if d.outcome_7d and d.outcome_7d > 0 %}text-green-600{% elif d.outcome_7d and d.outcome_7d < 0 %}text-red-600{% endif %}">
+                        {{ "%.1f"|format(d.outcome_7d|float) if d.outcome_7d else '-' }}%
+                    </td>
+                    <td class="py-2 {% if d.outcome_30d and d.outcome_30d > 0 %}text-green-600{% elif d.outcome_30d and d.outcome_30d < 0 %}text-red-600{% endif %}">
+                        {{ "%.1f"|format(d.outcome_30d|float) if d.outcome_30d else '-' }}%
+                    </td>
+                </tr>
+                <tr class="border-t bg-gray-50">
+                    <td colspan="8" class="py-2 px-4 text-sm text-gray-600">
+                        <strong>Reasoning:</strong> {{ d.reasoning or 'No reasoning provided' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No decisions recorded</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

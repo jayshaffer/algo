@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}Performance - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Performance</h1>
+
+<!-- Performance Metrics -->
+{% if metrics %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Starting Value</div>
+        <div class="text-xl font-bold">${{ "%.2f"|format(metrics.start_value) }}</div>
+        <div class="text-sm text-gray-400">{{ metrics.start_date }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Current Value</div>
+        <div class="text-xl font-bold">${{ "%.2f"|format(metrics.end_value) }}</div>
+        <div class="text-sm text-gray-400">{{ metrics.end_date }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">P&L</div>
+        <div class="text-xl font-bold {% if metrics.pnl > 0 %}text-green-600{% elif metrics.pnl < 0 %}text-red-600{% endif %}">
+            ${{ "%.2f"|format(metrics.pnl) }}
+        </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Return</div>
+        <div class="text-xl font-bold {% if metrics.pnl_pct > 0 %}text-green-600{% elif metrics.pnl_pct < 0 %}text-red-600{% endif %}">
+            {{ "%.2f"|format(metrics.pnl_pct) }}%
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+    <p class="text-yellow-800">Not enough data to calculate performance metrics. Start trading to see performance.</p>
+</div>
+{% endif %}
+
+<!-- Equity Curve Chart -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Equity Curve (90 days)</h2>
+    </div>
+    <div class="p-4">
+        {% if equity_data %}
+        <canvas id="equityChart" height="100"></canvas>
+        {% else %}
+        <p class="text-gray-500">No equity data available</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Cash vs Invested Chart -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Cash vs Invested</h2>
+    </div>
+    <div class="p-4">
+        {% if equity_data %}
+        <canvas id="allocationChart" height="100"></canvas>
+        {% else %}
+        <p class="text-gray-500">No data available</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if equity_data %}
+<script>
+    const equityData = {{ equity_data|tojson }};
+
+    // Equity Curve
+    const equityCtx = document.getElementById('equityChart').getContext('2d');
+    new Chart(equityCtx, {
+        type: 'line',
+        data: {
+            labels: equityData.map(d => d.date),
+            datasets: [{
+                label: 'Portfolio Value',
+                data: equityData.map(d => d.portfolio_value),
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: {
+                    beginAtZero: false,
+                    ticks: {
+                        callback: function(value) {
+                            return '$' + value.toLocaleString();
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Allocation Chart
+    const allocCtx = document.getElementById('allocationChart').getContext('2d');
+    new Chart(allocCtx, {
+        type: 'line',
+        data: {
+            labels: equityData.map(d => d.date),
+            datasets: [{
+                label: 'Cash',
+                data: equityData.map(d => d.cash),
+                borderColor: 'rgb(34, 197, 94)',
+                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                fill: true,
+                tension: 0.1
+            }, {
+                label: 'Invested',
+                data: equityData.map(d => d.portfolio_value - d.cash),
+                borderColor: 'rgb(239, 68, 68)',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                fill: true,
+                tension: 0.1
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    stacked: true,
+                    ticks: {
+                        callback: function(value) {
+                            return '$' + value.toLocaleString();
+                        }
+                    }
+                }
+            }
+        }
+    });
+</script>
+{% endif %}
+{% endblock %}
