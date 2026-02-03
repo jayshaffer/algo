@@ -209,3 +209,97 @@ def delete_position(ticker: str) -> bool:
     with get_cursor() as cur:
         cur.execute("DELETE FROM positions WHERE ticker = %s", (ticker,))
         return cur.rowcount > 0
+
+
+# --- Theses ---
+
+def insert_thesis(
+    ticker: str,
+    direction: str,
+    thesis: str,
+    entry_trigger: Optional[str] = None,
+    exit_trigger: Optional[str] = None,
+    invalidation: Optional[str] = None,
+    confidence: str = "medium",
+    source: str = "ideation"
+) -> int:
+    """Insert a new trade thesis."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO theses (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source))
+        return cur.fetchone()["id"]
+
+
+def get_active_theses(ticker: Optional[str] = None) -> list:
+    """Get all active theses, optionally filtered by ticker."""
+    with get_cursor() as cur:
+        if ticker:
+            cur.execute("""
+                SELECT * FROM theses
+                WHERE status = 'active' AND ticker = %s
+                ORDER BY created_at DESC
+            """, (ticker,))
+        else:
+            cur.execute("""
+                SELECT * FROM theses
+                WHERE status = 'active'
+                ORDER BY created_at DESC
+            """)
+        return cur.fetchall()
+
+
+def update_thesis(
+    thesis_id: int,
+    thesis: Optional[str] = None,
+    entry_trigger: Optional[str] = None,
+    exit_trigger: Optional[str] = None,
+    invalidation: Optional[str] = None,
+    confidence: Optional[str] = None
+) -> bool:
+    """Update an existing thesis."""
+    updates = []
+    params = []
+
+    if thesis is not None:
+        updates.append("thesis = %s")
+        params.append(thesis)
+    if entry_trigger is not None:
+        updates.append("entry_trigger = %s")
+        params.append(entry_trigger)
+    if exit_trigger is not None:
+        updates.append("exit_trigger = %s")
+        params.append(exit_trigger)
+    if invalidation is not None:
+        updates.append("invalidation = %s")
+        params.append(invalidation)
+    if confidence is not None:
+        updates.append("confidence = %s")
+        params.append(confidence)
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = NOW()")
+    params.append(thesis_id)
+
+    with get_cursor() as cur:
+        cur.execute(f"""
+            UPDATE theses
+            SET {', '.join(updates)}
+            WHERE id = %s
+        """, params)
+        return cur.rowcount > 0
+
+
+def close_thesis(thesis_id: int, status: str, reason: str) -> bool:
+    """Close a thesis with a status and reason."""
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE theses
+            SET status = %s, close_reason = %s, closed_at = NOW(), updated_at = NOW()
+            WHERE id = %s
+        """, (status, reason, thesis_id))
+        return cur.rowcount > 0
