@@ -24,4 +24,4 @@ echo "Waiting for services..."
 sleep 5
 
 echo "Running: $@"
-docker compose exec -T app "$@"
+docker compose exec -T "$@"
