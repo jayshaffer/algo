@@ -66,7 +66,7 @@ def fetch_news(
     response = client.get_news(request)
 
     items = []
-    for news in response.news:
+    for news in response.data.get("news", []):
         items.append(NewsItem(
             id=str(news.id),
             headline=news.headline,

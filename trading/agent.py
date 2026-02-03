@@ -1,4 +1,4 @@
-"""Claude integration for trading decisions."""
+"""Local LLM integration for trading decisions via Ollama."""
 
 import os
 import json
@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-import anthropic
+import ollama
 
 
 @dataclass
 class TradingDecision:
-    """A trading decision from Claude."""
+    """A trading decision from the LLM."""
     action: str         # buy, sell, hold
     ticker: str
     quantity: Optional[int]
@@ -91,46 +91,48 @@ If no action is warranted, return an empty decisions array with explanation in m
 If no theses need invalidation, return an empty thesis_invalidations array."""
 
 
-def get_anthropic_client() -> anthropic.Anthropic:
-    """Create Anthropic client from environment."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY must be set")
-    return anthropic.Anthropic(api_key=api_key)
+def get_ollama_client() -> ollama.Client:
+    """Create Ollama client from environment."""
+    host = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    return ollama.Client(host=host)
 
 
 def get_trading_decisions(
     context: str,
-    model: str = "claude-sonnet-4-20250514",
-    max_tokens: int = 2000
+    model: str = "qwen2.5:14b",
 ) -> AgentResponse:
     """
-    Get trading decisions from Claude based on market context.
+    Get trading decisions from local LLM via Ollama.
 
     Args:
         context: Compressed trading context string
-        model: Claude model to use
-        max_tokens: Max response tokens
+        model: Ollama model to use (default: qwen2.5:14b)
 
     Returns:
         AgentResponse with decisions and analysis
     """
-    client = get_anthropic_client()
+    client = get_ollama_client()
 
-    message = client.messages.create(
+    response = client.chat(
         model=model,
-        max_tokens=max_tokens,
-        system=TRADING_SYSTEM_PROMPT,
         messages=[
+            {
+                "role": "system",
+                "content": TRADING_SYSTEM_PROMPT,
+            },
             {
                 "role": "user",
                 "content": f"Here is the current market context. Analyze and provide trading decisions.\n\n{context}"
             }
-        ]
+        ],
+        options={
+            "temperature": 0.3,  # Lower temperature for more consistent JSON
+            "num_predict": 2000,
+        },
     )
 
     # Extract text response
-    response_text = message.content[0].text
+    response_text = response["message"]["content"]
 
     # Parse JSON response
     try:
@@ -146,7 +148,7 @@ def get_trading_decisions(
 
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse Claude response as JSON: {response_text}") from e
+        raise ValueError(f"Failed to parse LLM response as JSON: {response_text}") from e
 
     # Build response object
     decisions = []

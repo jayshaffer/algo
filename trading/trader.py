@@ -50,7 +50,7 @@ class TradingSessionResult:
 
 def run_trading_session(
     dry_run: bool = False,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "qwen2.5:14b"
 ) -> TradingSessionResult:
     """
     Run a complete trading session.
@@ -58,13 +58,13 @@ def run_trading_session(
     1. Sync positions from Alpaca
     2. Take account snapshot
     3. Build trading context
-    4. Get decisions from Claude
+    4. Get decisions from local LLM via Ollama
     5. Validate and execute trades
     6. Log decisions to database
 
     Args:
         dry_run: If True, don't execute real trades
-        model: Claude model to use for decisions
+        model: Ollama model to use for decisions
 
     Returns:
         TradingSessionResult with session details
@@ -119,14 +119,14 @@ def run_trading_session(
         print(f"  Error: {e}")
         context = f"Error building context: {e}"
 
-    # Step 4: Get Claude decisions
-    print("\n[Step 4] Getting trading decisions from Claude...")
+    # Step 4: Get LLM decisions
+    print("\n[Step 4] Getting trading decisions from Ollama...")
     try:
         response = get_trading_decisions(context, model=model)
         print(f"  Received {len(response.decisions)} decisions")
         print(f"  Market summary: {response.market_summary[:100]}...")
     except Exception as e:
-        errors.append(f"Claude decision failed: {e}")
+        errors.append(f"LLM decision failed: {e}")
         print(f"  Error: {e}")
         return TradingSessionResult(
             timestamp=timestamp,
@@ -282,7 +282,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run trading agent session")
     parser.add_argument("--dry-run", action="store_true", help="Don't execute real trades")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Claude model to use")
+    parser.add_argument("--model", default="qwen2.5:14b", help="Ollama model to use")
 
     args = parser.parse_args()
 

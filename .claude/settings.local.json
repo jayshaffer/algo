@@ -7,7 +7,17 @@
       "Bash(git init:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(tree:*)",
+      "Bash(ls:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git worktree add:*)",
+      "Bash(if [ -f trading/requirements.txt ])",
+      "Bash(then echo \"Python project detected\")",
+      "Bash(fi)"
     ]
   }
 }

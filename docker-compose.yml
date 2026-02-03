@@ -39,6 +39,7 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+    command: ["sleep", "infinity"]
 
   dashboard:
     build: ./dashboard
