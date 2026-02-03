@@ -15,6 +15,9 @@ from .db import (
     delete_position,
     insert_account_snapshot,
     get_positions as db_get_positions,
+    upsert_open_order,
+    delete_open_order,
+    get_open_orders as db_get_open_orders,
 )
 
 
@@ -105,6 +108,48 @@ def sync_positions_from_alpaca() -> int:
     for ticker in db_positions:
         if ticker not in alpaca_tickers:
             delete_position(ticker)
+
+    return synced
+
+
+def sync_orders_from_alpaca() -> int:
+    """
+    Sync open orders from Alpaca to local database.
+
+    Returns:
+        Number of orders synced
+    """
+    client = get_trading_client()
+    orders = client.get_orders()
+
+    # Get current DB orders for comparison
+    db_orders = {o["order_id"]: o for o in db_get_open_orders()}
+
+    synced = 0
+    alpaca_order_ids = set()
+
+    for order in orders:
+        order_id = str(order.id)
+        alpaca_order_ids.add(order_id)
+
+        upsert_open_order(
+            order_id=order_id,
+            ticker=order.symbol,
+            side=order.side.value,
+            order_type=order.order_type.value,
+            qty=Decimal(str(order.qty)),
+            filled_qty=Decimal(str(order.filled_qty)) if order.filled_qty else Decimal(0),
+            limit_price=Decimal(str(order.limit_price)) if order.limit_price else None,
+            stop_price=Decimal(str(order.stop_price)) if order.stop_price else None,
+            status=order.status.value,
+            submitted_at=order.submitted_at,
+        )
+        synced += 1
+
+    # Remove orders no longer in Alpaca
+    for order_id in db_orders:
+        if order_id not in alpaca_order_ids:
+            delete_open_order(order_id)
 
     return synced
 

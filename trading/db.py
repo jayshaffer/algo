@@ -303,3 +303,50 @@ def close_thesis(thesis_id: int, status: str, reason: str) -> bool:
             WHERE id = %s
         """, (status, reason, thesis_id))
         return cur.rowcount > 0
+# --- Open Orders ---
+
+def upsert_open_order(
+    order_id: str,
+    ticker: str,
+    side: str,
+    order_type: str,
+    qty: Decimal,
+    filled_qty: Decimal,
+    limit_price: Optional[Decimal],
+    stop_price: Optional[Decimal],
+    status: str,
+    submitted_at: datetime
+) -> int:
+    """Insert or update an open order."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO open_orders (order_id, ticker, side, order_type, qty, filled_qty, limit_price, stop_price, status, submitted_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (order_id) DO UPDATE SET
+                filled_qty = EXCLUDED.filled_qty,
+                status = EXCLUDED.status,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id
+        """, (order_id, ticker, side, order_type, qty, filled_qty, limit_price, stop_price, status, submitted_at))
+        return cur.fetchone()["id"]
+
+
+def get_open_orders() -> list:
+    """Get all open orders."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM open_orders ORDER BY submitted_at DESC")
+        return cur.fetchall()
+
+
+def delete_open_order(order_id: str) -> bool:
+    """Delete an order (when filled or canceled)."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM open_orders WHERE order_id = %s", (order_id,))
+        return cur.rowcount > 0
+
+
+def clear_closed_orders() -> int:
+    """Remove orders that are no longer open in Alpaca."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM open_orders WHERE status NOT IN ('new', 'accepted', 'pending_new', 'partially_filled')")
+        return cur.rowcount

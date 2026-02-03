@@ -7,6 +7,7 @@ from typing import Optional
 
 from .db import (
     get_positions,
+    get_open_orders,
     get_news_signals,
     get_macro_signals,
     get_recent_decisions,
@@ -38,6 +39,27 @@ def get_portfolio_context(account_info: dict) -> str:
             lines.append(f"- {ticker}: {shares} shares @ ${avg_cost:.2f} avg")
     else:
         lines.append("- No open positions")
+
+    # Add open orders
+    orders = get_open_orders()
+    if orders:
+        lines.append("")
+        lines.append("Open Orders:")
+        for order in orders:
+            ticker = order["ticker"]
+            side = order["side"].upper()
+            qty = order["qty"]
+            filled = order["filled_qty"]
+            order_type = order["order_type"]
+            status = order["status"]
+
+            order_desc = f"- {side} {qty} {ticker} ({order_type})"
+            if order.get("limit_price"):
+                order_desc += f" @ ${float(order['limit_price']):.2f}"
+            if filled and filled > 0:
+                order_desc += f" [{filled}/{qty} filled]"
+            order_desc += f" - {status}"
+            lines.append(order_desc)
 
     # Add cash/buying power
     cash = account_info.get("cash", 0)
