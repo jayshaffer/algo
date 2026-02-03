@@ -192,3 +192,68 @@ def get_current_strategy():
             LIMIT 1
         """)
         return cur.fetchone()
+
+
+# --- Theses ---
+
+def get_thesis_stats():
+    """Return dict with counts by status and success rate."""
+    with get_cursor() as cur:
+        # Get counts by status
+        cur.execute("""
+            SELECT
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status = 'executed' THEN 1 ELSE 0 END) as executed,
+                SUM(CASE WHEN status = 'invalidated' THEN 1 ELSE 0 END) as invalidated,
+                SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) as expired
+            FROM theses
+        """)
+        counts = cur.fetchone()
+
+        # Get confidence distribution for active theses
+        cur.execute("""
+            SELECT confidence, COUNT(*) as count
+            FROM theses
+            WHERE status = 'active'
+            GROUP BY confidence
+        """)
+        confidence_rows = cur.fetchall()
+        confidence_dist = {row['confidence']: row['count'] for row in confidence_rows}
+
+        return {
+            'active': counts['active'] or 0,
+            'executed': counts['executed'] or 0,
+            'invalidated': counts['invalidated'] or 0,
+            'expired': counts['expired'] or 0,
+            'success_rate': None,  # TODO: Calculate when decisions linked to theses
+            'confidence_dist': confidence_dist,
+        }
+
+
+def get_theses(status_filter: str = 'active', sort_by: str = 'newest'):
+    """Return filtered/sorted thesis list."""
+    with get_cursor() as cur:
+        # Build WHERE clause
+        where_clause = ""
+        params = []
+        if status_filter and status_filter != 'all':
+            where_clause = "WHERE status = %s"
+            params.append(status_filter)
+
+        # Build ORDER BY clause
+        order_map = {
+            'newest': 'created_at DESC',
+            'oldest': 'created_at ASC',
+            'confidence': "CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END",
+            'ticker': 'ticker ASC',
+        }
+        order_clause = order_map.get(sort_by, 'created_at DESC')
+
+        cur.execute(f"""
+            SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+                   invalidation, confidence, source, status, created_at, updated_at
+            FROM theses
+            {where_clause}
+            ORDER BY {order_clause}
+        """, params)
+        return cur.fetchall()
