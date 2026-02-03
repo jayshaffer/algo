@@ -24,3 +24,6 @@ logs/
 
 # Data
 *.db
+
+# Git worktrees
+.worktrees/
