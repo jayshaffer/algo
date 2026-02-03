@@ -82,7 +82,7 @@ def chat(
             "stream": False,
             "options": {"temperature": temperature}
         },
-        timeout=200.0
+        timeout=2000.0
     )
     response.raise_for_status()
 
