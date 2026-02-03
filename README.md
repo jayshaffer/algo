@@ -4,16 +4,18 @@ An autonomous trading system that uses local LLMs to make trading decisions, lea
 
 ## Overview
 
-This system connects to Alpaca for trade execution and uses Ollama-hosted models for:
-- **Trading decisions** (Qwen 2.5 14B) - analyzes market context and decides buy/sell/hold
+This system connects to Alpaca for trade execution and uses LLMs for:
+- **Trading decisions** (Claude) - analyzes market context and decides buy/sell/hold
+- **Ideation** (Qwen 2.5 14B) - generates and manages trade theses based on market data
 - **News classification** (Phi-3 Mini) - categorizes news as ticker-specific or macro signals
 - **Relevance filtering** (Nomic Embed) - filters irrelevant news before processing
 
-All inference runs locally on your GPU. No cloud API costs.
+Local inference runs on your GPU via Ollama. Trading decisions use Claude API.
 
 ## Features
 
 - **Autonomous trading** - Daily automation via cron after market close
+- **Ideation system** - LLM generates trade theses with entry/exit triggers, reviews and invalidates stale ideas
 - **Learning system** - Journals every decision with reasoning, tracks 7/30-day outcomes
 - **Strategy evolution** - Analyzes patterns and adjusts watchlist, risk tolerance, focus sectors
 - **News pipeline** - Fetches, filters, and classifies market news into actionable signals
@@ -37,7 +39,9 @@ All inference runs locally on your GPU. No cloud API costs.
 ```
 News API → Filter (embeddings) → Classify (Phi-3) → Store signals
                                                           ↓
-Cron trigger → Build context → LLM decision → Execute trade → Log
+Market Data → Ideation (Qwen) → Generate/review theses → Store
+                                                          ↓
+Cron trigger → Build context (signals + theses) → Claude decision → Execute trade → Log
                                                           ↓
                               Backfill outcomes → Pattern analysis → Evolve strategy
 ```
@@ -48,6 +52,7 @@ Cron trigger → Build context → LLM decision → Execute trade → Log
 
 - Docker with GPU support (nvidia-container-toolkit)
 - Alpaca account (paper trading recommended)
+- Anthropic API key (for Claude)
 - NVIDIA GPU with 16GB+ VRAM (RTX 5070 Ti or similar)
 
 ### Setup
@@ -57,7 +62,7 @@ Cron trigger → Build context → LLM decision → Execute trade → Log
    git clone <repo>
    cd algo
    cp .env.example .env
-   # Edit .env with your Alpaca credentials
+   # Edit .env with your Alpaca and Anthropic credentials
    ```
 
 2. **Start services**
@@ -79,10 +84,27 @@ Cron trigger → Build context → LLM decision → Execute trade → Log
 
 5. **Run first trading session (dry run)**
    ```bash
-   docker compose exec trading python trader.py --dry-run
+   docker compose exec trading python -m trading.trader --dry-run
    ```
 
 ## Usage
+
+### Ideation Session
+
+Run before market open to generate/review trade theses:
+
+```bash
+# Generate and review theses
+docker compose exec trading python -m trading.ideation
+
+# Custom model
+docker compose exec trading python -m trading.ideation --model qwen2.5:32b
+```
+
+The ideation system:
+- Reviews existing active theses (keep, update, invalidate, expire)
+- Generates 3-5 new trade ideas based on market data
+- Each thesis includes entry/exit triggers and invalidation criteria
 
 ### Trading Session
 
@@ -90,14 +112,20 @@ Run daily after market close (4:30 PM ET recommended):
 
 ```bash
 # Dry run (no real trades)
-docker compose exec trading python trader.py --dry-run
+docker compose exec trading python -m trading.trader --dry-run
 
 # Live trading
-docker compose exec trading python trader.py
+docker compose exec trading python -m trading.trader
 
 # Custom model
-docker compose exec trading python trader.py --model qwen2.5:32b
+docker compose exec trading python -m trading.trader --model claude-opus-4-20250514
 ```
+
+The trading agent:
+- Receives active theses as part of context
+- May act on thesis if entry trigger conditions are met
+- Flags theses for invalidation if conditions observed
+- Marks theses as executed when traded
 
 ### News Pipeline
 
@@ -143,21 +171,23 @@ ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 ALPACA_BASE_URL=https://paper-api.alpaca.markets  # or https://api.alpaca.markets
 
+# Anthropic API (for trading decisions)
+ANTHROPIC_API_KEY=your_key
+
 # Database
 DATABASE_URL=postgresql://algo:algo@db:5432/trading
 
 # Ollama
 OLLAMA_URL=http://ollama:11434
-OLLAMA_MODEL=qwen2.5:14b
 ```
 
 ### Model Options
 
 | Model | VRAM | Use Case |
 |-------|------|----------|
-| `qwen2.5:7b` | ~5GB | Limited VRAM |
-| `qwen2.5:14b` | ~10GB | Recommended |
-| `qwen2.5:32b` | ~20GB | Better reasoning |
+| `qwen2.5:7b` | ~5GB | Limited VRAM (ideation) |
+| `qwen2.5:14b` | ~10GB | Recommended (ideation) |
+| `qwen2.5:32b` | ~20GB | Better reasoning (ideation) |
 
 ## Database Schema
 
@@ -165,6 +195,7 @@ OLLAMA_MODEL=qwen2.5:14b
 |-------|---------|
 | `news_signals` | Ticker-specific signals (earnings, analyst ratings, etc.) |
 | `macro_signals` | Economic/political signals (Fed, trade policy, etc.) |
+| `theses` | Trade ideas with entry/exit triggers and status |
 | `positions` | Current portfolio holdings |
 | `account_snapshots` | Daily equity curve |
 | `decisions` | Trading journal with reasoning and outcomes |
@@ -175,11 +206,14 @@ OLLAMA_MODEL=qwen2.5:14b
 Example crontab for daily automation:
 
 ```cron
+# Ideation (before market open)
+0 7 * * 1-5 cd /path/to/algo && docker compose exec -T trading python -m trading.ideation
+
 # News pipeline (every 6 hours during market hours)
 0 9,12,15 * * 1-5 cd /path/to/algo && docker compose exec -T trading python pipeline.py
 
 # Trading session (30 min after market close)
-30 16 * * 1-5 cd /path/to/algo && docker compose exec -T trading python trader.py
+30 16 * * 1-5 cd /path/to/algo && docker compose exec -T trading python -m trading.trader
 
 # Backfill outcomes (morning before market)
 0 6 * * 1-5 cd /path/to/algo && docker compose exec -T trading python backfill.py
@@ -193,8 +227,10 @@ Example crontab for daily automation:
 ```
 algo/
 ├── trading/
-│   ├── agent.py       # LLM integration for decisions
+│   ├── agent.py       # Claude integration for decisions
 │   ├── trader.py      # Trading session orchestrator
+│   ├── ideation.py    # Thesis generation and review
+│   ├── market_data.py # Market snapshot for ideation
 │   ├── context.py     # Context builder for LLM
 │   ├── executor.py    # Alpaca trade execution
 │   ├── pipeline.py    # News pipeline orchestrator
@@ -209,11 +245,12 @@ algo/
 │   └── ollama.py      # Ollama utilities
 ├── dashboard/
 │   ├── app.py         # Flask application
-│   ├── db.py          # Dashboard queries
+│   ├── queries.py     # Dashboard queries
 │   └── templates/     # Jinja2 templates
 ├── db/
 │   └── init/
-│       └── 001_schema.sql
+│       ├── 001_schema.sql
+│       └── 002_theses.sql
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -221,12 +258,13 @@ algo/
 
 ## How It Learns
 
-1. **Journaling** - Every decision stored with full reasoning and signals used
-2. **Outcome tracking** - 7-day and 30-day P&L backfilled from price data
-3. **Pattern analysis** - Identifies which signals, sentiments, and tickers perform best
-4. **Strategy evolution** - Adjusts watchlist, avoid list, risk tolerance, and focus sectors
+1. **Ideation** - LLM generates trade theses with entry/exit triggers based on market data
+2. **Journaling** - Every decision stored with full reasoning and signals used
+3. **Outcome tracking** - 7-day and 30-day P&L backfilled from price data
+4. **Pattern analysis** - Identifies which signals, sentiments, and tickers perform best
+5. **Strategy evolution** - Adjusts watchlist, avoid list, risk tolerance, and focus sectors
 
-The LLM receives recent decision outcomes as part of its context, enabling it to learn from past performance.
+The trading agent receives active theses and recent decision outcomes as part of its context, enabling it to act on pre-researched ideas and learn from past performance.
 
 ## Development
 

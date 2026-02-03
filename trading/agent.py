@@ -17,12 +17,21 @@ class TradingDecision:
     quantity: Optional[int]
     reasoning: str
     confidence: str     # high, medium, low
+    thesis_id: Optional[int] = None  # If acting on a thesis
+
+
+@dataclass
+class ThesisInvalidation:
+    """A thesis flagged for invalidation."""
+    thesis_id: int
+    reason: str
 
 
 @dataclass
 class AgentResponse:
     """Full response from trading agent."""
     decisions: list[TradingDecision]
+    thesis_invalidations: list[ThesisInvalidation]
     market_summary: str
     risk_assessment: str
 
@@ -32,10 +41,11 @@ TRADING_SYSTEM_PROMPT = """You are a trading agent for an automated trading syst
 You will receive:
 1. Current portfolio state (positions, cash, buying power)
 2. Macro economic context (Fed policy, trade news, etc.)
-3. Ticker-specific signals (earnings, analyst ratings, etc.)
-4. 7-day signal trends
-5. Recent decision outcomes (to learn from)
-6. Current strategy guidelines
+3. Active trade theses (pre-researched trade ideas with entry/exit triggers)
+4. Ticker-specific signals (earnings, analyst ratings, etc.)
+5. 7-day signal trends
+6. Recent decision outcomes (to learn from)
+7. Current strategy guidelines
 
 Based on this context, decide whether to BUY, SELL, or HOLD for each relevant ticker.
 
@@ -48,6 +58,13 @@ Rules:
 - If uncertain, recommend HOLD
 - Never suggest using more than available buying power
 
+Thesis handling:
+- Review active theses and check if entry trigger conditions are met
+- You MAY act on a thesis even without today's signals if the entry trigger is satisfied
+- If you observe conditions that match a thesis's invalidation criteria, flag it for invalidation
+- When acting on a thesis, reference the thesis in your reasoning
+- Theses represent pre-researched conviction ideas - give them appropriate weight
+
 Respond with valid JSON only in this format:
 {
     "decisions": [
@@ -56,14 +73,22 @@ Respond with valid JSON only in this format:
             "ticker": "AAPL",
             "quantity": 10,
             "reasoning": "Strong earnings beat with positive analyst sentiment...",
-            "confidence": "high" | "medium" | "low"
+            "confidence": "high" | "medium" | "low",
+            "thesis_id": null
+        }
+    ],
+    "thesis_invalidations": [
+        {
+            "thesis_id": 123,
+            "reason": "Observed condition matching invalidation criteria..."
         }
     ],
     "market_summary": "Brief summary of current market conditions...",
     "risk_assessment": "Current risk level and concerns..."
 }
 
-If no action is warranted, return an empty decisions array with explanation in market_summary."""
+If no action is warranted, return an empty decisions array with explanation in market_summary.
+If no theses need invalidation, return an empty thesis_invalidations array."""
 
 
 def get_ollama_client() -> ollama.Client:
@@ -134,10 +159,19 @@ def get_trading_decisions(
             quantity=d.get("quantity"),
             reasoning=d.get("reasoning", ""),
             confidence=d.get("confidence", "low"),
+            thesis_id=d.get("thesis_id"),
+        ))
+
+    thesis_invalidations = []
+    for inv in data.get("thesis_invalidations", []):
+        thesis_invalidations.append(ThesisInvalidation(
+            thesis_id=inv["thesis_id"],
+            reason=inv.get("reason", ""),
         ))
 
     return AgentResponse(
         decisions=decisions,
+        thesis_invalidations=thesis_invalidations,
         market_summary=data.get("market_summary", ""),
         risk_assessment=data.get("risk_assessment", ""),
     )
@@ -153,6 +187,7 @@ def format_decisions_for_logging(response: AgentResponse) -> dict:
         "market_summary": response.market_summary,
         "risk_assessment": response.risk_assessment,
         "decision_count": len(response.decisions),
+        "thesis_invalidation_count": len(response.thesis_invalidations),
     }
 
 

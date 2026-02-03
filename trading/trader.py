@@ -21,7 +21,7 @@ from .agent import (
     AgentResponse,
     TradingDecision,
 )
-from .db import insert_decision, get_positions
+from .db import insert_decision, get_positions, close_thesis
 
 
 @dataclass
@@ -196,10 +196,37 @@ def run_trading_session(
 
             status = "[DRY RUN]" if dry_run else f"Order {result.order_id}"
             print(f"    {status} - Success")
+
+            # Mark thesis as executed if trade was based on one
+            if decision.thesis_id and not dry_run:
+                try:
+                    close_thesis(
+                        thesis_id=decision.thesis_id,
+                        status="executed",
+                        reason=f"Trade executed: {decision.action} {decision.quantity} shares"
+                    )
+                    print(f"    Thesis {decision.thesis_id} marked as executed")
+                except Exception as e:
+                    errors.append(f"Failed to update thesis {decision.thesis_id}: {e}")
         else:
             trades_failed += 1
             errors.append(f"{decision.ticker} execution failed: {result.error}")
             print(f"    ERROR: {result.error}")
+
+    # Step 5b: Process thesis invalidations
+    if response.thesis_invalidations:
+        print("\n[Step 5b] Processing thesis invalidations...")
+        for inv in response.thesis_invalidations:
+            try:
+                close_thesis(
+                    thesis_id=inv.thesis_id,
+                    status="invalidated",
+                    reason=inv.reason
+                )
+                print(f"  Thesis {inv.thesis_id}: INVALIDATED - {inv.reason[:50]}...")
+            except Exception as e:
+                errors.append(f"Failed to invalidate thesis {inv.thesis_id}: {e}")
+                print(f"  Error invalidating thesis {inv.thesis_id}: {e}")
 
     # Step 6: Log decisions
     print("\n[Step 6] Logging decisions...")

@@ -11,6 +11,7 @@ from .db import (
     get_macro_signals,
     get_recent_decisions,
     get_account_snapshots,
+    get_active_theses,
 )
 
 
@@ -257,6 +258,43 @@ def get_strategy_context() -> str:
     return "\n".join(lines)
 
 
+def get_theses_context() -> str:
+    """
+    Build active theses section for trading context.
+
+    Returns:
+        Formatted theses context string
+    """
+    from datetime import datetime
+
+    theses = get_active_theses()
+
+    if not theses:
+        return "Active Theses:\n- No active trade theses"
+
+    lines = ["Active Theses:"]
+
+    for thesis in theses:
+        ticker = thesis["ticker"]
+        direction = thesis["direction"]
+        confidence = thesis["confidence"]
+        age_days = (datetime.now() - thesis["created_at"]).days
+
+        lines.append(f"- {ticker} ({direction}, {confidence} confidence, {age_days}d old)")
+        lines.append(f"  Thesis: {thesis['thesis']}")
+
+        if thesis["entry_trigger"]:
+            lines.append(f"  Entry trigger: {thesis['entry_trigger']}")
+
+        if thesis["exit_trigger"]:
+            lines.append(f"  Exit trigger: {thesis['exit_trigger']}")
+
+        if thesis["invalidation"]:
+            lines.append(f"  Invalidation: {thesis['invalidation']}")
+
+    return "\n".join(lines)
+
+
 def build_trading_context(account_info: dict) -> str:
     """
     Build complete compressed context for trading agent.
@@ -271,6 +309,8 @@ def build_trading_context(account_info: dict) -> str:
         get_portfolio_context(account_info),
         "",
         get_macro_context(days=7),
+        "",
+        get_theses_context(),
         "",
         get_ticker_signals_context(days=1),
         "",
