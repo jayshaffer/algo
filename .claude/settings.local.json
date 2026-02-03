@@ -18,7 +18,8 @@
       "Bash(if [ -f trading/requirements.txt ])",
       "Bash(then echo \"Python project detected\")",
       "Bash(fi)",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(chmod:*)"
     ]
   }
 }

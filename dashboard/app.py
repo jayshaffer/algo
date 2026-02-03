@@ -1,6 +1,6 @@
 """Alpaca Learning Platform - Dashboard"""
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 
 from queries import (
     get_positions,
@@ -13,6 +13,8 @@ from queries import (
     get_decision_stats,
     get_equity_curve,
     get_performance_metrics,
+    get_thesis_stats,
+    get_theses,
 )
 
 app = Flask(__name__)
@@ -45,6 +47,24 @@ def signals():
         ticker_signals=ticker_signals,
         macro_signals=macro_signals,
         signal_summary=signal_summary,
+    )
+
+
+@app.route("/theses")
+def theses():
+    """Theses page."""
+    status_filter = request.args.get('status', 'active')
+    sort_by = request.args.get('sort', 'newest')
+
+    stats = get_thesis_stats()
+    thesis_list = get_theses(status_filter, sort_by)
+
+    return render_template(
+        "theses.html",
+        stats=stats,
+        theses=thesis_list,
+        current_filter=status_filter,
+        current_sort=sort_by,
     )
 
 

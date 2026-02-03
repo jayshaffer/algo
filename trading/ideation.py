@@ -129,8 +129,10 @@ def build_ideation_context(account_info: dict) -> str:
         for t in theses:
             age_days = (datetime.now() - t["created_at"]).days
             sections.append(f"  ID {t['id']}: {t['ticker']} ({t['direction']}) - {t['confidence']} confidence")
-            sections.append(f"    Thesis: {t['thesis'][:100]}...")
-            sections.append(f"    Entry: {t['entry_trigger'] or 'Not specified'}")
+            sections.append(f"    Thesis: {t['thesis']}")
+            sections.append(f"    Entry trigger: {t['entry_trigger'] or 'Not specified'}")
+            sections.append(f"    Exit trigger: {t['exit_trigger'] or 'Not specified'}")
+            sections.append(f"    Invalidation criteria: {t['invalidation'] or 'Not specified'}")
             sections.append(f"    Age: {age_days} days")
     else:
         sections.append("Active Theses: None")
