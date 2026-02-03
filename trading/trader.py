@@ -10,6 +10,7 @@ from .executor import (
     get_account_info,
     take_account_snapshot,
     sync_positions_from_alpaca,
+    sync_orders_from_alpaca,
     execute_market_order,
     get_latest_price,
     calculate_position_size,
@@ -40,6 +41,7 @@ class TradingSessionResult:
     timestamp: datetime
     account_snapshot_id: int
     positions_synced: int
+    orders_synced: int
     decisions_made: int
     trades_executed: int
     trades_failed: int
@@ -76,8 +78,8 @@ def run_trading_session(
     print(f"  Dry run: {dry_run}")
     print(f"  Model: {model}")
 
-    # Step 1: Sync positions
-    print("\n[Step 1] Syncing positions from Alpaca...")
+    # Step 1: Sync positions and orders
+    print("\n[Step 1] Syncing positions and orders from Alpaca...")
     try:
         positions_synced = sync_positions_from_alpaca()
         print(f"  Synced {positions_synced} positions")
@@ -85,6 +87,14 @@ def run_trading_session(
         errors.append(f"Position sync failed: {e}")
         print(f"  Error: {e}")
         positions_synced = 0
+
+    try:
+        orders_synced = sync_orders_from_alpaca()
+        print(f"  Synced {orders_synced} open orders")
+    except Exception as e:
+        errors.append(f"Order sync failed: {e}")
+        print(f"  Error: {e}")
+        orders_synced = 0
 
     # Step 2: Take account snapshot
     print("\n[Step 2] Taking account snapshot...")
@@ -101,6 +111,7 @@ def run_trading_session(
             timestamp=timestamp,
             account_snapshot_id=0,
             positions_synced=positions_synced,
+            orders_synced=orders_synced,
             decisions_made=0,
             trades_executed=0,
             trades_failed=0,
@@ -132,6 +143,7 @@ def run_trading_session(
             timestamp=timestamp,
             account_snapshot_id=snapshot_id,
             positions_synced=positions_synced,
+            orders_synced=orders_synced,
             decisions_made=0,
             trades_executed=0,
             trades_failed=0,
@@ -267,6 +279,7 @@ def run_trading_session(
         timestamp=timestamp,
         account_snapshot_id=snapshot_id,
         positions_synced=positions_synced,
+        orders_synced=orders_synced,
         decisions_made=len(response.decisions),
         trades_executed=trades_executed,
         trades_failed=trades_failed,
