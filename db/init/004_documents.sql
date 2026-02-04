@@ -16,11 +16,11 @@ CREATE TABLE documents (
     source_url TEXT,                    -- Original URL for citation/dedup
 
     -- Timestamps
-    published_at TIMESTAMP NOT NULL,    -- When the source was published
-    created_at TIMESTAMP DEFAULT NOW(), -- When we ingested it
+    published_at TIMESTAMPTZ NOT NULL,    -- When the source was published
+    created_at TIMESTAMPTZ DEFAULT NOW(), -- When we ingested it
 
     -- Chunking metadata
-    parent_id INTEGER REFERENCES documents(id),
+    parent_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
     chunk_index INTEGER DEFAULT 0
 );
 
@@ -35,3 +35,4 @@ CREATE INDEX idx_documents_doc_type ON documents(doc_type);
 CREATE INDEX idx_documents_published_at ON documents(published_at DESC);
 CREATE INDEX idx_documents_ticker_published ON documents(ticker, published_at DESC);
 CREATE INDEX idx_documents_source_url ON documents(source_url);
+CREATE INDEX idx_documents_parent_id ON documents(parent_id);
