@@ -20,6 +20,9 @@ from .ollama import chat_json
 from .retrieval import retrieve_for_ideation
 
 
+MAX_DOC_CONTENT_LENGTH = 1500
+
+
 IDEATION_SYSTEM_PROMPT = """You are an investment ideation agent. Your job is to generate trade theses based ONLY on the provided documents.
 
 CRITICAL RULES:
@@ -121,8 +124,8 @@ def format_retrieved_context(retrieved: dict) -> str:
             age_days = (datetime.now() - doc["published_at"]).days
             lines.append(f"[DOC-{doc['id']}] ({doc['doc_type']}, {age_days}d ago)")
             # Truncate long content
-            content = doc["content"][:1500]
-            if len(doc["content"]) > 1500:
+            content = doc["content"][:MAX_DOC_CONTENT_LENGTH]
+            if len(doc["content"]) > MAX_DOC_CONTENT_LENGTH:
                 content += "..."
             lines.append(content)
             lines.append("")
@@ -136,8 +139,8 @@ def format_retrieved_context(retrieved: dict) -> str:
             age_days = (datetime.now() - doc["published_at"]).days
             ticker_note = f" [{doc['ticker']}]" if doc.get("ticker") else ""
             lines.append(f"[DOC-{doc['id']}]{ticker_note} ({doc['doc_type']}, {age_days}d ago)")
-            content = doc["content"][:1500]
-            if len(doc["content"]) > 1500:
+            content = doc["content"][:MAX_DOC_CONTENT_LENGTH]
+            if len(doc["content"]) > MAX_DOC_CONTENT_LENGTH:
                 content += "..."
             lines.append(content)
             lines.append("")
@@ -318,9 +321,26 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
     theses_closed = 0
 
     for review_data in response.get("reviews", []):
+        thesis_id = review_data.get("thesis_id")
+        action = review_data.get("action")
+
+        # Skip malformed entries
+        if thesis_id is None:
+            print("  Warning: Skipping review with missing thesis_id")
+            continue
+        if action is None:
+            print(f"  Warning: Skipping review for thesis {thesis_id} with missing action")
+            continue
+
+        # Validate action
+        valid_actions = ["keep", "update", "invalidate", "expire"]
+        if action not in valid_actions:
+            print(f"  Warning: Skipping review for thesis {thesis_id} with unexpected action: {action}")
+            continue
+
         review = ThesisReview(
-            thesis_id=review_data["thesis_id"],
-            action=review_data["action"],
+            thesis_id=thesis_id,
+            action=action,
             reason=review_data.get("reason", ""),
             updates=review_data.get("updates"),
         )
@@ -358,8 +378,13 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
     theses_created = 0
 
     for thesis_data in response.get("new_theses", []):
+        # Skip malformed entries
+        ticker = thesis_data.get("ticker")
+        if ticker is None:
+            print("  Warning: Skipping thesis with missing ticker")
+            continue
+
         # Skip if ticker already in portfolio or has active thesis
-        ticker = thesis_data["ticker"]
         if ticker in positions:
             print(f"  Skipping {ticker}: already in portfolio")
             continue
@@ -369,7 +394,7 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
 
         thesis = NewThesis(
             ticker=ticker,
-            direction=thesis_data["direction"],
+            direction=thesis_data.get("direction", "long"),
             thesis=thesis_data["thesis"],
             entry_trigger=thesis_data.get("entry_trigger", ""),
             exit_trigger=thesis_data.get("exit_trigger", ""),
