@@ -1,54 +1,32 @@
 """Outcome backfill job - fills in 7d and 30d P&L for past decisions."""
 
-import os
 import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
-
 from .db import get_cursor
+from .finnhub_client import FinnhubClient
 
 
-def get_data_client() -> StockHistoricalDataClient:
-    """Create Alpaca data client from environment variables."""
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set")
-
-    return StockHistoricalDataClient(api_key, secret_key)
-
-
-def get_price_on_date(client: StockHistoricalDataClient, ticker: str, target_date: date) -> Decimal | None:
+def get_price_on_date(client: FinnhubClient, ticker: str, target_date: date) -> Decimal | None:
     """
     Get closing price for a ticker on a specific date.
 
     Returns None if no data available (weekend, holiday, etc.)
     """
-    # Try to get bar for the target date, with a few days buffer for weekends
-    start = datetime.combine(target_date, datetime.min.time())
-    end = datetime.combine(target_date + timedelta(days=5), datetime.min.time())
+    # Convert date to timestamps with buffer for weekends
+    start_ts = int(datetime.combine(target_date, datetime.min.time()).timestamp())
+    end_ts = int(datetime.combine(target_date + timedelta(days=5), datetime.min.time()).timestamp())
 
     try:
-        request = StockBarsRequest(
-            symbol_or_symbols=ticker,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-            limit=5,
-        )
-        bars = client.get_stock_bars(request)
+        data = client.candles(ticker, "D", start_ts, end_ts)
 
-        if ticker in bars and bars[ticker]:
+        if data.get("s") == "ok" and data.get("t"):
             # Find the first bar on or after target date
-            for bar in bars[ticker]:
-                bar_date = bar.timestamp.date()
+            for ts, close in zip(data["t"], data["c"]):
+                bar_date = datetime.fromtimestamp(ts).date()
                 if bar_date >= target_date:
-                    return Decimal(str(bar.close))
+                    return Decimal(str(close))
 
         return None
     except Exception as e:
@@ -145,7 +123,7 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
     if not decisions:
         return stats
 
-    client = get_data_client()
+    client = FinnhubClient()
 
     for decision in decisions:
         decision_id = decision["id"]

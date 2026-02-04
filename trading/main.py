@@ -5,10 +5,8 @@ import sys
 from datetime import datetime
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetAssetsRequest
-from alpaca.trading.enums import AssetClass
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest
+
+from .finnhub_client import FinnhubClient
 
 
 def get_trading_client() -> TradingClient:
@@ -22,17 +20,6 @@ def get_trading_client() -> TradingClient:
 
     paper = "paper" in base_url
     return TradingClient(api_key, secret_key, paper=paper)
-
-
-def get_data_client() -> StockHistoricalDataClient:
-    """Create Alpaca data client from environment variables."""
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
-
-    if not api_key or not secret_key:
-        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set")
-
-    return StockHistoricalDataClient(api_key, secret_key)
 
 
 def check_connectivity():
@@ -73,12 +60,11 @@ def get_positions():
 
 def get_quote(symbol: str):
     """Get latest quote for a symbol."""
-    data_client = get_data_client()
-    request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
-    quotes = data_client.get_stock_latest_quote(request)
+    client = FinnhubClient()
+    quote = client.quote(symbol)
 
-    quote = quotes[symbol]
-    print(f"  {symbol}: Bid ${quote.bid_price:.2f} / Ask ${quote.ask_price:.2f}")
+    # Finnhub returns: c (current), o (open), h (high), l (low), pc (prev close)
+    print(f"  {symbol}: ${quote['c']:.2f} (prev close: ${quote['pc']:.2f})")
     return quote
 
 

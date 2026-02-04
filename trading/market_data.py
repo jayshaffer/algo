@@ -1,18 +1,15 @@
 """Market data fetching for ideation context."""
 
-import os
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import (
-    StockBarsRequest,
-    StockLatestQuoteRequest,
-    StockSnapshotRequest,
-)
-from alpaca.data.timeframe import TimeFrame
+from .finnhub_client import FinnhubClient
+
+logger = logging.getLogger(__name__)
 
 
 # Sector ETF proxies
@@ -64,199 +61,273 @@ class MarketSnapshot:
     unusual_volume: list[StockMover]
 
 
-def get_data_client() -> StockHistoricalDataClient:
-    """Create Alpaca data client from environment variables."""
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
-    return StockHistoricalDataClient(api_key, secret_key)
+@dataclass
+class _Bar:
+    """Internal bar representation matching Finnhub candle data."""
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
 
 
-def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) -> Optional[float]:
+def get_bars_batch(
+    symbols: list[str],
+    days: int
+) -> dict[str, list[_Bar]]:
+    """
+    Fetch daily bars for multiple symbols from Finnhub.
+
+    Args:
+        symbols: List of tickers to fetch
+        days: Number of days of history to fetch
+
+    Returns:
+        Dict mapping symbol to list of _Bar objects
+    """
+    client = FinnhubClient()
+    now = int(time.time())
+    start = now - ((days + 5) * 86400)  # Extra buffer for weekends
+
+    results = {}
+    failed_count = 0
+
+    for symbol in symbols:
+        try:
+            data = client.candles(symbol, "D", start, now)
+            if data.get("s") == "ok" and data.get("t"):
+                bars = [
+                    _Bar(
+                        timestamp=datetime.fromtimestamp(ts),
+                        open=o,
+                        high=h,
+                        low=l,
+                        close=c,
+                        volume=v
+                    )
+                    for ts, o, h, l, c, v in zip(
+                        data["t"], data["o"], data["h"],
+                        data["l"], data["c"], data["v"]
+                    )
+                ]
+                results[symbol] = bars
+            else:
+                logger.debug(f"No data for {symbol}: {data.get('s')}")
+                failed_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to fetch bars for {symbol}: {e}")
+            failed_count += 1
+
+    if failed_count > 0:
+        logger.info(f"Fetched bars for {len(results)}/{len(symbols)} symbols ({failed_count} failed)")
+
+    return results
+
+
+def get_bar_change(symbol: str, days: int) -> Optional[float]:
     """Get percentage change over N days for a symbol."""
-    end = datetime.now()
-    start = end - timedelta(days=days + 5)  # Extra buffer for weekends
+    bars_dict = get_bars_batch([symbol], days)
+    symbol_bars = bars_dict.get(symbol, [])
 
-    try:
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-        )
-        bars = client.get_stock_bars(request)
-        symbol_bars = list(bars[symbol])
-
-        if len(symbol_bars) < days:
-            return None
-
-        recent = symbol_bars[-1]
-        past = symbol_bars[-days - 1] if len(symbol_bars) > days else symbol_bars[0]
-
-        change = ((recent.close - past.close) / past.close) * 100
-        return round(change, 2)
-    except Exception:
+    if len(symbol_bars) < days:
         return None
 
+    recent = symbol_bars[-1]
+    past = symbol_bars[-days - 1] if len(symbol_bars) > days else symbol_bars[0]
 
-def get_sector_performance(client: StockHistoricalDataClient) -> list[SectorPerformance]:
+    change = ((recent.close - past.close) / past.close) * 100
+    return round(change, 2)
+
+
+def get_sector_performance() -> list[SectorPerformance]:
     """Get performance for all sector ETFs."""
     sectors = []
+    etfs = list(SECTOR_ETFS.values())
+
+    # Fetch 5 days of bars for all ETFs (covers both 1d and 5d)
+    bars_dict = get_bars_batch(etfs, 5)
 
     for sector, etf in SECTOR_ETFS.items():
-        change_1d = get_bar_change(client, etf, 1)
-        change_5d = get_bar_change(client, etf, 5)
+        symbol_bars = bars_dict.get(etf, [])
+        if len(symbol_bars) < 2:
+            logger.warning(f"Insufficient bars for sector ETF {etf}")
+            continue
 
-        if change_1d is not None:
-            sectors.append(SectorPerformance(
-                sector=sector,
-                etf=etf,
-                change_1d=change_1d,
-                change_5d=change_5d or 0.0,
-            ))
+        # Calculate 1-day change
+        recent = symbol_bars[-1]
+        yesterday = symbol_bars[-2]
+        change_1d = round(((recent.close - yesterday.close) / yesterday.close) * 100, 2)
+
+        # Calculate 5-day change if we have enough data
+        change_5d = 0.0
+        if len(symbol_bars) >= 6:
+            past = symbol_bars[-6]
+            change_5d = round(((recent.close - past.close) / past.close) * 100, 2)
+
+        sectors.append(SectorPerformance(
+            sector=sector,
+            etf=etf,
+            change_1d=change_1d,
+            change_5d=change_5d,
+        ))
 
     return sectors
 
 
-def get_index_levels(client: StockHistoricalDataClient) -> dict[str, float]:
+def get_index_levels() -> dict[str, float]:
     """Get 1-day change for major indices."""
     indices = {}
+    bars_dict = get_bars_batch(INDEX_ETFS, 2)  # Need 2 days for 1d change
 
     for etf in INDEX_ETFS:
-        change = get_bar_change(client, etf, 1)
-        if change is not None:
-            indices[etf] = change
+        symbol_bars = bars_dict.get(etf, [])
+        if len(symbol_bars) < 2:
+            logger.warning(f"Insufficient bars for index ETF {etf}")
+            continue
+
+        recent = symbol_bars[-1]
+        yesterday = symbol_bars[-2]
+        change = round(((recent.close - yesterday.close) / yesterday.close) * 100, 2)
+        indices[etf] = change
 
     return indices
 
 
-def get_top_movers(
-    client: StockHistoricalDataClient,
+@dataclass
+class _StockMetrics:
+    """Internal metrics for a stock from bar data."""
+    ticker: str
+    price: Decimal
+    change_pct: float
+    volume: int
+    avg_volume: int
+    volume_ratio: float
+
+
+def _compute_universe_metrics(
     universe: list[str],
-    top_n: int = 10
+) -> list[_StockMetrics]:
+    """
+    Compute metrics for all stocks in universe.
+
+    This fetches 30 days of data to support both short-term (movers) and
+    longer-term (unusual volume) calculations.
+    """
+    # Fetch 30 days of bars for all symbols
+    bars_dict = get_bars_batch(universe, 30)
+
+    metrics = []
+    failed_count = 0
+
+    for ticker in universe:
+        symbol_bars = bars_dict.get(ticker, [])
+
+        if len(symbol_bars) < 2:
+            failed_count += 1
+            continue
+
+        today = symbol_bars[-1]
+        yesterday = symbol_bars[-2]
+
+        change_pct = ((today.close - yesterday.close) / yesterday.close) * 100
+
+        # Calculate average volume (excluding today)
+        volumes = [b.volume for b in symbol_bars[:-1]]
+        avg_volume = int(sum(volumes) / len(volumes)) if volumes else 0
+
+        volume_ratio = today.volume / avg_volume if avg_volume > 0 else 0.0
+
+        metrics.append(_StockMetrics(
+            ticker=ticker,
+            price=Decimal(str(today.close)),
+            change_pct=round(change_pct, 2),
+            volume=today.volume,
+            avg_volume=avg_volume,
+            volume_ratio=volume_ratio,
+        ))
+
+    if failed_count > 0:
+        logger.warning(f"Failed to get data for {failed_count}/{len(universe)} symbols")
+
+    return metrics
+
+
+def get_top_movers(
+    universe: list[str],
+    top_n: int = 10,
+    _metrics: Optional[list[_StockMetrics]] = None,
 ) -> tuple[list[StockMover], list[StockMover]]:
     """
     Get top gainers and losers from a universe of stocks.
 
     Args:
-        client: Alpaca data client
         universe: List of tickers to scan
         top_n: Number of stocks to return for each category
+        _metrics: Pre-computed metrics (internal use for batching)
 
     Returns:
         Tuple of (gainers, losers)
     """
-    movers = []
-    end = datetime.now()
-    start = end - timedelta(days=10)
-
-    for ticker in universe:
-        try:
-            # Get recent bars
-            request = StockBarsRequest(
-                symbol_or_symbols=ticker,
-                timeframe=TimeFrame.Day,
-                start=start,
-                end=end,
-            )
-            bars = client.get_stock_bars(request)
-            symbol_bars = list(bars[ticker])
-
-            if len(symbol_bars) < 2:
-                continue
-
-            today = symbol_bars[-1]
-            yesterday = symbol_bars[-2]
-
-            change_pct = ((today.close - yesterday.close) / yesterday.close) * 100
-
-            # Calculate average volume
-            volumes = [b.volume for b in symbol_bars[:-1]]
-            avg_volume = sum(volumes) // len(volumes) if volumes else 0
-
-            movers.append(StockMover(
-                ticker=ticker,
-                price=Decimal(str(today.close)),
-                change_pct=round(change_pct, 2),
-                volume=today.volume,
-                avg_volume=avg_volume,
-            ))
-        except Exception:
-            continue
+    if _metrics is None:
+        _metrics = _compute_universe_metrics(universe)
 
     # Sort by change percentage
-    movers.sort(key=lambda m: m.change_pct, reverse=True)
+    sorted_metrics = sorted(_metrics, key=lambda m: m.change_pct, reverse=True)
 
-    gainers = movers[:top_n]
-    losers = movers[-top_n:][::-1]  # Reverse to get worst first
+    def to_mover(m: _StockMetrics) -> StockMover:
+        return StockMover(
+            ticker=m.ticker,
+            price=m.price,
+            change_pct=m.change_pct,
+            volume=m.volume,
+            avg_volume=m.avg_volume,
+        )
+
+    gainers = [to_mover(m) for m in sorted_metrics[:top_n]]
+    losers = [to_mover(m) for m in sorted_metrics[-top_n:][::-1]]
 
     return gainers, losers
 
 
 def get_unusual_volume(
-    client: StockHistoricalDataClient,
     universe: list[str],
     threshold: float = 2.0,
-    top_n: int = 10
+    top_n: int = 10,
+    _metrics: Optional[list[_StockMetrics]] = None,
 ) -> list[StockMover]:
     """
     Find stocks with unusual volume (above threshold of average).
 
     Args:
-        client: Alpaca data client
         universe: List of tickers to scan
         threshold: Volume multiple (default 2x)
         top_n: Maximum stocks to return
+        _metrics: Pre-computed metrics (internal use for batching)
 
     Returns:
         List of stocks with unusual volume
     """
-    unusual = []
-    end = datetime.now()
-    start = end - timedelta(days=30)
+    if _metrics is None:
+        _metrics = _compute_universe_metrics(universe)
 
-    for ticker in universe:
-        try:
-            request = StockBarsRequest(
-                symbol_or_symbols=ticker,
-                timeframe=TimeFrame.Day,
-                start=start,
-                end=end,
-            )
-            bars = client.get_stock_bars(request)
-            symbol_bars = list(bars[ticker])
+    # Filter by threshold and sort by volume ratio
+    unusual = [
+        m for m in _metrics
+        if m.volume_ratio >= threshold
+    ]
+    unusual.sort(key=lambda m: m.volume_ratio, reverse=True)
 
-            if len(symbol_bars) < 5:
-                continue
-
-            today = symbol_bars[-1]
-
-            # Calculate average volume (excluding today)
-            volumes = [b.volume for b in symbol_bars[:-1]]
-            avg_volume = sum(volumes) // len(volumes) if volumes else 0
-
-            if avg_volume == 0:
-                continue
-
-            volume_ratio = today.volume / avg_volume
-
-            if volume_ratio >= threshold:
-                yesterday = symbol_bars[-2]
-                change_pct = ((today.close - yesterday.close) / yesterday.close) * 100
-
-                unusual.append(StockMover(
-                    ticker=ticker,
-                    price=Decimal(str(today.close)),
-                    change_pct=round(change_pct, 2),
-                    volume=today.volume,
-                    avg_volume=avg_volume,
-                ))
-        except Exception:
-            continue
-
-    # Sort by volume ratio descending
-    unusual.sort(key=lambda m: m.volume / m.avg_volume if m.avg_volume else 0, reverse=True)
-
-    return unusual[:top_n]
+    return [
+        StockMover(
+            ticker=m.ticker,
+            price=m.price,
+            change_pct=m.change_pct,
+            volume=m.volume,
+            avg_volume=m.avg_volume,
+        )
+        for m in unusual[:top_n]
+    ]
 
 
 def get_default_universe() -> list[str]:
@@ -276,21 +347,27 @@ def get_market_snapshot(universe: Optional[list[str]] = None) -> MarketSnapshot:
     """
     Build complete market snapshot for ideation.
 
+    Note: With Finnhub rate limits (60/min), this takes ~80 seconds
+    for the full universe. Run once per trading session.
+
     Args:
         universe: Optional list of tickers to scan. Uses default if not provided.
 
     Returns:
         MarketSnapshot with sectors, indices, movers, and unusual volume
     """
-    client = get_data_client()
-
     if universe is None:
         universe = get_default_universe()
 
-    sectors = get_sector_performance(client)
-    indices = get_index_levels(client)
-    gainers, losers = get_top_movers(client, universe)
-    unusual_volume = get_unusual_volume(client, universe)
+    logger.info(f"Fetching market snapshot for {len(universe)} symbols (this may take a while)...")
+
+    sectors = get_sector_performance()
+    indices = get_index_levels()
+
+    # Compute universe metrics once and share between movers and volume
+    metrics = _compute_universe_metrics(universe)
+    gainers, losers = get_top_movers(universe, _metrics=metrics)
+    unusual_volume = get_unusual_volume(universe, _metrics=metrics)
 
     return MarketSnapshot(
         timestamp=datetime.now(),
