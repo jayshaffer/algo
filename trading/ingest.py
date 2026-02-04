@@ -1,7 +1,10 @@
 """Document ingestion for RAG - chunking, embedding, and storage."""
 
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from typing import Optional
+
+import httpx
 
 from .db import get_cursor
 from .ollama import embed
@@ -135,3 +138,100 @@ def cleanup_old_documents(days: int = 180) -> int:
             WHERE published_at < NOW() - INTERVAL '%s days'
         """, (days,))
         return cur.rowcount
+
+
+def fetch_alpaca_news(
+    tickers: list[str],
+    start: datetime,
+    end: datetime,
+) -> list[dict]:
+    """
+    Fetch news from Alpaca News API.
+
+    Returns list of news articles.
+    """
+    api_key = os.environ.get("ALPACA_API_KEY") or os.environ.get("APCA_API_KEY_ID")
+    api_secret = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("APCA_API_SECRET_KEY")
+
+    if not api_key or not api_secret:
+        raise ValueError("Alpaca API credentials not set")
+
+    url = "https://data.alpaca.markets/v1beta1/news"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+
+    all_articles = []
+    page_token = None
+
+    while True:
+        params = {
+            "symbols": ",".join(tickers),
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "limit": 50,
+            "sort": "desc",
+        }
+        if page_token:
+            params["page_token"] = page_token
+
+        response = httpx.get(url, headers=headers, params=params, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+
+        all_articles.extend(data.get("news", []))
+
+        page_token = data.get("next_page_token")
+        if not page_token:
+            break
+
+    return all_articles
+
+
+def ingest_alpaca_news(tickers: list[str], days: int = 3) -> int:
+    """
+    Ingest recent news for given tickers from Alpaca.
+
+    Returns count of documents ingested.
+    """
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+
+    print(f"  Fetching Alpaca news for {len(tickers)} tickers...")
+    articles = fetch_alpaca_news(tickers, start, end)
+    print(f"  Found {len(articles)} articles")
+
+    count = 0
+    for article in articles:
+        # Combine headline and summary
+        headline = article.get("headline", "")
+        summary = article.get("summary", "")
+        content = f"{headline}\n\n{summary}" if summary else headline
+
+        if not content.strip():
+            continue
+
+        # Parse timestamp
+        created_at = article.get("created_at", "")
+        try:
+            published_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            published_at = datetime.utcnow()
+
+        # Ingest for each mentioned ticker we care about
+        article_tickers = article.get("symbols", [])
+        for ticker in article_tickers:
+            if ticker in tickers:
+                doc_ids = ingest_document(
+                    content=content,
+                    ticker=ticker,
+                    doc_type="news",
+                    source="alpaca",
+                    source_url=article.get("url"),
+                    published_at=published_at,
+                )
+                if doc_ids:
+                    count += 1
+
+    return count
