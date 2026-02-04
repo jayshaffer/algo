@@ -277,15 +277,20 @@ def execute_limit_order(
 
 def get_latest_price(ticker: str) -> Optional[Decimal]:
     """Get latest quote price for a ticker."""
-    from .finnhub_client import FinnhubClient
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockLatestQuoteRequest
+
+    api_key = os.environ.get("ALPACA_API_KEY")
+    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+
+    client = StockHistoricalDataClient(api_key, secret_key)
+    request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
 
     try:
-        client = FinnhubClient()
-        quote = client.quote(ticker)
-        # 'c' is current price in Finnhub response
-        if quote.get("c"):
-            return Decimal(str(quote["c"]))
-        return None
+        quotes = client.get_stock_latest_quote(request)
+        quote = quotes[ticker]
+        # Use ask price for buys, could use mid for more accuracy
+        return Decimal(str(quote.ask_price))
     except Exception:
         return None
 

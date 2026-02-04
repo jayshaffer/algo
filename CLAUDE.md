@@ -107,7 +107,7 @@ open http://localhost:3000
 ## Environment Variables
 
 Required in `.env`:
-- `ALPACA_API_KEY` - Alpaca API key
-- `ALPACA_SECRET_KEY` - Alpaca API secret
+- `APCA_API_KEY_ID` - Alpaca API key
+- `APCA_API_SECRET_KEY` - Alpaca API secret
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` - Database credentials
 - `OLLAMA_URL` - Ollama endpoint (default: http://ollama:11434)
