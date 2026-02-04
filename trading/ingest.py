@@ -235,3 +235,140 @@ def ingest_alpaca_news(tickers: list[str], days: int = 3) -> int:
                     count += 1
 
     return count
+
+
+def get_cik_for_ticker(ticker: str) -> Optional[str]:
+    """
+    Get SEC CIK number for a ticker symbol.
+
+    Uses SEC's company tickers JSON.
+    """
+    url = "https://www.sec.gov/files/company_tickers.json"
+    headers = {"User-Agent": "AlgoTrading contact@example.com"}
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+
+        for entry in data.values():
+            if entry.get("ticker", "").upper() == ticker.upper():
+                # CIK needs to be zero-padded to 10 digits
+                return str(entry["cik_str"]).zfill(10)
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_sec_filings(
+    ticker: str,
+    filing_types: list[str] = ["10-K", "10-Q", "8-K"],
+    count: int = 5,
+) -> list[dict]:
+    """
+    Fetch recent SEC filings for a ticker.
+
+    Returns list of filing metadata with content URLs.
+    """
+    cik = get_cik_for_ticker(ticker)
+    if not cik:
+        return []
+
+    # Get company submissions
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    headers = {"User-Agent": "AlgoTrading contact@example.com"}
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return []
+
+    filings = []
+    recent = data.get("filings", {}).get("recent", {})
+
+    forms = recent.get("form", [])
+    accessions = recent.get("accessionNumber", [])
+    dates = recent.get("filingDate", [])
+    primary_docs = recent.get("primaryDocument", [])
+
+    for i, form in enumerate(forms):
+        if form in filing_types and len(filings) < count:
+            accession = accessions[i].replace("-", "")
+            doc = primary_docs[i]
+
+            filings.append({
+                "type": form,
+                "filed_at": datetime.strptime(dates[i], "%Y-%m-%d"),
+                "url": f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}",
+                "accession": accessions[i],
+            })
+
+    return filings
+
+
+def fetch_filing_content(url: str, max_chars: int = 50000) -> str:
+    """
+    Fetch and extract text from an SEC filing.
+
+    Truncates to max_chars to avoid huge filings.
+    """
+    headers = {"User-Agent": "AlgoTrading contact@example.com"}
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=60.0)
+        response.raise_for_status()
+        content = response.text
+
+        # Basic HTML stripping (filings are often HTML)
+        import re
+        # Remove script/style tags
+        content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        # Remove HTML tags
+        content = re.sub(r'<[^>]+>', ' ', content)
+        # Normalize whitespace
+        content = re.sub(r'\s+', ' ', content)
+        content = content.strip()
+
+        return content[:max_chars]
+    except Exception:
+        return ""
+
+
+def ingest_sec_filings(ticker: str, filing_types: list[str] = ["10-K", "10-Q", "8-K"]) -> int:
+    """
+    Ingest recent SEC filings for a ticker.
+
+    Returns count of documents ingested.
+    """
+    print(f"  Fetching SEC filings for {ticker}...")
+    filings = fetch_sec_filings(ticker, filing_types)
+    print(f"  Found {len(filings)} filings")
+
+    count = 0
+    for filing in filings:
+        # Check if already ingested
+        if document_exists(filing["url"]):
+            continue
+
+        content = fetch_filing_content(filing["url"])
+        if not content or len(content) < 100:
+            continue
+
+        doc_type = f"filing_{filing['type'].lower().replace('-', '')}"
+
+        doc_ids = ingest_document(
+            content=content,
+            ticker=ticker,
+            doc_type=doc_type,
+            source="sec_edgar",
+            source_url=filing["url"],
+            published_at=filing["filed_at"],
+        )
+        if doc_ids:
+            count += 1
+
+    return count
