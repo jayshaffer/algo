@@ -150,8 +150,8 @@ def fetch_alpaca_news(
 
     Returns list of news articles.
     """
-    api_key = os.environ.get("ALPACA_API_KEY") or os.environ.get("APCA_API_KEY_ID")
-    api_secret = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("APCA_API_SECRET_KEY")
+    api_key = os.environ.get("ALPACA_API_KEY")
+    api_secret = os.environ.get("ALPACA_SECRET_KEY")
 
     if not api_key or not api_secret:
         raise ValueError("Alpaca API credentials not set")
