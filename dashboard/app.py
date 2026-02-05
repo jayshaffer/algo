@@ -15,6 +15,7 @@ from queries import (
     get_performance_metrics,
     get_thesis_stats,
     get_theses,
+    close_thesis,
 )
 
 app = Flask(__name__)
@@ -103,6 +104,26 @@ def performance():
         equity_data=equity_data,
         metrics=metrics,
     )
+
+
+@app.route("/api/theses/<int:thesis_id>/close", methods=["POST"])
+def api_close_thesis(thesis_id):
+    """Close a thesis with status and optional reason."""
+    data = request.get_json() or {}
+    status = data.get("status")
+    reason = data.get("reason", "").strip() or None
+
+    if status not in ("invalidated", "expired"):
+        return jsonify({"error": "Invalid status. Must be 'invalidated' or 'expired'."}), 400
+
+    try:
+        success = close_thesis(thesis_id, status, reason)
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Thesis not found or already closed."}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health")

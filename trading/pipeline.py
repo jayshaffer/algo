@@ -24,7 +24,7 @@ class PipelineStats:
 
 def run_pipeline(
     hours: int = 24,
-    limit: int = 50,
+    limit: int = 300,
     relevance_threshold: float = 0.3,
     strategy_context: str = DEFAULT_STRATEGY_CONTEXT,
     dry_run: bool = False

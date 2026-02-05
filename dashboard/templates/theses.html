@@ -133,14 +133,24 @@
         </div>
 
         <!-- Footer -->
-        <div class="p-4 border-t bg-gray-50 text-xs text-gray-500 flex justify-between">
+        <div class="p-4 border-t bg-gray-50 text-xs text-gray-500 flex justify-between items-center">
             <div>
                 Created: {{ thesis.created_at.strftime('%Y-%m-%d') if thesis.created_at else '-' }}
                 {% if thesis.updated_at and thesis.updated_at != thesis.created_at %}
                 | Updated: {{ thesis.updated_at.strftime('%Y-%m-%d') }}
                 {% endif %}
             </div>
-            <div>
+            <div class="flex items-center gap-2">
+                {% if thesis.status == 'active' %}
+                <button onclick="openCloseModal({{ thesis.id }}, '{{ thesis.ticker }}', 'invalidated')"
+                        class="bg-red-100 hover:bg-red-200 text-red-800 text-xs px-2 py-1 rounded">
+                    Invalidate
+                </button>
+                <button onclick="openCloseModal({{ thesis.id }}, '{{ thesis.ticker }}', 'expired')"
+                        class="bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs px-2 py-1 rounded">
+                    Expire
+                </button>
+                {% endif %}
                 <span class="bg-gray-200 px-2 py-0.5 rounded">{{ thesis.source }}</span>
             </div>
         </div>
@@ -152,4 +162,98 @@
     No theses found{% if current_filter != 'all' %} with status "{{ current_filter }}"{% endif %}.
 </div>
 {% endif %}
+
+<!-- Close Thesis Modal -->
+<div id="closeModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-lg p-6 w-full max-w-md mx-4">
+        <h3 id="modalTitle" class="text-lg font-bold mb-4">Close Thesis</h3>
+        <p class="text-sm text-gray-600 mb-4">
+            Closing thesis for <span id="modalTicker" class="font-bold"></span>
+        </p>
+        <div class="mb-4">
+            <label class="block text-sm text-gray-700 mb-1">Reason (optional)</label>
+            <textarea id="closeReason" rows="3" class="w-full border rounded px-3 py-2 text-sm"
+                      placeholder="Why is this thesis being closed?"></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button onclick="closeModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                Cancel
+            </button>
+            <button id="confirmBtn" onclick="confirmClose()" class="px-4 py-2 text-sm text-white rounded">
+                Confirm
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentThesisId = null;
+let currentStatus = null;
+
+function openCloseModal(thesisId, ticker, status) {
+    currentThesisId = thesisId;
+    currentStatus = status;
+
+    document.getElementById('modalTicker').textContent = ticker;
+    document.getElementById('closeReason').value = '';
+
+    const title = status === 'invalidated' ? 'Invalidate Thesis' : 'Expire Thesis';
+    document.getElementById('modalTitle').textContent = title;
+
+    const btn = document.getElementById('confirmBtn');
+    if (status === 'invalidated') {
+        btn.className = 'px-4 py-2 text-sm text-white rounded bg-red-600 hover:bg-red-700';
+        btn.textContent = 'Invalidate';
+    } else {
+        btn.className = 'px-4 py-2 text-sm text-white rounded bg-gray-600 hover:bg-gray-700';
+        btn.textContent = 'Expire';
+    }
+
+    document.getElementById('closeModal').classList.remove('hidden');
+    document.getElementById('closeModal').classList.add('flex');
+}
+
+function closeModal() {
+    document.getElementById('closeModal').classList.add('hidden');
+    document.getElementById('closeModal').classList.remove('flex');
+    currentThesisId = null;
+    currentStatus = null;
+}
+
+async function confirmClose() {
+    if (!currentThesisId || !currentStatus) return;
+
+    const reason = document.getElementById('closeReason').value.trim();
+
+    try {
+        const response = await fetch(`/api/theses/${currentThesisId}/close`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: currentStatus, reason: reason || null })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to close thesis');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+
+    closeModal();
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+});
+
+// Close modal on background click
+document.getElementById('closeModal').addEventListener('click', (e) => {
+    if (e.target.id === 'closeModal') closeModal();
+});
+</script>
 {% endblock %}

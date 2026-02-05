@@ -230,6 +230,28 @@ def get_thesis_stats():
         }
 
 
+def close_thesis(thesis_id: int, status: str, reason: str = None) -> bool:
+    """Close a thesis with the given status and optional reason."""
+    if status not in ('invalidated', 'expired'):
+        raise ValueError(f"Invalid close status: {status}")
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE theses
+                SET status = %s,
+                    close_reason = %s,
+                    closed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s AND status = 'active'
+            """, (status, reason, thesis_id))
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def get_theses(status_filter: str = 'active', sort_by: str = 'newest'):
     """Return filtered/sorted thesis list."""
     with get_cursor() as cur:
