@@ -3,16 +3,16 @@
 # All times are ET (Eastern Time)
 
 # Backfill outcomes (6 AM, before market open, Mon-Fri)
-0 6 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.backfill >> /home/jay/dev/algo/logs/backfill.log 2>&1
+0 8 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.backfill >> /home/jay/dev/algo/logs/backfill.log 2>&1
 
 # Ideation - generate/review theses (7 AM, before market open, Mon-Fri)
-0 7 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.ideation >> /home/jay/dev/algo/logs/ideation.log 2>&1
+0 9 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.ideation_claude >> /home/jay/dev/algo/logs/ideation.log 2>&1
 
 # News pipeline (9 AM, 12 PM, 3 PM during market hours, Mon-Fri)
-0 9,12,15 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.pipeline >> /home/jay/dev/algo/logs/pipeline.log 2>&1
+0 11,14,17 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.pipeline >> /home/jay/dev/algo/logs/pipeline.log 2>&1
 
 # Trading session (4:30 PM, 30 min after market close, Mon-Fri)
-30 16 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.trader >> /home/jay/dev/algo/logs/trader.log 2>&1
+30 18 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.trader >> /home/jay/dev/algo/logs/trader.log 2>&1
 
 # Strategy evolution (7 AM Sunday, weekly)
 0 7 * * 0 /home/jay/dev/algo/run-docker.sh trading python strategy.py --days 60 >> /home/jay/dev/algo/logs/strategy.log 2>&1

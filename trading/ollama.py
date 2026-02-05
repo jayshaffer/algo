@@ -28,7 +28,7 @@ def embed(text: str, model: str = "nomic-embed-text") -> list[float]:
     response = httpx.post(
         url,
         json={"model": model, "prompt": text},
-        timeout=30.0
+        timeout=10000.0
     )
     response.raise_for_status()
 
@@ -82,7 +82,7 @@ def chat(
             "stream": False,
             "options": {"temperature": temperature}
         },
-        timeout=2000.0
+        timeout=10000.0
     )
     response.raise_for_status()
 
