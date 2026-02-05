@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from .news import fetch_broad_news, NewsItem
 from .filter import filter_by_relevance, FilteredNewsItem, DEFAULT_STRATEGY_CONTEXT
-from .classifier import classify_filtered_news, ClassificationResult
-from .db import insert_news_signal, insert_macro_signal
+from .classifier import classify_news_batch
+from .db import insert_news_signals_batch, insert_macro_signals_batch
 from .ollama import check_ollama_health, list_models
 
 
@@ -94,60 +94,57 @@ def run_pipeline(
         print("  No items passed relevance filter")
         return stats
 
-    # Step 3: Classify with Phi-3
-    print("\n[Step 3] Classifying with Phi-3...")
-    try:
-        classifications = classify_filtered_news(filtered_items)
-        print(f"  Classified {len(classifications)} items")
-    except Exception as e:
-        print(f"  Error classifying news: {e}")
-        stats.errors += 1
-        return stats
+    # Step 3: Classify with qwen2.5:14b (batched)
+    print("\n[Step 3] Classifying with qwen2.5:14b (batched)...")
+    total = len(filtered_items)
+    ticker_signals_batch = []
+    macro_signals_batch = []
 
-    # Step 4: Store signals
-    print("\n[Step 4] Storing signals...")
-    for result in classifications:
+    headlines = [f.item.headline for f in filtered_items]
+    published_ats = [f.item.published_at for f in filtered_items]
+
+    results = classify_news_batch(headlines, published_ats)
+
+    for result in results:
         if result.news_type == "noise":
             stats.noise_dropped += 1
             continue
 
-        # Store ticker signals
         for signal in result.ticker_signals:
             if dry_run:
                 print(f"  [DRY RUN] Ticker signal: {signal.ticker} - {signal.sentiment} ({signal.category})")
             else:
-                try:
-                    insert_news_signal(
-                        ticker=signal.ticker,
-                        headline=signal.headline,
-                        category=signal.category,
-                        sentiment=signal.sentiment,
-                        confidence=signal.confidence,
-                        published_at=signal.published_at
-                    )
-                    stats.ticker_signals_stored += 1
-                except Exception as e:
-                    print(f"  Error storing ticker signal: {e}")
-                    stats.errors += 1
+                ticker_signals_batch.append((
+                    signal.ticker, signal.headline, signal.category,
+                    signal.sentiment, signal.confidence, signal.published_at
+                ))
 
-        # Store macro signal
         if result.macro_signal:
             signal = result.macro_signal
             if dry_run:
                 print(f"  [DRY RUN] Macro signal: {signal.category} - {signal.sentiment}")
             else:
-                try:
-                    insert_macro_signal(
-                        headline=signal.headline,
-                        category=signal.category,
-                        affected_sectors=signal.affected_sectors,
-                        sentiment=signal.sentiment,
-                        published_at=signal.published_at
-                    )
-                    stats.macro_signals_stored += 1
-                except Exception as e:
-                    print(f"  Error storing macro signal: {e}")
-                    stats.errors += 1
+                macro_signals_batch.append((
+                    signal.headline, signal.category, signal.affected_sectors,
+                    signal.sentiment, signal.published_at
+                ))
+
+    print(f"  Classified {total} items")
+
+    # Step 4: Batch store signals (single transaction per type)
+    if not dry_run:
+        print("\n[Step 4] Storing signals...")
+        try:
+            stats.ticker_signals_stored = insert_news_signals_batch(ticker_signals_batch)
+        except Exception as e:
+            print(f"  Error batch-inserting ticker signals: {e}")
+            stats.errors += 1
+
+        try:
+            stats.macro_signals_stored = insert_macro_signals_batch(macro_signals_batch)
+        except Exception as e:
+            print(f"  Error batch-inserting macro signals: {e}")
+            stats.errors += 1
 
     print(f"\n[Complete]")
     print(f"  Ticker signals: {stats.ticker_signals_stored}")
@@ -169,7 +166,7 @@ def check_dependencies() -> bool:
         print(f"OK ({len(models)} models)")
 
         # Check for required models
-        required = ["phi3:mini", "nomic-embed-text"]
+        required = ["qwen2.5:14b", "nomic-embed-text"]
         for model in required:
             if not any(model in m for m in models):
                 print(f"  WARNING: Model '{model}' not found. Run setup-ollama.sh")
