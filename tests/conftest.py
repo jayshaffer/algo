@@ -290,3 +290,36 @@ def make_macro_signal_row(**kwargs):
     }
     defaults.update(kwargs)
     return defaults
+
+
+def make_playbook_row(**kwargs):
+    """Create a playbook dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "date": date.today(),
+        "market_outlook": "Bullish on tech, cautious on energy",
+        "priority_actions": [
+            {"ticker": "NVDA", "action": "buy", "thesis_id": 1, "reasoning": "Entry trigger hit", "max_quantity": 5, "confidence": 0.8}
+        ],
+        "watch_list": ["AAPL", "MSFT", "GOOGL"],
+        "risk_notes": "Fed meeting tomorrow, watch for volatility",
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_attribution_row(**kwargs):
+    """Create a signal attribution dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "category": "news:earnings",
+        "sample_size": 20,
+        "avg_outcome_7d": Decimal("1.50"),
+        "avg_outcome_30d": Decimal("3.20"),
+        "win_rate_7d": Decimal("0.62"),
+        "win_rate_30d": Decimal("0.55"),
+        "updated_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults

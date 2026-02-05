@@ -388,3 +388,113 @@ def clear_closed_orders() -> int:
     with get_cursor() as cur:
         cur.execute("DELETE FROM open_orders WHERE status NOT IN ('new', 'accepted', 'pending_new', 'partially_filled')")
         return cur.rowcount
+
+
+# --- Playbooks ---
+
+def upsert_playbook(
+    playbook_date: date,
+    market_outlook: str,
+    priority_actions: list,
+    watch_list: list[str],
+    risk_notes: str,
+) -> int:
+    """Insert or update a daily playbook."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO playbooks (date, market_outlook, priority_actions, watch_list, risk_notes)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (date) DO UPDATE SET
+                market_outlook = EXCLUDED.market_outlook,
+                priority_actions = EXCLUDED.priority_actions,
+                watch_list = EXCLUDED.watch_list,
+                risk_notes = EXCLUDED.risk_notes,
+                created_at = NOW()
+            RETURNING id
+        """, (playbook_date, market_outlook, Json(priority_actions), watch_list, risk_notes))
+        return cur.fetchone()["id"]
+
+
+def get_playbook(playbook_date: date) -> dict | None:
+    """Get playbook for a specific date."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM playbooks WHERE date = %s
+        """, (playbook_date,))
+        return cur.fetchone()
+
+
+# --- Decision Signals ---
+
+def insert_decision_signal(decision_id: int, signal_type: str, signal_id: int):
+    """Link a decision to a signal or thesis that motivated it."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO decision_signals (decision_id, signal_type, signal_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
+        """, (decision_id, signal_type, signal_id))
+
+
+def insert_decision_signals_batch(signals: list[tuple]) -> int:
+    """Batch insert decision-signal links.
+
+    Args:
+        signals: List of (decision_id, signal_type, signal_id) tuples
+
+    Returns:
+        Number of signals inserted
+    """
+    if not signals:
+        return 0
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO decision_signals (decision_id, signal_type, signal_id)
+            VALUES %s
+            ON CONFLICT DO NOTHING
+        """, signals)
+        return len(signals)
+
+
+def get_decision_signals(decision_id: int) -> list:
+    """Get all signals linked to a decision."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM decision_signals WHERE decision_id = %s
+        """, (decision_id,))
+        return cur.fetchall()
+
+
+# --- Signal Attribution ---
+
+def upsert_signal_attribution(
+    category: str,
+    sample_size: int,
+    avg_outcome_7d: Decimal,
+    avg_outcome_30d: Decimal,
+    win_rate_7d: Decimal,
+    win_rate_30d: Decimal,
+):
+    """Insert or update signal attribution scores for a category."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO signal_attribution (category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (category) DO UPDATE SET
+                sample_size = EXCLUDED.sample_size,
+                avg_outcome_7d = EXCLUDED.avg_outcome_7d,
+                avg_outcome_30d = EXCLUDED.avg_outcome_30d,
+                win_rate_7d = EXCLUDED.win_rate_7d,
+                win_rate_30d = EXCLUDED.win_rate_30d,
+                updated_at = NOW()
+        """, (category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d))
+
+
+def get_signal_attribution() -> list:
+    """Get all signal attribution scores."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM signal_attribution
+            ORDER BY sample_size DESC
+        """)
+        return cur.fetchall()
