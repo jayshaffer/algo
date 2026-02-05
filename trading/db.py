@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Optional
 
 import psycopg2
-from psycopg2.extras import RealDictCursor, Json
+from psycopg2.extras import RealDictCursor, Json, execute_values
 
 
 def get_connection():
@@ -53,6 +53,25 @@ def insert_news_signal(
         return cur.fetchone()["id"]
 
 
+def insert_news_signals_batch(signals: list[tuple]) -> int:
+    """Batch insert ticker-specific news signals in a single transaction.
+
+    Args:
+        signals: List of (ticker, headline, category, sentiment, confidence, published_at) tuples
+
+    Returns:
+        Number of signals inserted
+    """
+    if not signals:
+        return 0
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at)
+            VALUES %s
+        """, signals)
+        return len(signals)
+
+
 def get_news_signals(ticker: Optional[str] = None, days: int = 7) -> list:
     """Get recent news signals, optionally filtered by ticker."""
     with get_cursor() as cur:
@@ -88,6 +107,25 @@ def insert_macro_signal(
             RETURNING id
         """, (headline, category, affected_sectors, sentiment, published_at))
         return cur.fetchone()["id"]
+
+
+def insert_macro_signals_batch(signals: list[tuple]) -> int:
+    """Batch insert macro/political news signals in a single transaction.
+
+    Args:
+        signals: List of (headline, category, affected_sectors, sentiment, published_at) tuples
+
+    Returns:
+        Number of signals inserted
+    """
+    if not signals:
+        return 0
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO macro_signals (headline, category, affected_sectors, sentiment, published_at)
+            VALUES %s
+        """, signals)
+        return len(signals)
 
 
 def get_macro_signals(category: Optional[str] = None, days: int = 7) -> list:

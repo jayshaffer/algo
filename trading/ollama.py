@@ -5,6 +5,7 @@ import json
 from typing import Optional
 
 import httpx
+import numpy as np
 
 
 def get_ollama_url() -> str:
@@ -37,7 +38,10 @@ def embed(text: str, model: str = "nomic-embed-text") -> list[float]:
 
 def embed_batch(texts: list[str], model: str = "nomic-embed-text") -> list[list[float]]:
     """
-    Generate embeddings for multiple texts.
+    Generate embeddings for multiple texts in a single API call.
+
+    Uses the /api/embed endpoint which accepts batch input,
+    avoiding per-item HTTP round trips.
 
     Args:
         texts: List of texts to embed
@@ -46,7 +50,19 @@ def embed_batch(texts: list[str], model: str = "nomic-embed-text") -> list[list[
     Returns:
         List of embedding vectors
     """
-    return [embed(text, model) for text in texts]
+    if not texts:
+        return []
+
+    url = f"{get_ollama_url()}/api/embed"
+
+    response = httpx.post(
+        url,
+        json={"model": model, "input": texts},
+        timeout=10000.0
+    )
+    response.raise_for_status()
+
+    return response.json()["embeddings"]
 
 
 def chat(
@@ -140,14 +156,45 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     Returns:
         Cosine similarity score (0 to 1)
     """
-    dot_product = sum(x * y for x, y in zip(a, b))
-    magnitude_a = sum(x * x for x in a) ** 0.5
-    magnitude_b = sum(x * x for x in b) ** 0.5
+    a_vec = np.asarray(a, dtype=np.float32)
+    b_vec = np.asarray(b, dtype=np.float32)
+    norm_a = np.linalg.norm(a_vec)
+    norm_b = np.linalg.norm(b_vec)
 
-    if magnitude_a == 0 or magnitude_b == 0:
+    if norm_a == 0 or norm_b == 0:
         return 0.0
 
-    return dot_product / (magnitude_a * magnitude_b)
+    return float(np.dot(a_vec, b_vec) / (norm_a * norm_b))
+
+
+def cosine_similarity_batch(query: list[float], embeddings: list[list[float]]) -> list[float]:
+    """
+    Compute cosine similarity of a query vector against a batch of embeddings.
+
+    Vectorized with numpy - much faster than looping cosine_similarity().
+
+    Args:
+        query: Query embedding vector
+        embeddings: List of embedding vectors to compare against
+
+    Returns:
+        List of similarity scores
+    """
+    if not embeddings:
+        return []
+
+    query_vec = np.asarray(query, dtype=np.float32)
+    matrix = np.asarray(embeddings, dtype=np.float32)
+
+    query_norm = np.linalg.norm(query_vec)
+    if query_norm == 0:
+        return [0.0] * len(embeddings)
+
+    row_norms = np.linalg.norm(matrix, axis=1)
+    row_norms = np.where(row_norms == 0, 1.0, row_norms)
+
+    similarities = (matrix @ query_vec) / (row_norms * query_norm)
+    return similarities.tolist()
 
 
 def check_ollama_health() -> bool:

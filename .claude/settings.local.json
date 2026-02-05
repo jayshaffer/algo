@@ -19,7 +19,26 @@
       "Bash(then echo \"Python project detected\")",
       "Bash(fi)",
       "Bash(python -m py_compile:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(PYTHONPATH=. python3:*)",
+      "Bash(find:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(pip3 list:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(/usr/bin/python3.10 -m pip install:*)",
+      "Bash(apt list:*)",
+      "Bash(dpkg -l:*)",
+      "Bash(docker compose exec trading python -m pytest:*)",
+      "Bash(docker compose:*)",
+      "Bash(pip3 show:*)",
+      "Bash(pip install:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(source:*)",
+      "Bash(curl:*)",
+      "Bash(/home/jay/dev/algo/.venv/bin/python -m pytest:*)",
+      "Bash(/home/jay/dev/algo/.venv/bin/pip list:*)"
     ]
   }
 }

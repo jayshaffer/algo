@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from .news import NewsItem
-from .ollama import embed, cosine_similarity
+from .ollama import embed, embed_batch, cosine_similarity_batch
 
 
 # Default strategy context for relevance filtering
@@ -31,7 +31,8 @@ def filter_by_relevance(
     """
     Filter news items by relevance to trading strategy.
 
-    Uses embedding similarity to drop irrelevant news items.
+    Uses batch embedding + vectorized cosine similarity to score all
+    headlines in one pass instead of individual API calls per item.
 
     Args:
         news_items: List of news items to filter
@@ -47,16 +48,18 @@ def filter_by_relevance(
     # Embed strategy context once
     context_embedding = embed(strategy_context)
 
-    filtered = []
-    for item in news_items:
-        # Embed headline (more efficient than full summary)
-        headline_embedding = embed(item.headline)
+    # Batch embed all headlines in a single API call
+    headlines = [item.headline for item in news_items]
+    headline_embeddings = embed_batch(headlines)
 
-        # Calculate relevance
-        score = cosine_similarity(context_embedding, headline_embedding)
+    # Vectorized cosine similarity against all embeddings at once
+    scores = cosine_similarity_batch(context_embedding, headline_embeddings)
 
-        if score >= threshold:
-            filtered.append(FilteredNewsItem(item=item, relevance_score=score))
+    filtered = [
+        FilteredNewsItem(item=item, relevance_score=score)
+        for item, score in zip(news_items, scores)
+        if score >= threshold
+    ]
 
     # Sort by relevance (highest first)
     filtered.sort(key=lambda x: x.relevance_score, reverse=True)
@@ -73,36 +76,23 @@ def filter_news_batch(
     """
     Filter news with progress tracking for larger batches.
 
+    Delegates to filter_by_relevance which already uses batch embedding.
+    The batch_size parameter is kept for API compatibility but embedding
+    is done in a single call regardless.
+
     Args:
         news_items: List of news items to filter
         strategy_context: Text describing what's relevant
         threshold: Minimum similarity threshold
-        batch_size: Items to process before yielding progress
+        batch_size: Unused (kept for API compatibility)
 
     Returns:
         List of FilteredNewsItem passing the threshold
     """
-    if not news_items:
-        return []
-
-    # Embed strategy context once
-    context_embedding = embed(strategy_context)
-
-    filtered = []
     total = len(news_items)
+    print(f"  Batch filtering {total} items...")
 
-    for i, item in enumerate(news_items):
-        headline_embedding = embed(item.headline)
-        score = cosine_similarity(context_embedding, headline_embedding)
+    filtered = filter_by_relevance(news_items, strategy_context, threshold)
 
-        if score >= threshold:
-            filtered.append(FilteredNewsItem(item=item, relevance_score=score))
-
-        # Progress logging
-        if (i + 1) % batch_size == 0:
-            print(f"  Filtered {i + 1}/{total} items, {len(filtered)} passed threshold")
-
-    # Sort by relevance
-    filtered.sort(key=lambda x: x.relevance_score, reverse=True)
-
+    print(f"  Filtered {total} items, {len(filtered)} passed threshold")
     return filtered
