@@ -11,6 +11,7 @@ from trading.tools import (
     tool_get_market_snapshot,
     tool_get_portfolio_state,
     tool_get_active_theses,
+    tool_get_news_signals,
     tool_create_thesis,
     tool_update_thesis,
     tool_close_thesis,
@@ -18,7 +19,7 @@ from trading.tools import (
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
 )
-from tests.conftest import make_thesis_row, make_position_row
+from tests.conftest import make_thesis_row, make_position_row, make_news_signal_row
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +87,7 @@ class TestToolDefinitions:
             "get_market_snapshot",
             "get_portfolio_state",
             "get_active_theses",
+            "get_news_signals",
             "create_thesis",
             "update_thesis",
             "close_thesis",
@@ -370,6 +372,70 @@ class TestToolGetMacroContext:
 
 
 # ---------------------------------------------------------------------------
+# tool_get_news_signals
+# ---------------------------------------------------------------------------
+
+class TestToolGetNewsSignals:
+
+    @patch("trading.tools.get_news_signals", return_value=[])
+    def test_no_signals_unfiltered(self, mock_signals):
+        result = tool_get_news_signals()
+        assert "No news signals" in result
+        mock_signals.assert_called_once_with(ticker=None, days=7)
+
+    @patch("trading.tools.get_news_signals", return_value=[])
+    def test_no_signals_for_ticker(self, mock_signals):
+        result = tool_get_news_signals(ticker="AAPL")
+        assert "No news signals for AAPL" in result
+        mock_signals.assert_called_once_with(ticker="AAPL", days=7)
+
+    @patch("trading.tools.get_news_signals")
+    def test_formats_signal_details(self, mock_signals):
+        signal = make_news_signal_row(
+            ticker="NVDA", headline="NVDA beats Q3 estimates",
+            category="earnings", sentiment="bullish", confidence="high",
+        )
+        mock_signals.return_value = [signal]
+
+        result = tool_get_news_signals()
+        assert "NVDA" in result
+        assert "earnings" in result
+        assert "bullish" in result
+        assert "high" in result
+        assert "NVDA beats Q3 estimates" in result
+
+    @patch("trading.tools.get_news_signals")
+    def test_custom_days(self, mock_signals):
+        mock_signals.return_value = []
+        tool_get_news_signals(days=3)
+        mock_signals.assert_called_once_with(ticker=None, days=3)
+
+    @patch("trading.tools.get_news_signals")
+    def test_truncates_long_headlines(self, mock_signals):
+        long_headline = "A" * 100
+        signal = make_news_signal_row(headline=long_headline)
+        mock_signals.return_value = [signal]
+
+        result = tool_get_news_signals()
+        assert "..." in result
+        assert long_headline not in result
+
+    @patch("trading.tools.get_news_signals")
+    def test_multiple_signals(self, mock_signals):
+        signals = [
+            make_news_signal_row(id=1, ticker="AAPL", sentiment="bullish"),
+            make_news_signal_row(id=2, ticker="TSLA", sentiment="bearish"),
+        ]
+        mock_signals.return_value = signals
+
+        result = tool_get_news_signals()
+        assert "AAPL" in result
+        assert "TSLA" in result
+        assert "bullish" in result
+        assert "bearish" in result
+
+
+# ---------------------------------------------------------------------------
 # TOOL_HANDLERS mapping
 # ---------------------------------------------------------------------------
 
@@ -392,6 +458,9 @@ class TestToolHandlerMapping:
 
     def test_close_thesis_handler(self):
         assert TOOL_HANDLERS["close_thesis"] is tool_close_thesis
+
+    def test_get_news_signals_handler(self):
+        assert TOOL_HANDLERS["get_news_signals"] is tool_get_news_signals
 
     def test_get_macro_context_handler(self):
         assert TOOL_HANDLERS["get_macro_context"] is tool_get_macro_context

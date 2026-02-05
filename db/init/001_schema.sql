@@ -3,7 +3,7 @@
 -- Ticker-specific news signals
 CREATE TABLE news_signals (
     id SERIAL PRIMARY KEY,
-    ticker VARCHAR(10) NOT NULL,
+    ticker VARCHAR(128) NOT NULL,
     headline TEXT NOT NULL,
     category VARCHAR(20),      -- earnings, guidance, analyst, product, legal, noise
     sentiment VARCHAR(10),     -- bullish, bearish, neutral
@@ -32,7 +32,7 @@ CREATE INDEX idx_macro_signals_published_at ON macro_signals(published_at);
 -- Portfolio state
 CREATE TABLE positions (
     id SERIAL PRIMARY KEY,
-    ticker VARCHAR(10) NOT NULL UNIQUE,
+    ticker VARCHAR(128) NOT NULL UNIQUE,
     shares DECIMAL NOT NULL,
     avg_cost DECIMAL NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -44,7 +44,7 @@ CREATE INDEX idx_positions_ticker ON positions(ticker);
 CREATE TABLE open_orders (
     id SERIAL PRIMARY KEY,
     order_id VARCHAR(50) NOT NULL UNIQUE,
-    ticker VARCHAR(10) NOT NULL,
+    ticker VARCHAR(128) NOT NULL,
     side VARCHAR(10) NOT NULL,       -- buy, sell
     order_type VARCHAR(20) NOT NULL, -- market, limit, stop, stop_limit
     qty DECIMAL NOT NULL,
@@ -77,7 +77,7 @@ CREATE INDEX idx_account_snapshots_date ON account_snapshots(date);
 CREATE TABLE decisions (
     id SERIAL PRIMARY KEY,
     date DATE NOT NULL,
-    ticker VARCHAR(10) NOT NULL,
+    ticker VARCHAR(128) NOT NULL,
     action VARCHAR(10) NOT NULL,  -- buy, sell, hold
     quantity DECIMAL,
     price DECIMAL,
