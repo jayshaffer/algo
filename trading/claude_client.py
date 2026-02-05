@@ -1,6 +1,8 @@
 """Claude API client with tool handling and agentic loop."""
 
 import os
+import time
+import random
 import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -8,6 +10,19 @@ from typing import Callable, Optional
 import anthropic
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration for Claude API calls
+API_MAX_RETRIES = 3
+API_RATE_LIMIT_DELAY = 60  # seconds; rate limits reset per minute
+API_RETRY_BASE_DELAY = 2  # seconds; for non-rate-limit errors
+API_RETRY_BACKOFF_FACTOR = 2
+API_RETRY_JITTER_MAX = 1.0  # seconds
+
+RETRYABLE_ERRORS = (
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+    anthropic.APIConnectionError,
+)
 
 
 @dataclass
@@ -50,7 +65,52 @@ def get_claude_client() -> anthropic.Anthropic:
             "Get your key at https://console.anthropic.com/"
         )
 
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic(api_key=api_key, max_retries=5)
+
+
+def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
+    """
+    Call client.messages.create() with retry and exponential backoff.
+
+    Retries on RateLimitError, InternalServerError, and APIConnectionError.
+    Non-retryable errors propagate immediately.
+
+    Args:
+        client: Anthropic client
+        max_retries: Maximum number of retries (default: API_MAX_RETRIES)
+        **create_kwargs: Arguments passed to client.messages.create()
+
+    Returns:
+        Response from client.messages.create()
+
+    Raises:
+        The last retryable error if all retries are exhausted,
+        or any non-retryable error immediately.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return client.messages.create(**create_kwargs)
+        except RETRYABLE_ERRORS as e:
+            if attempt == max_retries:
+                logger.error(
+                    "API call failed after %d retries: %s", max_retries, e
+                )
+                raise
+            if isinstance(e, anthropic.RateLimitError):
+                delay = API_RATE_LIMIT_DELAY + random.uniform(0, API_RETRY_JITTER_MAX)
+            else:
+                delay = (
+                    API_RETRY_BASE_DELAY * (API_RETRY_BACKOFF_FACTOR ** attempt)
+                    + random.uniform(0, API_RETRY_JITTER_MAX)
+                )
+            logger.warning(
+                "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                attempt + 1,
+                max_retries + 1,
+                e,
+                delay,
+            )
+            time.sleep(delay)
 
 
 def run_agentic_loop(
@@ -85,8 +145,9 @@ def run_agentic_loop(
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
 
-        # Call Claude
-        response = client.messages.create(
+        # Call Claude (with retry for transient errors)
+        response = _call_with_retry(
+            client,
             model=model,
             max_tokens=4096,
             system=system,

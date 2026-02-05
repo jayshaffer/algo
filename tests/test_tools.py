@@ -50,30 +50,49 @@ class TestToolDefinitions:
         for defn in TOOL_DEFINITIONS:
             assert "name" in defn, f"Definition missing 'name': {defn}"
 
-    def test_each_definition_has_description(self):
-        """Every tool definition must have a 'description' field."""
-        for defn in TOOL_DEFINITIONS:
+    def _client_tools(self):
+        """Return only client-side tool definitions (exclude server-side like web_search)."""
+        return [d for d in TOOL_DEFINITIONS if "type" not in d]
+
+    def _server_tools(self):
+        """Return only server-side tool definitions (e.g., web_search)."""
+        return [d for d in TOOL_DEFINITIONS if "type" in d]
+
+    def test_each_client_definition_has_description(self):
+        """Every client tool definition must have a 'description' field."""
+        for defn in self._client_tools():
             assert "description" in defn, f"Definition missing 'description': {defn.get('name')}"
 
-    def test_each_definition_has_input_schema(self):
-        """Every tool definition must have an 'input_schema' field."""
-        for defn in TOOL_DEFINITIONS:
+    def test_each_client_definition_has_input_schema(self):
+        """Every client tool definition must have an 'input_schema' field."""
+        for defn in self._client_tools():
             assert "input_schema" in defn, f"Definition missing 'input_schema': {defn.get('name')}"
 
     def test_input_schema_has_type_object(self):
-        """Every input_schema should be type=object."""
-        for defn in TOOL_DEFINITIONS:
+        """Every client input_schema should be type=object."""
+        for defn in self._client_tools():
             schema = defn["input_schema"]
             assert schema.get("type") == "object", f"Schema type not 'object' for {defn['name']}"
 
-    def test_all_defined_tools_in_handlers(self):
-        """Every tool defined in TOOL_DEFINITIONS should have a handler."""
-        defined_names = {d["name"] for d in TOOL_DEFINITIONS}
+    def test_all_client_tools_in_handlers(self):
+        """Every client tool defined in TOOL_DEFINITIONS should have a handler."""
+        client_names = {d["name"] for d in self._client_tools()}
         handler_names = set(TOOL_HANDLERS.keys())
-        assert defined_names == handler_names, (
-            f"Mismatch: defined={defined_names - handler_names}, "
-            f"handlers={handler_names - defined_names}"
+        assert client_names == handler_names, (
+            f"Mismatch: defined={client_names - handler_names}, "
+            f"handlers={handler_names - client_names}"
         )
+
+    def test_server_tools_have_type_field(self):
+        """Server-side tools should have a 'type' field."""
+        for defn in self._server_tools():
+            assert "type" in defn
+            assert "name" in defn
+
+    def test_web_search_tool_present(self):
+        """Web search server-side tool should be in TOOL_DEFINITIONS."""
+        server_names = {d["name"] for d in self._server_tools()}
+        assert "web_search" in server_names
 
     def test_handlers_are_callable(self):
         """Every handler in TOOL_HANDLERS should be callable."""

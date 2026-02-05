@@ -42,6 +42,7 @@ CLAUDE_IDEATION_SYSTEM = """You are an autonomous investment research agent. You
 
 ## Tool Usage Guidelines
 
+- Use `web_search` to research current market conditions, company news, earnings, analyst opinions, and sector trends. Search for specific tickers, events, or themes you want to investigate. This is your primary research tool for generating well-informed theses.
 - Use `get_market_snapshot` to identify sectors/stocks worth researching
 - Use `get_portfolio_state` to understand current holdings and capital
 - Always check `get_active_theses` before creating new ones to avoid duplicates
@@ -91,7 +92,7 @@ def count_actions(messages: list[dict]) -> tuple[int, int, int]:
 
 
 def run_ideation_claude(
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-opus-4-5-20251101",
     max_turns: int = 20,
 ) -> ClaudeIdeationResult:
     """
@@ -144,8 +145,8 @@ When you've completed your research, provide a summary of your findings and acti
     summary = extract_final_text(result.messages) or "No summary available"
 
     # Calculate cost estimate
-    input_cost = result.input_tokens * 3 / 1_000_000  # $3 per 1M tokens
-    output_cost = result.output_tokens * 15 / 1_000_000  # $15 per 1M tokens
+    input_cost = result.input_tokens * 5 / 1_000_000  # $5 per 1M tokens
+    output_cost = result.output_tokens * 25 / 1_000_000  # $25 per 1M tokens
     total_cost = input_cost + output_cost
 
     # Print summary
@@ -181,8 +182,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run Claude ideation session")
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use (default: claude-sonnet-4-20250514)",
+        default="claude-opus-4-5-20251101",
+        help="Claude model to use (default: claude-opus-4-5-20251101)",
     )
     parser.add_argument(
         "--max-turns",

@@ -1,4 +1,4 @@
-"""Tests for trading/ideation.py - trade idea generation with RAG."""
+"""Tests for trading/ideation.py - trade idea generation."""
 
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -7,159 +7,13 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from trading.ideation import (
-    MAX_DOC_CONTENT_LENGTH,
     ThesisReview,
     NewThesis,
     IdeationResult,
-    format_retrieved_context,
     build_ideation_context,
     run_ideation,
 )
 from tests.conftest import make_thesis_row, make_position_row
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_doc(doc_id=1, ticker="AAPL", doc_type="news", content="Some content",
-              published_at=None):
-    """Create a mock retrieved document dict."""
-    return {
-        "id": doc_id,
-        "ticker": ticker,
-        "doc_type": doc_type,
-        "content": content,
-        "published_at": published_at or datetime.now() - timedelta(days=2),
-    }
-
-
-def _ideation_patches():
-    """Return a dict of common patches for run_ideation tests."""
-    return {
-        "chat_json": patch("trading.ideation.chat_json"),
-        "get_positions": patch("trading.ideation.get_positions"),
-        "get_active_theses": patch("trading.ideation.get_active_theses"),
-        "get_account_info": patch("trading.ideation.get_account_info"),
-        "retrieve_for_ideation": patch("trading.ideation.retrieve_for_ideation"),
-        "get_market_snapshot": patch("trading.ideation.get_market_snapshot"),
-        "format_market_snapshot": patch("trading.ideation.format_market_snapshot"),
-        "insert_thesis": patch("trading.ideation.insert_thesis"),
-        "update_thesis": patch("trading.ideation.update_thesis"),
-        "close_thesis": patch("trading.ideation.close_thesis"),
-        "get_portfolio_context": patch("trading.ideation.get_portfolio_context"),
-        "get_macro_context": patch("trading.ideation.get_macro_context"),
-    }
-
-
-# ---------------------------------------------------------------------------
-# format_retrieved_context
-# ---------------------------------------------------------------------------
-
-class TestFormatRetrievedContext:
-
-    def test_empty_docs_shows_no_documents_message(self):
-        """When no docs are retrieved, a 'no documents' message should appear."""
-        result = format_retrieved_context({"by_ticker": {}, "by_theme": {}})
-        assert "No documents retrieved" in result
-
-    def test_completely_empty_dict(self):
-        """Empty dict (no by_ticker/by_theme keys) should still work."""
-        result = format_retrieved_context({})
-        assert "No documents retrieved" in result
-
-    def test_docs_by_ticker(self):
-        """Documents organized by ticker should show ticker headers and DOC-IDs."""
-        doc = _make_doc(doc_id=42, ticker="NVDA", doc_type="10-K", content="GPU sales up")
-        retrieved = {"by_ticker": {"NVDA": [doc]}, "by_theme": {}}
-
-        result = format_retrieved_context(retrieved)
-        assert "=== NVDA ===" in result
-        assert "[DOC-42]" in result
-        assert "10-K" in result
-        assert "GPU sales up" in result
-
-    def test_docs_by_theme(self):
-        """Documents organized by theme should show theme headers."""
-        doc = _make_doc(doc_id=99, ticker="MSFT", doc_type="news",
-                        content="AI investment surge")
-        retrieved = {"by_ticker": {}, "by_theme": {"AI growth": [doc]}}
-
-        result = format_retrieved_context(retrieved)
-        assert "=== Theme: AI growth ===" in result
-        assert "[DOC-99]" in result
-        assert "[MSFT]" in result
-
-    def test_theme_doc_without_ticker(self):
-        """Theme docs without a ticker should not show a ticker tag."""
-        doc = _make_doc(doc_id=10)
-        doc.pop("ticker", None)
-        retrieved = {"by_ticker": {}, "by_theme": {"Macro": [doc]}}
-
-        result = format_retrieved_context(retrieved)
-        # Should not have a bracketed ticker after DOC-ID
-        assert "[DOC-10]" in result
-
-    def test_content_truncation(self):
-        """Content longer than MAX_DOC_CONTENT_LENGTH should be truncated with '...'."""
-        long_content = "A" * (MAX_DOC_CONTENT_LENGTH + 500)
-        doc = _make_doc(content=long_content)
-        retrieved = {"by_ticker": {"AAPL": [doc]}, "by_theme": {}}
-
-        result = format_retrieved_context(retrieved)
-        # The truncated content + "..." should appear
-        assert "A" * MAX_DOC_CONTENT_LENGTH + "..." in result
-        # The full content should NOT appear
-        assert long_content not in result
-
-    def test_content_not_truncated_when_short(self):
-        """Content shorter than MAX_DOC_CONTENT_LENGTH should not be truncated."""
-        short_content = "Short content"
-        doc = _make_doc(content=short_content)
-        retrieved = {"by_ticker": {"AAPL": [doc]}, "by_theme": {}}
-
-        result = format_retrieved_context(retrieved)
-        assert short_content in result
-        # Should not end with ... for this doc's content
-        lines = result.split("\n")
-        content_lines = [l for l in lines if "Short content" in l]
-        assert len(content_lines) == 1
-        assert not content_lines[0].endswith("...")
-
-    def test_empty_ticker_docs_skipped(self):
-        """Tickers with empty doc lists should be skipped."""
-        retrieved = {"by_ticker": {"AAPL": []}, "by_theme": {}}
-        result = format_retrieved_context(retrieved)
-        assert "=== AAPL ===" not in result
-
-    def test_empty_theme_docs_skipped(self):
-        """Themes with empty doc lists should be skipped."""
-        retrieved = {"by_ticker": {}, "by_theme": {"AI": []}}
-        result = format_retrieved_context(retrieved)
-        assert "=== Theme: AI ===" not in result
-
-    def test_age_days_shown(self):
-        """Document age in days should be shown."""
-        doc = _make_doc(published_at=datetime.now() - timedelta(days=3))
-        retrieved = {"by_ticker": {"AAPL": [doc]}, "by_theme": {}}
-
-        result = format_retrieved_context(retrieved)
-        assert "3d ago" in result
-
-    def test_multiple_tickers_and_themes(self):
-        """Multiple tickers and themes should all appear."""
-        doc1 = _make_doc(doc_id=1, ticker="AAPL")
-        doc2 = _make_doc(doc_id=2, ticker="GOOGL")
-        doc3 = _make_doc(doc_id=3, ticker="AMZN")
-        retrieved = {
-            "by_ticker": {"AAPL": [doc1], "GOOGL": [doc2]},
-            "by_theme": {"Cloud computing": [doc3]},
-        }
-
-        result = format_retrieved_context(retrieved)
-        assert "=== AAPL ===" in result
-        assert "=== GOOGL ===" in result
-        assert "=== Theme: Cloud computing ===" in result
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +30,8 @@ class TestBuildIdeationContext:
     def test_combines_all_sections(self, mock_portfolio, mock_theses,
                                    mock_macro, mock_snap, mock_fmt):
         account_info = {"cash": 100000}
-        retrieved = {"by_ticker": {}, "by_theme": {}}
 
-        result = build_ideation_context(account_info, retrieved)
+        result = build_ideation_context(account_info)
         assert "Portfolio: $100k" in result
         assert "Macro: Fed steady" in result
         assert "Active Theses: None" in result
@@ -197,7 +50,7 @@ class TestBuildIdeationContext:
                                  invalidation="revenue drops")
         mock_theses.return_value = [thesis]
 
-        result = build_ideation_context({"cash": 100000}, {"by_ticker": {}, "by_theme": {}})
+        result = build_ideation_context({"cash": 100000})
         assert "ID 5" in result
         assert "NVDA" in result
         assert "GPU demand strong" in result
@@ -208,7 +61,7 @@ class TestBuildIdeationContext:
     @patch("trading.ideation.get_portfolio_context", return_value="Portfolio...")
     def test_market_snapshot_error_handled(self, mock_portfolio, mock_theses,
                                            mock_macro, mock_snap):
-        result = build_ideation_context({"cash": 0}, {"by_ticker": {}, "by_theme": {}})
+        result = build_ideation_context({"cash": 0})
         assert "Error fetching data" in result
 
 
@@ -218,14 +71,12 @@ class TestBuildIdeationContext:
 
 class TestRunIdeation:
 
-    def _run_with_mocks(self, llm_response, positions=None, theses=None,
-                        retrieved=None):
+    def _run_with_mocks(self, llm_response, positions=None, theses=None):
         """Helper to run ideation with patched dependencies."""
         with patch("trading.ideation.chat_json", return_value=llm_response) as mock_chat, \
              patch("trading.ideation.get_positions", return_value=positions or []), \
              patch("trading.ideation.get_active_theses", return_value=theses or []), \
              patch("trading.ideation.get_account_info", return_value={"cash": 100000, "buying_power": 50000, "portfolio_value": 150000}), \
-             patch("trading.ideation.retrieve_for_ideation", return_value=retrieved or {"by_ticker": {}, "by_theme": {}}), \
              patch("trading.ideation.get_market_snapshot"), \
              patch("trading.ideation.format_market_snapshot", return_value="Market..."), \
              patch("trading.ideation.insert_thesis", return_value=99) as mock_insert, \
@@ -335,12 +186,11 @@ class TestRunIdeation:
             "new_theses": [{
                 "ticker": "NVDA",
                 "direction": "long",
-                "thesis": "Strong AI demand [DOC-1]",
+                "thesis": "Strong AI demand",
                 "entry_trigger": "Pullback to $800",
                 "exit_trigger": "$1100",
                 "invalidation": "Revenue drops",
                 "confidence": "high",
-                "sources": [1],
             }],
             "market_observations": "",
         }
@@ -349,7 +199,7 @@ class TestRunIdeation:
         mock_insert.assert_called_once_with(
             ticker="NVDA",
             direction="long",
-            thesis="Strong AI demand [DOC-1]",
+            thesis="Strong AI demand",
             entry_trigger="Pullback to $800",
             exit_trigger="$1100",
             invalidation="Revenue drops",
@@ -366,7 +216,6 @@ class TestRunIdeation:
                 "ticker": "AAPL",
                 "direction": "long",
                 "thesis": "Buy more AAPL",
-                "sources": [],
             }],
             "market_observations": "",
         }
@@ -385,7 +234,6 @@ class TestRunIdeation:
                 "ticker": "MSFT",
                 "direction": "short",
                 "thesis": "Overvalued",
-                "sources": [],
             }],
             "market_observations": "",
         }
@@ -404,13 +252,11 @@ class TestRunIdeation:
                     "ticker": "AMD",
                     "direction": "long",
                     "thesis": "First thesis",
-                    "sources": [],
                 },
                 {
                     "ticker": "AMD",
                     "direction": "short",
                     "thesis": "Second thesis",
-                    "sources": [],
                 },
             ],
             "market_observations": "",
@@ -425,7 +271,6 @@ class TestRunIdeation:
              patch("trading.ideation.get_positions", return_value=[]), \
              patch("trading.ideation.get_active_theses", return_value=[]), \
              patch("trading.ideation.get_account_info", return_value={"cash": 0, "buying_power": 0, "portfolio_value": 0}), \
-             patch("trading.ideation.retrieve_for_ideation", return_value={"by_ticker": {}, "by_theme": {}}), \
              patch("trading.ideation.get_market_snapshot"), \
              patch("trading.ideation.format_market_snapshot", return_value=""), \
              patch("trading.ideation.get_portfolio_context", return_value=""), \
@@ -480,28 +325,12 @@ class TestRunIdeation:
         assert result.theses_created == 0
         mock_insert.assert_not_called()
 
-    def test_retrieval_failure_continues(self):
-        """If retrieve_for_ideation fails, ideation should continue with empty docs."""
-        with patch("trading.ideation.chat_json", return_value={"reviews": [], "new_theses": [], "market_observations": ""}), \
-             patch("trading.ideation.get_positions", return_value=[]), \
-             patch("trading.ideation.get_active_theses", return_value=[]), \
-             patch("trading.ideation.get_account_info", return_value={"cash": 0, "buying_power": 0, "portfolio_value": 0}), \
-             patch("trading.ideation.retrieve_for_ideation", side_effect=Exception("DB down")), \
-             patch("trading.ideation.get_market_snapshot"), \
-             patch("trading.ideation.format_market_snapshot", return_value=""), \
-             patch("trading.ideation.get_portfolio_context", return_value=""), \
-             patch("trading.ideation.get_macro_context", return_value=""):
-            result = run_ideation()
-
-        assert isinstance(result, IdeationResult)
-
     def test_account_info_failure_continues(self):
         """If get_account_info fails, ideation should continue with defaults."""
         with patch("trading.ideation.chat_json", return_value={"reviews": [], "new_theses": [], "market_observations": ""}), \
              patch("trading.ideation.get_positions", return_value=[]), \
              patch("trading.ideation.get_active_theses", return_value=[]), \
              patch("trading.ideation.get_account_info", side_effect=Exception("API fail")), \
-             patch("trading.ideation.retrieve_for_ideation", return_value={"by_ticker": {}, "by_theme": {}}), \
              patch("trading.ideation.get_market_snapshot"), \
              patch("trading.ideation.format_market_snapshot", return_value=""), \
              patch("trading.ideation.get_portfolio_context", return_value=""), \

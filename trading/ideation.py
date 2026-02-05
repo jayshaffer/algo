@@ -17,39 +17,28 @@ from .db import (
 from .executor import get_account_info
 from .market_data import get_market_snapshot, format_market_snapshot
 from .ollama import chat_json
-from .retrieval import retrieve_for_ideation
 
 
-MAX_DOC_CONTENT_LENGTH = 1500
-
-
-IDEATION_SYSTEM_PROMPT = """You are an investment ideation agent. Your job is to generate trade theses based ONLY on the provided documents.
-
-CRITICAL RULES:
-1. You must ONLY use information from the retrieved documents below
-2. Do NOT use your training knowledge about companies - it may be outdated
-3. Every thesis MUST cite at least one source document by [DOC-ID]
-4. If you don't have recent information about a company, say so - don't guess
+IDEATION_SYSTEM_PROMPT = """You are an investment ideation agent. Your job is to review existing trade theses and generate new trade ideas.
 
 You will receive:
 1. Current portfolio positions
 2. Active theses you previously generated
-3. Retrieved documents organized by ticker and theme (with DOC-IDs)
+3. Macro context and news signals
 4. Market snapshot (sector performance, movers)
 
 Your tasks:
-1. REVIEW existing active theses - check if retrieved documents support or contradict them
-2. GENERATE new trade ideas (3-5) based on retrieved documents
+1. REVIEW existing active theses - check if the current context supports or contradicts them
+2. GENERATE new trade ideas (3-5)
 
 For each new thesis, provide:
 - ticker: Stock symbol
 - direction: "long", "short", or "avoid"
-- thesis: Core reasoning citing [DOC-ID] sources
+- thesis: Core reasoning
 - entry_trigger: Specific conditions (price levels, events)
 - exit_trigger: Target or stop conditions
 - invalidation: What would prove the thesis wrong
 - confidence: "high", "medium", or "low"
-- sources: List of DOC-IDs used
 
 Respond with valid JSON only:
 {
@@ -57,7 +46,7 @@ Respond with valid JSON only:
         {
             "thesis_id": 123,
             "action": "keep" | "update" | "invalidate" | "expire",
-            "reason": "Brief explanation citing [DOC-ID] if relevant",
+            "reason": "Brief explanation",
             "updates": {...}
         }
     ],
@@ -65,12 +54,11 @@ Respond with valid JSON only:
         {
             "ticker": "NVDA",
             "direction": "long",
-            "thesis": "Strong datacenter demand per Q3 earnings [DOC-142]. New AI chip approach [DOC-156].",
+            "thesis": "Strong datacenter demand driven by AI infrastructure buildout.",
             "entry_trigger": "Pullback to $800 support",
             "exit_trigger": "Target $1100 or break below $750",
             "invalidation": "Datacenter revenue growth decelerates below 50% YoY",
-            "confidence": "high",
-            "sources": [142, 156]
+            "confidence": "high"
         }
     ],
     "market_observations": "..."
@@ -111,56 +99,12 @@ class IdeationResult:
     theses_created: int
 
 
-def format_retrieved_context(retrieved: dict) -> str:
-    """Format retrieved documents for LLM context."""
-    lines = ["Retrieved Documents:", ""]
-
-    # By ticker
-    for ticker, docs in retrieved.get("by_ticker", {}).items():
-        if not docs:
-            continue
-        lines.append(f"=== {ticker} ===")
-        for doc in docs:
-            age_days = (datetime.now() - doc["published_at"]).days
-            lines.append(f"[DOC-{doc['id']}] ({doc['doc_type']}, {age_days}d ago)")
-            # Truncate long content
-            content = doc["content"][:MAX_DOC_CONTENT_LENGTH]
-            if len(doc["content"]) > MAX_DOC_CONTENT_LENGTH:
-                content += "..."
-            lines.append(content)
-            lines.append("")
-
-    # By theme
-    for theme, docs in retrieved.get("by_theme", {}).items():
-        if not docs:
-            continue
-        lines.append(f"=== Theme: {theme} ===")
-        for doc in docs:
-            age_days = (datetime.now() - doc["published_at"]).days
-            ticker_note = f" [{doc['ticker']}]" if doc.get("ticker") else ""
-            lines.append(f"[DOC-{doc['id']}]{ticker_note} ({doc['doc_type']}, {age_days}d ago)")
-            content = doc["content"][:MAX_DOC_CONTENT_LENGTH]
-            if len(doc["content"]) > MAX_DOC_CONTENT_LENGTH:
-                content += "..."
-            lines.append(content)
-            lines.append("")
-
-    if len(lines) == 2:  # Only header
-        lines.append("No documents retrieved. Unable to generate grounded theses.")
-
-    return "\n".join(lines)
-
-
-def build_ideation_context(account_info: dict, retrieved: dict) -> str:
-    """Build context string for ideation LLM call with RAG."""
+def build_ideation_context(account_info: dict) -> str:
+    """Build context string for ideation LLM call."""
     sections = []
 
     # Portfolio context
     sections.append(get_portfolio_context(account_info))
-    sections.append("")
-
-    # Retrieved documents (RAG)
-    sections.append(format_retrieved_context(retrieved))
     sections.append("")
 
     # Active theses
@@ -195,14 +139,12 @@ def build_ideation_context(account_info: dict, retrieved: dict) -> str:
 
 def run_ideation(model: str = "qwen2.5:14b") -> IdeationResult:
     """
-    Run an ideation session with RAG retrieval.
+    Run an ideation session.
 
-    1. Determine retrieval targets (tickers from positions/theses, themes)
-    2. Retrieve relevant documents via RAG
-    3. Build context with retrieved documents
-    4. Call LLM for thesis review and generation
-    5. Validate citations in response
-    6. Apply changes to database
+    1. Gather current positions and active theses
+    2. Build context
+    3. Call LLM for thesis review and generation
+    4. Apply changes to database
 
     Args:
         model: Ollama model to use
@@ -214,59 +156,28 @@ def run_ideation(model: str = "qwen2.5:14b") -> IdeationResult:
     print(f"[{timestamp.isoformat()}] Starting ideation session")
     print(f"  Model: {model}")
 
-    # Step 1: Determine retrieval targets
-    print("\n[Step 1] Determining retrieval targets...")
+    # Step 1: Gather positions and theses
+    print("\n[Step 1] Gathering positions and theses...")
     positions = {p["ticker"] for p in get_positions()}
     active_theses = get_active_theses()
     active_thesis_tickers = {t["ticker"] for t in active_theses}
+    print(f"  Positions: {', '.join(positions) or 'None'}")
+    print(f"  Active thesis tickers: {', '.join(active_thesis_tickers) or 'None'}")
 
-    # Tickers to research: positions + thesis tickers
-    tickers_to_research = list(positions | active_thesis_tickers)
-    print(f"  Tickers to research: {', '.join(tickers_to_research) or 'None'}")
-
-    # Define themes for semantic search
-    themes = [
-        "AI semiconductor demand growth",
-        "Federal Reserve interest rate policy",
-        "Tech earnings and revenue guidance",
-        "Sector rotation and market momentum",
-        "Economic recession indicators",
-    ]
-    print(f"  Themes: {len(themes)}")
-
-    # Step 2: Retrieve documents
-    print("\n[Step 2] Retrieving documents...")
-    try:
-        retrieved = retrieve_for_ideation(
-            tickers=tickers_to_research,
-            themes=themes,
-            k_per_ticker=5,
-            k_per_theme=5,
-        )
-        doc_count = sum(len(docs) for docs in retrieved.get("by_ticker", {}).values())
-        doc_count += sum(len(docs) for docs in retrieved.get("by_theme", {}).values())
-        print(f"  Retrieved {doc_count} documents")
-    except Exception as e:
-        print(f"  Warning: Could not retrieve documents: {e}")
-        retrieved = {"by_ticker": {}, "by_theme": {}}
-        doc_count = 0
-
-    # Step 3: Build context
-    print("\n[Step 3] Building ideation context...")
+    # Step 2: Build context
+    print("\n[Step 2] Building ideation context...")
     try:
         account_info = get_account_info()
     except Exception as e:
         print(f"  Warning: Could not get account info: {e}")
         account_info = {"cash": 0, "portfolio_value": 0, "buying_power": 0}
 
-    context = build_ideation_context(account_info, retrieved)
+    context = build_ideation_context(account_info)
     print(f"  Context built ({len(context)} chars)")
 
-    # Step 4: Call LLM
-    print("\n[Step 4] Calling LLM for ideation...")
-    prompt = f"""Here is the current market context with retrieved documents. Review existing theses and generate new trade ideas.
-
-IMPORTANT: Only use information from the retrieved documents. Cite sources using [DOC-ID].
+    # Step 3: Call LLM
+    print("\n[Step 3] Calling LLM for ideation...")
+    prompt = f"""Here is the current market context. Review existing theses and generate new trade ideas.
 
 Exclude these tickers (already in portfolio): {', '.join(positions) or 'None'}
 Exclude these tickers (already have active thesis): {', '.join(active_thesis_tickers) or 'None'}
@@ -291,30 +202,8 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
     print(f"  Received response")
     print(f"  Market observations: {response.get('market_observations', '')[:100]}...")
 
-    # Step 5: Validate citations
-    print("\n[Step 5] Validating citations...")
-    # Collect all retrieved doc IDs for validation
-    valid_doc_ids = set()
-    for docs in retrieved.get("by_ticker", {}).values():
-        for doc in docs:
-            valid_doc_ids.add(doc["id"])
-    for docs in retrieved.get("by_theme", {}).values():
-        for doc in docs:
-            valid_doc_ids.add(doc["id"])
-
-    for thesis_data in response.get("new_theses", []):
-        sources = thesis_data.get("sources", [])
-        if not sources:
-            print(f"  Warning: {thesis_data.get('ticker', '?')} thesis has no sources cited")
-        else:
-            invalid_sources = [s for s in sources if s not in valid_doc_ids]
-            if invalid_sources:
-                print(f"  Warning: {thesis_data.get('ticker', '?')} cites invalid sources: {invalid_sources}")
-            else:
-                print(f"  {thesis_data.get('ticker', '?')}: {len(sources)} valid sources")
-
-    # Step 6: Process reviews
-    print("\n[Step 6] Processing thesis reviews...")
+    # Step 4: Process reviews
+    print("\n[Step 4] Processing thesis reviews...")
     reviews = []
     theses_kept = 0
     theses_updated = 0
@@ -372,8 +261,8 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
             theses_closed += 1
             print(f"  Thesis {review.thesis_id}: {review.action.upper()} - {review.reason}")
 
-    # Step 7: Process new theses
-    print("\n[Step 7] Creating new theses...")
+    # Step 5: Process new theses
+    print("\n[Step 5] Creating new theses...")
     new_theses = []
     theses_created = 0
 
@@ -419,9 +308,8 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
 
     # Summary
     print("\n" + "=" * 60)
-    print("Ideation Session Complete (RAG-enabled)")
+    print("Ideation Session Complete")
     print("=" * 60)
-    print(f"  Documents retrieved: {doc_count}")
     print(f"  Theses kept: {theses_kept}")
     print(f"  Theses updated: {theses_updated}")
     print(f"  Theses closed: {theses_closed}")

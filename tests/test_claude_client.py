@@ -3,6 +3,8 @@
 import os
 from unittest.mock import MagicMock, patch, PropertyMock
 
+import anthropic
+import httpx
 import pytest
 
 from trading.claude_client import (
@@ -11,6 +13,7 @@ from trading.claude_client import (
     get_claude_client,
     run_agentic_loop,
     extract_final_text,
+    _call_with_retry,
 )
 
 
@@ -46,6 +49,43 @@ def _make_response(content, stop_reason="end_turn", input_tokens=100,
     response.usage.input_tokens = input_tokens
     response.usage.output_tokens = output_tokens
     return response
+
+
+def _make_rate_limit_error():
+    """Create an anthropic.RateLimitError."""
+    response = httpx.Response(429, request=httpx.Request("POST", "https://api.anthropic.com"))
+    return anthropic.RateLimitError(
+        message="Rate limit exceeded",
+        response=response,
+        body={"error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}},
+    )
+
+
+def _make_internal_server_error():
+    """Create an anthropic.InternalServerError."""
+    response = httpx.Response(500, request=httpx.Request("POST", "https://api.anthropic.com"))
+    return anthropic.InternalServerError(
+        message="Internal server error",
+        response=response,
+        body={"error": {"type": "server_error", "message": "Internal server error"}},
+    )
+
+
+def _make_api_connection_error():
+    """Create an anthropic.APIConnectionError."""
+    return anthropic.APIConnectionError(
+        request=httpx.Request("POST", "https://api.anthropic.com"),
+    )
+
+
+def _make_bad_request_error():
+    """Create an anthropic.BadRequestError (non-retryable)."""
+    response = httpx.Response(400, request=httpx.Request("POST", "https://api.anthropic.com"))
+    return anthropic.BadRequestError(
+        message="Bad request",
+        response=response,
+        body={"error": {"type": "invalid_request_error", "message": "Bad request"}},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +135,9 @@ class TestGetClaudeClient:
 
     @patch("trading.claude_client.anthropic.Anthropic")
     def test_creates_client_with_key(self, mock_anthropic, claude_env):
-        """Should create Anthropic client with the env var key."""
+        """Should create Anthropic client with the env var key and max_retries."""
         client = get_claude_client()
-        mock_anthropic.assert_called_once_with(api_key="test-key")
+        mock_anthropic.assert_called_once_with(api_key="test-key", max_retries=5)
 
     @patch("trading.claude_client.anthropic.Anthropic")
     def test_returns_anthropic_instance(self, mock_anthropic, claude_env):
@@ -105,6 +145,150 @@ class TestGetClaudeClient:
         mock_anthropic.return_value = MagicMock()
         client = get_claude_client()
         assert client is mock_anthropic.return_value
+
+
+# ---------------------------------------------------------------------------
+# _call_with_retry
+# ---------------------------------------------------------------------------
+
+@patch("trading.claude_client.random.uniform", return_value=0.5)
+@patch("trading.claude_client.time.sleep")
+class TestCallWithRetry:
+
+    def test_succeeds_first_attempt(self, mock_sleep, mock_uniform):
+        """Should return response on first attempt without sleeping."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.return_value = expected
+
+        result = _call_with_retry(client, model="m", max_tokens=100)
+
+        client.messages.create.assert_called_once_with(model="m", max_tokens=100)
+        mock_sleep.assert_not_called()
+        assert result is expected
+
+    def test_retries_on_rate_limit_then_succeeds(self, mock_sleep, mock_uniform):
+        """Should retry on RateLimitError and return on success."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            expected,
+        ]
+
+        result = _call_with_retry(client, model="m", max_tokens=100)
+
+        assert result is expected
+        assert client.messages.create.call_count == 2
+        mock_sleep.assert_called_once()
+
+    def test_retries_on_internal_server_error(self, mock_sleep, mock_uniform):
+        """Should retry on InternalServerError and return on success."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.side_effect = [
+            _make_internal_server_error(),
+            expected,
+        ]
+
+        result = _call_with_retry(client, model="m", max_tokens=100)
+
+        assert result is expected
+        assert client.messages.create.call_count == 2
+
+    def test_retries_on_api_connection_error(self, mock_sleep, mock_uniform):
+        """Should retry on APIConnectionError and return on success."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.side_effect = [
+            _make_api_connection_error(),
+            expected,
+        ]
+
+        result = _call_with_retry(client, model="m", max_tokens=100)
+
+        assert result is expected
+        assert client.messages.create.call_count == 2
+
+    def test_exhausts_retries_and_raises(self, mock_sleep, mock_uniform):
+        """Should re-raise after exhausting all retries."""
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+        ]
+
+        with pytest.raises(anthropic.RateLimitError):
+            _call_with_retry(client, max_retries=2, model="m", max_tokens=100)
+
+        # 1 initial + 2 retries = 3 calls
+        assert client.messages.create.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    def test_non_retryable_error_raises_immediately(self, mock_sleep, mock_uniform):
+        """BadRequestError should propagate immediately without retry."""
+        client = MagicMock()
+        client.messages.create.side_effect = _make_bad_request_error()
+
+        with pytest.raises(anthropic.BadRequestError):
+            _call_with_retry(client, model="m", max_tokens=100)
+
+        client.messages.create.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_backoff_increases_exponentially_for_non_rate_limit(self, mock_sleep, mock_uniform):
+        """Non-rate-limit errors should use exponential backoff: base * factor^attempt + jitter."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.side_effect = [
+            _make_internal_server_error(),
+            _make_internal_server_error(),
+            _make_internal_server_error(),
+            expected,
+        ]
+
+        result = _call_with_retry(client, max_retries=3, model="m", max_tokens=100)
+
+        assert result is expected
+        # With base=2, factor=2, jitter=0.5:
+        # attempt 0: 2 * 2^0 + 0.5 = 2.5
+        # attempt 1: 2 * 2^1 + 0.5 = 4.5
+        # attempt 2: 2 * 2^2 + 0.5 = 8.5
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [2.5, 4.5, 8.5]
+
+    def test_rate_limit_uses_60s_delay(self, mock_sleep, mock_uniform):
+        """RateLimitError should wait 60s + jitter since limits reset per minute."""
+        client = MagicMock()
+        expected = _make_response([_make_text_block("ok")])
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+            expected,
+        ]
+
+        result = _call_with_retry(client, max_retries=3, model="m", max_tokens=100)
+
+        assert result is expected
+        # Rate limit delay: 60 + 0.5 jitter = 60.5 each time
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [60.5, 60.5]
+
+    def test_custom_max_retries(self, mock_sleep, mock_uniform):
+        """Custom max_retries parameter should control retry count."""
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+        ]
+
+        with pytest.raises(anthropic.RateLimitError):
+            _call_with_retry(client, max_retries=1, model="m", max_tokens=100)
+
+        # 1 initial + 1 retry = 2 calls
+        assert client.messages.create.call_count == 2
+        assert mock_sleep.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +566,94 @@ class TestRunAgenticLoop:
         )
 
         handler.assert_called_once_with(query="AAPL", limit=5)
+
+
+    @patch("trading.claude_client.random.uniform", return_value=0.5)
+    @patch("trading.claude_client.time.sleep")
+    def test_rate_limit_on_first_turn_retries_and_succeeds(self, mock_sleep, mock_uniform):
+        """Rate limit on first API call should retry and complete normally."""
+        response = _make_response(
+            content=[_make_text_block("Done!")],
+            stop_reason="end_turn",
+        )
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            response,
+        ]
+
+        result = run_agentic_loop(
+            client=client,
+            model="test-model",
+            system="sys",
+            initial_message="Hello",
+            tools=[],
+            tool_handlers={},
+        )
+
+        assert result.stop_reason == "end_turn"
+        assert result.turns_used == 1
+        assert client.messages.create.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("trading.claude_client.random.uniform", return_value=0.5)
+    @patch("trading.claude_client.time.sleep")
+    def test_rate_limit_exhausted_propagates_error(self, mock_sleep, mock_uniform):
+        """When all retries are exhausted, the error should propagate."""
+        client = MagicMock()
+        # API_MAX_RETRIES is 3, so we need 4 errors (1 initial + 3 retries)
+        client.messages.create.side_effect = [
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+        ]
+
+        with pytest.raises(anthropic.RateLimitError):
+            run_agentic_loop(
+                client=client,
+                model="test-model",
+                system="sys",
+                initial_message="Hello",
+                tools=[],
+                tool_handlers={},
+            )
+
+    @patch("trading.claude_client.random.uniform", return_value=0.5)
+    @patch("trading.claude_client.time.sleep")
+    def test_rate_limit_mid_conversation_preserves_state(self, mock_sleep, mock_uniform):
+        """Rate limit on second turn should retry without losing conversation state."""
+        tool_response = _make_response(
+            content=[_make_tool_use_block("t1", "tool", {"x": 1})],
+            stop_reason="tool_use",
+        )
+        final_response = _make_response(
+            content=[_make_text_block("All done")],
+            stop_reason="end_turn",
+        )
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            tool_response,        # Turn 1 succeeds
+            _make_rate_limit_error(),  # Turn 2 rate limited
+            final_response,       # Turn 2 retry succeeds
+        ]
+        handler = MagicMock(return_value="result")
+
+        result = run_agentic_loop(
+            client=client,
+            model="test-model",
+            system="sys",
+            initial_message="Go",
+            tools=[{"name": "tool"}],
+            tool_handlers={"tool": handler},
+            max_turns=10,
+        )
+
+        assert result.stop_reason == "end_turn"
+        assert result.turns_used == 2
+        # Turn 1 + Turn 2 (fail) + Turn 2 (success) = 3 create calls
+        assert client.messages.create.call_count == 3
+        handler.assert_called_once_with(x=1)
 
 
 # ---------------------------------------------------------------------------

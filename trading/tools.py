@@ -183,6 +183,11 @@ def tool_get_macro_context(days: int = 7) -> str:
 
 TOOL_DEFINITIONS = [
     {
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 10,
+    },
+    {
         "name": "get_market_snapshot",
         "description": (
             "Get current market state including sector performance, "
