@@ -2,7 +2,7 @@
 
 CREATE TABLE theses (
     id SERIAL PRIMARY KEY,
-    ticker VARCHAR(10) NOT NULL,
+    ticker VARCHAR(128) NOT NULL,
     direction VARCHAR(10) NOT NULL,      -- long, short, avoid
     thesis TEXT NOT NULL,                 -- core reasoning
     entry_trigger TEXT,                   -- what would trigger entry

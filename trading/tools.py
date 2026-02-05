@@ -9,6 +9,7 @@ from .context import get_portfolio_context, get_macro_context
 from .executor import get_account_info
 from .db import (
     get_active_theses,
+    get_news_signals,
     insert_thesis,
     update_thesis,
     close_thesis,
@@ -148,6 +149,28 @@ def tool_close_thesis(thesis_id: int, status: str, reason: str) -> str:
         return f"Closed thesis ID {thesis_id} with status '{status}'"
     else:
         return f"Error: Thesis ID {thesis_id} not found"
+
+
+def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
+    """Get recent ticker-specific news signals."""
+    logger.info(f"Getting news signals (ticker: {ticker}, days: {days})")
+    signals = get_news_signals(ticker=ticker, days=days)
+
+    if not signals:
+        if ticker:
+            return f"No news signals for {ticker} in the last {days} days."
+        return f"No news signals in the last {days} days."
+
+    lines = []
+    for s in signals:
+        date_str = s["published_at"].strftime("%Y-%m-%d %H:%M")
+        headline = s["headline"][:80] + "..." if len(s["headline"]) > 80 else s["headline"]
+        lines.append(
+            f"- [{date_str}] {s['ticker']} ({s['category']}, {s['sentiment']}, "
+            f"confidence: {s['confidence']}): {headline}"
+        )
+
+    return "\n".join(lines)
 
 
 def tool_get_macro_context(days: int = 7) -> str:
@@ -292,6 +315,28 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "get_news_signals",
+        "description": (
+            "Get recent ticker-specific news signals including headlines, "
+            "sentiment (bullish/bearish/neutral), category (news/earnings/product), "
+            "and confidence scores. Optionally filter by ticker."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Filter to a specific ticker (optional)",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Look back period in days (default: 7)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_macro_context",
         "description": (
             "Get recent macro economic signals including Fed policy, "
@@ -318,5 +363,6 @@ TOOL_HANDLERS = {
     "create_thesis": tool_create_thesis,
     "update_thesis": tool_update_thesis,
     "close_thesis": tool_close_thesis,
+    "get_news_signals": tool_get_news_signals,
     "get_macro_context": tool_get_macro_context,
 }

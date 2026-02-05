@@ -45,6 +45,7 @@ CLAUDE_IDEATION_SYSTEM = """You are an autonomous investment research agent. You
 - Use `get_market_snapshot` to identify sectors/stocks worth researching
 - Use `get_portfolio_state` to understand current holdings and capital
 - Always check `get_active_theses` before creating new ones to avoid duplicates
+- Use `get_news_signals` to check recent news for specific tickers you're researching
 - Use `get_macro_context` to understand broader market environment
 
 Begin your research session now. When you've completed your analysis and thesis management, provide a brief summary of your findings and actions."""

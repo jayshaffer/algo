@@ -10,7 +10,7 @@ CREATE TABLE documents (
     embedding vector(768),              -- nomic-embed-text produces 768-dim vectors
 
     -- Metadata for filtering
-    ticker VARCHAR(10),                 -- NULL for macro/general docs
+    ticker VARCHAR(128),                 -- NULL for macro/general docs
     doc_type VARCHAR(20) NOT NULL,      -- 'news', 'filing_10k', 'filing_10q', 'filing_8k'
     source VARCHAR(50) NOT NULL,        -- 'alpaca', 'sec_edgar', 'manual'
     source_url TEXT,                    -- Original URL for citation/dedup
