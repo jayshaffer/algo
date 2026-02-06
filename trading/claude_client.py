@@ -43,6 +43,8 @@ class AgenticLoopResult:
     stop_reason: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 def get_claude_client() -> anthropic.Anthropic:
@@ -113,6 +115,31 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
             time.sleep(delay)
 
 
+def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """Return a shallow copy of messages with cache_control on the last user message.
+
+    This enables Anthropic prompt caching so the growing conversation prefix
+    is reused across turns rather than re-processed from scratch.
+    """
+    result = list(messages)
+    for i in range(len(result) - 1, -1, -1):
+        if result[i]["role"] == "user":
+            content = result[i]["content"]
+            if isinstance(content, str):
+                result[i] = {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                    ],
+                }
+            elif isinstance(content, list) and content:
+                new_content = list(content)
+                new_content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+                result[i] = {"role": "user", "content": new_content}
+            break
+    return result
+
+
 def run_agentic_loop(
     client: anthropic.Anthropic,
     model: str,
@@ -140,7 +167,17 @@ def run_agentic_loop(
     messages = [{"role": "user", "content": initial_message}]
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cache_creation = 0
+    total_cache_read = 0
     stop_reason = "max_turns"
+
+    # Prepare system prompt and tools with cache breakpoints
+    cached_system = [
+        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+    ]
+    cached_tools = list(tools)
+    if cached_tools:
+        cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
 
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
@@ -150,14 +187,16 @@ def run_agentic_loop(
             client,
             model=model,
             max_tokens=4096,
-            system=system,
-            tools=tools,
-            messages=messages,
+            system=cached_system,
+            tools=cached_tools,
+            messages=_messages_with_cache_breakpoint(messages),
         )
 
         # Track token usage
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
+        total_cache_creation += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
         # Add assistant response to history
         messages.append({"role": "assistant", "content": response.content})
@@ -229,6 +268,8 @@ def run_agentic_loop(
         stop_reason=stop_reason,
         input_tokens=total_input_tokens,
         output_tokens=total_output_tokens,
+        cache_creation_input_tokens=total_cache_creation,
+        cache_read_input_tokens=total_cache_read,
     )
 
 

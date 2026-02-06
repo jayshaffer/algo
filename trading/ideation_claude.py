@@ -145,7 +145,7 @@ def count_actions(messages: list[dict]) -> tuple[int, int, int]:
 
 
 def run_ideation_claude(
-    model: str = "claude-opus-4-5-20251101",
+    model: str = "claude-opus-4-6",
     max_turns: int = 20,
 ) -> ClaudeIdeationResult:
     """
@@ -197,10 +197,13 @@ When you've completed your research, provide a summary of your findings and acti
     created, updated, closed = count_actions(result.messages)
     summary = extract_final_text(result.messages) or "No summary available"
 
-    # Calculate cost estimate
-    input_cost = result.input_tokens * 5 / 1_000_000  # $5 per 1M tokens
-    output_cost = result.output_tokens * 25 / 1_000_000  # $25 per 1M tokens
-    total_cost = input_cost + output_cost
+    # Calculate cost estimate (cache writes 1.25x, cache reads 0.1x, uncached 1x)
+    uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
+    input_cost = uncached_input * 5 / 1_000_000
+    cache_write_cost = result.cache_creation_input_tokens * 6.25 / 1_000_000
+    cache_read_cost = result.cache_read_input_tokens * 0.50 / 1_000_000
+    output_cost = result.output_tokens * 25 / 1_000_000
+    total_cost = input_cost + cache_write_cost + cache_read_cost + output_cost
 
     # Print summary
     print("\n" + "=" * 60)
@@ -213,6 +216,9 @@ When you've completed your research, provide a summary of your findings and acti
     print(f"  Theses closed: {closed}")
     print(f"\nToken usage:")
     print(f"  Input tokens: {result.input_tokens:,}")
+    if result.cache_read_input_tokens:
+        print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")
+        print(f"  Cache write tokens: {result.cache_creation_input_tokens:,}")
     print(f"  Output tokens: {result.output_tokens:,}")
     print(f"  Estimated cost: ${total_cost:.4f}")
     print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
@@ -231,7 +237,7 @@ When you've completed your research, provide a summary of your findings and acti
 
 
 def run_strategist_session(
-    model: str = "claude-opus-4-5-20251101",
+    model: str = "claude-opus-4-6",
     max_turns: int = 25,
     dry_run: bool = False,
 ) -> StrategistResult:
@@ -308,10 +314,13 @@ When you've completed your work, provide a summary of your findings and actions.
     created, updated, closed = count_actions(result.messages)
     summary = extract_final_text(result.messages) or "No summary available"
 
-    # Print summary
-    input_cost = result.input_tokens * 5 / 1_000_000
+    # Print summary (cache writes 1.25x, cache reads 0.1x, uncached 1x)
+    uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
+    input_cost = uncached_input * 5 / 1_000_000
+    cache_write_cost = result.cache_creation_input_tokens * 6.25 / 1_000_000
+    cache_read_cost = result.cache_read_input_tokens * 0.50 / 1_000_000
     output_cost = result.output_tokens * 25 / 1_000_000
-    total_cost = input_cost + output_cost
+    total_cost = input_cost + cache_write_cost + cache_read_cost + output_cost
 
     print("\n" + "=" * 60)
     print("Strategist Session Complete")
@@ -325,6 +334,9 @@ When you've completed your work, provide a summary of your findings and actions.
     print(f"  Theses closed: {closed}")
     print(f"\nToken usage:")
     print(f"  Input tokens: {result.input_tokens:,}")
+    if result.cache_read_input_tokens:
+        print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")
+        print(f"  Cache write tokens: {result.cache_creation_input_tokens:,}")
     print(f"  Output tokens: {result.output_tokens:,}")
     print(f"  Estimated cost: ${total_cost:.4f}")
     print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
@@ -349,7 +361,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run Claude strategist session")
     parser.add_argument(
         "--model",
-        default="claude-opus-4-5-20251101",
+        default="claude-opus-4-6",
         help="Claude model to use",
     )
     parser.add_argument(
