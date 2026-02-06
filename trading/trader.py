@@ -22,7 +22,7 @@ from .agent import (
     AgentResponse,
     TradingDecision,
 )
-from .db import insert_decision, get_positions, close_thesis
+from .db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch
 
 
 @dataclass
@@ -247,7 +247,7 @@ def run_trading_session(
     for decision in response.decisions:
         try:
             price = get_latest_price(decision.ticker)
-            insert_decision(
+            decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
                 action=decision.action,
@@ -261,6 +261,18 @@ def run_trading_session(
         except Exception as e:
             errors.append(f"Failed to log decision for {decision.ticker}: {e}")
             print(f"  Error logging {decision.ticker}: {e}")
+            continue
+
+        # Log signal-decision links for attribution
+        if decision.signal_refs:
+            try:
+                signal_links = [
+                    (decision_id, ref["type"], ref["id"])
+                    for ref in decision.signal_refs
+                ]
+                insert_decision_signals_batch(signal_links)
+            except Exception as e:
+                errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
 
     print(f"  Logged {len(response.decisions)} decisions")
 

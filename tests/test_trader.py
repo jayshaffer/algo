@@ -113,6 +113,7 @@ def _patch_all():
         "latest_price": patch("trading.trader.get_latest_price", return_value=Decimal("150")),
         "get_positions": patch("trading.trader.get_positions", return_value=[]),
         "insert_decision": patch("trading.trader.insert_decision", return_value=1),
+        "insert_signals_batch": patch("trading.trader.insert_decision_signals_batch", return_value=0),
         "close_thesis": patch("trading.trader.close_thesis", return_value=True),
         "format_log": patch("trading.trader.format_decisions_for_logging", return_value={"market_summary": "ok"}),
         "calc_size": patch("trading.trader.calculate_position_size", return_value=10),
@@ -139,6 +140,7 @@ class TestRunTradingSession:
              patches["latest_price"] as m_price, \
              patches["get_positions"] as m_pos, \
              patches["insert_decision"] as m_insert, \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -170,6 +172,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -197,6 +200,7 @@ class TestRunTradingSession:
              patches["latest_price"] as m_price, \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -225,6 +229,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -254,6 +259,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -281,6 +287,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -309,6 +316,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -336,6 +344,7 @@ class TestRunTradingSession:
              patches["latest_price"] as m_price, \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -365,6 +374,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"] as m_close, \
              patches["format_log"], \
              patches["calc_size"]:
@@ -398,6 +408,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"] as m_close, \
              patches["format_log"], \
              patches["calc_size"]:
@@ -428,6 +439,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -457,6 +469,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -484,6 +497,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -519,6 +533,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -545,6 +560,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -571,6 +587,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -598,6 +615,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"] as m_insert, \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -624,6 +642,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"] as m_insert, \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -650,6 +669,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -677,6 +697,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -705,6 +726,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"] as m_close, \
              patches["format_log"], \
              patches["calc_size"]:
@@ -736,6 +758,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"] as m_close, \
              patches["format_log"], \
              patches["calc_size"]:
@@ -769,6 +792,7 @@ class TestRunTradingSession:
              patches["latest_price"], \
              patches["get_positions"], \
              patches["insert_decision"], \
+             patches["insert_signals_batch"], \
              patches["close_thesis"], \
              patches["format_log"], \
              patches["calc_size"]:
@@ -779,3 +803,126 @@ class TestRunTradingSession:
             result = run_trading_session(dry_run=True)
 
             assert isinstance(result.timestamp, datetime)
+
+    def test_logs_decision_signal_links(self):
+        """After logging a decision, signal_refs should be inserted into decision_signals."""
+        patches = _patch_all()
+        with patches["sync_positions"], \
+             patches["sync_orders"], \
+             patches["get_account"], \
+             patches["snapshot"], \
+             patches["build_ctx"], \
+             patches["get_decisions"] as m_dec, \
+             patches["validate"], \
+             patches["execute"], \
+             patches["latest_price"], \
+             patches["get_positions"], \
+             patches["insert_decision"] as m_insert, \
+             patches["insert_signals_batch"] as m_signals, \
+             patches["close_thesis"], \
+             patches["format_log"], \
+             patches["calc_size"]:
+
+            refs = [
+                {"type": "news_signal", "id": 15},
+                {"type": "thesis", "id": 42},
+            ]
+            buy = make_trading_decision(
+                action="buy", ticker="AAPL", quantity=10, signal_refs=refs
+            )
+            m_dec.return_value = make_agent_response(decisions=[buy])
+            m_insert.return_value = 77  # decision_id
+
+            run_trading_session(dry_run=True)
+
+            m_signals.assert_called_once_with([
+                (77, "news_signal", 15),
+                (77, "thesis", 42),
+            ])
+
+    def test_signal_links_not_called_when_no_refs(self):
+        """When signal_refs is empty, insert_decision_signals_batch should not be called."""
+        patches = _patch_all()
+        with patches["sync_positions"], \
+             patches["sync_orders"], \
+             patches["get_account"], \
+             patches["snapshot"], \
+             patches["build_ctx"], \
+             patches["get_decisions"] as m_dec, \
+             patches["validate"], \
+             patches["execute"], \
+             patches["latest_price"], \
+             patches["get_positions"], \
+             patches["insert_decision"], \
+             patches["insert_signals_batch"] as m_signals, \
+             patches["close_thesis"], \
+             patches["format_log"], \
+             patches["calc_size"]:
+
+            buy = make_trading_decision(action="buy", ticker="AAPL", quantity=10)
+            m_dec.return_value = make_agent_response(decisions=[buy])
+
+            run_trading_session(dry_run=True)
+
+            m_signals.assert_not_called()
+
+    def test_signal_links_error_captured(self):
+        """Error inserting signal links should be captured, not crash."""
+        patches = _patch_all()
+        with patches["sync_positions"], \
+             patches["sync_orders"], \
+             patches["get_account"], \
+             patches["snapshot"], \
+             patches["build_ctx"], \
+             patches["get_decisions"] as m_dec, \
+             patches["validate"], \
+             patches["execute"], \
+             patches["latest_price"], \
+             patches["get_positions"], \
+             patches["insert_decision"], \
+             patches["insert_signals_batch"] as m_signals, \
+             patches["close_thesis"], \
+             patches["format_log"], \
+             patches["calc_size"]:
+
+            refs = [{"type": "news_signal", "id": 15}]
+            buy = make_trading_decision(
+                action="buy", ticker="AAPL", quantity=10, signal_refs=refs
+            )
+            m_dec.return_value = make_agent_response(decisions=[buy])
+            m_signals.side_effect = Exception("DB error on signals")
+
+            result = run_trading_session(dry_run=True)
+
+            assert any("Failed to log signal links" in e for e in result.errors)
+
+    def test_signal_links_skipped_when_insert_decision_fails(self):
+        """When insert_decision fails, signal links should not be attempted."""
+        patches = _patch_all()
+        with patches["sync_positions"], \
+             patches["sync_orders"], \
+             patches["get_account"], \
+             patches["snapshot"], \
+             patches["build_ctx"], \
+             patches["get_decisions"] as m_dec, \
+             patches["validate"], \
+             patches["execute"], \
+             patches["latest_price"], \
+             patches["get_positions"], \
+             patches["insert_decision"] as m_insert, \
+             patches["insert_signals_batch"] as m_signals, \
+             patches["close_thesis"], \
+             patches["format_log"], \
+             patches["calc_size"]:
+
+            refs = [{"type": "news_signal", "id": 15}]
+            buy = make_trading_decision(
+                action="buy", ticker="AAPL", quantity=10, signal_refs=refs
+            )
+            m_dec.return_value = make_agent_response(decisions=[buy])
+            m_insert.side_effect = Exception("DB write error")
+
+            result = run_trading_session(dry_run=True)
+
+            # insert_decision failed, so signal links should NOT be attempted
+            m_signals.assert_not_called()

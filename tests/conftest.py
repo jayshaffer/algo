@@ -159,6 +159,7 @@ def make_trading_decision(**kwargs):
         "reasoning": "Strong earnings beat",
         "confidence": "high",
         "thesis_id": None,
+        "signal_refs": [],
     }
     defaults.update(kwargs)
     return TradingDecision(**defaults)
