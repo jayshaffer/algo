@@ -1,19 +1,22 @@
 """Tool definitions and implementations for Claude ideation agent."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
+from .attribution import get_attribution_summary
 from .market_data import get_market_snapshot, format_market_snapshot
 from .context import get_portfolio_context, get_macro_context
 from .executor import get_account_info
 from .db import (
     get_active_theses,
     get_news_signals,
+    get_recent_decisions,
     insert_thesis,
     update_thesis,
     close_thesis,
     get_positions,
+    upsert_playbook,
 )
 
 logger = logging.getLogger(__name__)
@@ -177,6 +180,55 @@ def tool_get_macro_context(days: int = 7) -> str:
     """Get macro economic context."""
     logger.info(f"Getting macro context (last {days} days)")
     return get_macro_context(days=days)
+
+
+def tool_get_signal_attribution() -> str:
+    """Get signal attribution scores."""
+    logger.info("Getting signal attribution")
+    return get_attribution_summary()
+
+
+def tool_get_decision_history(days: int = 30) -> str:
+    """Get recent decisions with outcomes."""
+    logger.info(f"Getting decision history ({days} days)")
+    decisions = get_recent_decisions(days=days)
+
+    if not decisions:
+        return f"No decisions in the last {days} days."
+
+    lines = []
+    for d in decisions:
+        outcome_7d = f"{d['outcome_7d']:+.2f}%" if d.get("outcome_7d") is not None else "pending"
+        outcome_30d = f"{d['outcome_30d']:+.2f}%" if d.get("outcome_30d") is not None else "pending"
+        lines.append(
+            f"- [{d['date']}] {d['action'].upper()} {d['ticker']}: "
+            f"7d={outcome_7d}, 30d={outcome_30d} — {d['reasoning'][:80]}"
+        )
+
+    return "\n".join(lines)
+
+
+def tool_write_playbook(
+    market_outlook: str,
+    priority_actions: list,
+    watch_list: list,
+    risk_notes: str,
+) -> str:
+    """Write tomorrow's playbook to the database."""
+    logger.info("Writing playbook")
+    try:
+        tomorrow = date.today() + timedelta(days=1)
+        playbook_id = upsert_playbook(
+            playbook_date=tomorrow,
+            market_outlook=market_outlook,
+            priority_actions=priority_actions,
+            watch_list=watch_list,
+            risk_notes=risk_notes,
+        )
+        return f"Playbook written for {tomorrow} (ID: {playbook_id})"
+    except Exception as e:
+        logger.exception("Failed to write playbook")
+        return f"Error writing playbook: {e}"
 
 
 # --- Tool Definitions for Claude ---
@@ -358,6 +410,74 @@ TOOL_DEFINITIONS = [
             "required": [],
         },
     },
+    {
+        "name": "get_signal_attribution",
+        "description": (
+            "Get signal attribution scores showing which signal types "
+            "(news categories, macro categories, theses) have been "
+            "historically predictive based on decision outcomes."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_decision_history",
+        "description": (
+            "Get recent trading decisions with their outcomes (7d and 30d P&L). "
+            "Use this to review what trades were made and how they performed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Look back period in days (default: 30)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "write_playbook",
+        "description": (
+            "Write tomorrow's trading playbook. This is the primary output of "
+            "the strategist session — it tells the executor what to do."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "market_outlook": {
+                    "type": "string",
+                    "description": "Brief market outlook for tomorrow",
+                },
+                "priority_actions": {
+                    "type": "array",
+                    "description": "Ordered list of priority trades",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ticker": {"type": "string"},
+                            "action": {"type": "string", "enum": ["buy", "sell"]},
+                            "thesis_id": {"type": "integer"},
+                            "reasoning": {"type": "string"},
+                            "max_quantity": {"type": "integer"},
+                            "confidence": {"type": "number"},
+                        },
+                        "required": ["ticker", "action", "reasoning", "confidence"],
+                    },
+                },
+                "watch_list": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tickers to monitor for signals",
+                },
+                "risk_notes": {
+                    "type": "string",
+                    "description": "Risk factors and warnings",
+                },
+            },
+            "required": ["market_outlook", "priority_actions", "watch_list", "risk_notes"],
+        },
+    },
 ]
 
 
@@ -370,4 +490,7 @@ TOOL_HANDLERS = {
     "close_thesis": tool_close_thesis,
     "get_news_signals": tool_get_news_signals,
     "get_macro_context": tool_get_macro_context,
+    "get_signal_attribution": tool_get_signal_attribution,
+    "get_decision_history": tool_get_decision_history,
+    "write_playbook": tool_write_playbook,
 }

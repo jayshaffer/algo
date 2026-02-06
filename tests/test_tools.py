@@ -16,10 +16,19 @@ from trading.tools import (
     tool_update_thesis,
     tool_close_thesis,
     tool_get_macro_context,
+    tool_get_signal_attribution,
+    tool_get_decision_history,
+    tool_write_playbook,
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
 )
-from tests.conftest import make_thesis_row, make_position_row, make_news_signal_row
+from tests.conftest import (
+    make_thesis_row,
+    make_position_row,
+    make_news_signal_row,
+    make_attribution_row,
+    make_decision_row,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +120,9 @@ class TestToolDefinitions:
             "update_thesis",
             "close_thesis",
             "get_macro_context",
+            "get_signal_attribution",
+            "get_decision_history",
+            "write_playbook",
         }
         assert expected.issubset(names)
 
@@ -483,3 +495,68 @@ class TestToolHandlerMapping:
 
     def test_get_macro_context_handler(self):
         assert TOOL_HANDLERS["get_macro_context"] is tool_get_macro_context
+
+    def test_get_signal_attribution_handler(self):
+        assert TOOL_HANDLERS["get_signal_attribution"] is tool_get_signal_attribution
+
+    def test_get_decision_history_handler(self):
+        assert TOOL_HANDLERS["get_decision_history"] is tool_get_decision_history
+
+    def test_write_playbook_handler(self):
+        assert TOOL_HANDLERS["write_playbook"] is tool_write_playbook
+
+
+# ---------------------------------------------------------------------------
+# New strategist tools
+# ---------------------------------------------------------------------------
+
+class TestNewStrategistTools:
+
+    @patch("trading.tools.get_attribution_summary")
+    def test_get_signal_attribution_tool(self, mock_attr):
+        """Should return attribution summary."""
+        mock_attr.return_value = "Signal Attribution:\n- news:earnings — 20 samples, 7d avg +1.50%, win rate 62%"
+        result = tool_get_signal_attribution()
+        assert "earnings" in result or "Attribution" in result
+        mock_attr.assert_called_once()
+
+    @patch("trading.tools.get_recent_decisions")
+    def test_get_decision_history_tool(self, mock_decisions):
+        """Should format recent decisions with outcomes."""
+        mock_decisions.return_value = [make_decision_row()]
+        result = tool_get_decision_history(days=30)
+        assert "AAPL" in result
+        assert "BUY" in result
+        mock_decisions.assert_called_once_with(days=30)
+
+    @patch("trading.tools.get_recent_decisions")
+    def test_get_decision_history_empty(self, mock_decisions):
+        """Should return message when no decisions."""
+        mock_decisions.return_value = []
+        result = tool_get_decision_history(days=30)
+        assert "No decisions" in result
+
+    @patch("trading.tools.upsert_playbook", return_value=42)
+    def test_write_playbook_tool(self, mock_upsert):
+        """Should write playbook and return confirmation."""
+        result = tool_write_playbook(
+            market_outlook="Bullish tech",
+            priority_actions=[{"ticker": "NVDA", "action": "buy", "reasoning": "test", "confidence": 0.8}],
+            watch_list=["AAPL"],
+            risk_notes="Watch Fed",
+        )
+        assert "Playbook written" in result
+        mock_upsert.assert_called_once()
+
+    def test_tool_definitions_include_new_tools(self):
+        """TOOL_DEFINITIONS should include the 3 new tools."""
+        names = [t.get("name") for t in TOOL_DEFINITIONS if isinstance(t, dict) and "name" in t]
+        assert "get_signal_attribution" in names
+        assert "get_decision_history" in names
+        assert "write_playbook" in names
+
+    def test_tool_handlers_include_new_tools(self):
+        """TOOL_HANDLERS should include the 3 new handlers."""
+        assert "get_signal_attribution" in TOOL_HANDLERS
+        assert "get_decision_history" in TOOL_HANDLERS
+        assert "write_playbook" in TOOL_HANDLERS
