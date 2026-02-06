@@ -13,7 +13,9 @@ from .db import (
     get_recent_decisions,
     get_account_snapshots,
     get_active_theses,
+    get_playbook,
 )
+from .attribution import get_attribution_summary
 
 
 def get_portfolio_context(account_info: dict) -> str:
@@ -317,22 +319,80 @@ def get_theses_context() -> str:
     return "\n".join(lines)
 
 
-def build_trading_context(account_info: dict) -> str:
+def get_playbook_context(playbook_date: date) -> str:
+    """
+    Build playbook context section for the executor.
+
+    Args:
+        playbook_date: Date to fetch playbook for
+
+    Returns:
+        Formatted playbook context string
+    """
+    playbook = get_playbook(playbook_date)
+
+    if not playbook:
+        return (
+            "Today's Playbook:\n"
+            "- No playbook available. Operate in conservative mode: hold all positions, no new trades."
+        )
+
+    lines = ["Today's Playbook:"]
+
+    if playbook.get("market_outlook"):
+        lines.append(f"Market Outlook: {playbook['market_outlook']}")
+
+    actions = playbook.get("priority_actions") or []
+    if actions:
+        lines.append("")
+        lines.append("Priority Actions:")
+        for action in actions:
+            ticker = action.get("ticker", "?")
+            act = action.get("action", "?").upper()
+            reasoning = action.get("reasoning", "")
+            confidence = action.get("confidence", "?")
+            max_qty = action.get("max_quantity", "?")
+            thesis_id = action.get("thesis_id")
+            thesis_note = f" (thesis #{thesis_id})" if thesis_id else ""
+            lines.append(f"- {act} {ticker}: {reasoning} [confidence: {confidence}, max qty: {max_qty}]{thesis_note}")
+
+    watch = playbook.get("watch_list") or []
+    if watch:
+        lines.append(f"\nWatch List: {', '.join(watch)}")
+
+    if playbook.get("risk_notes"):
+        lines.append(f"\nRisk Notes: {playbook['risk_notes']}")
+
+    return "\n".join(lines)
+
+
+def get_attribution_context() -> str:
+    """Build attribution context section."""
+    return get_attribution_summary()
+
+
+def build_trading_context(account_info: dict, playbook_date: date = None) -> str:
     """
     Build complete compressed context for trading agent.
 
     Args:
         account_info: Dict with cash, portfolio_value, buying_power from Alpaca
+        playbook_date: Date for playbook lookup (defaults to today)
 
     Returns:
         Complete formatted context string
     """
+    if playbook_date is None:
+        playbook_date = date.today()
+
     sections = [
+        get_playbook_context(playbook_date),
+        "",
         get_portfolio_context(account_info),
         "",
-        get_macro_context(days=7),
-        "",
         get_theses_context(),
+        "",
+        get_macro_context(days=7),
         "",
         get_ticker_signals_context(days=1),
         "",
@@ -340,7 +400,7 @@ def build_trading_context(account_info: dict) -> str:
         "",
         get_decision_outcomes_context(days=30),
         "",
-        get_strategy_context(),
+        get_attribution_context(),
     ]
 
     return "\n".join(sections)

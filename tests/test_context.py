@@ -14,6 +14,8 @@ from trading.context import (
     get_decision_outcomes_context,
     get_strategy_context,
     get_theses_context,
+    get_playbook_context,
+    get_attribution_context,
     build_trading_context,
 )
 from tests.conftest import (
@@ -22,6 +24,8 @@ from tests.conftest import (
     make_decision_row,
     make_news_signal_row,
     make_macro_signal_row,
+    make_playbook_row,
+    make_attribution_row,
 )
 
 
@@ -362,6 +366,118 @@ class TestGetStrategyContext:
 
 
 # ---------------------------------------------------------------------------
+# get_playbook_context
+# ---------------------------------------------------------------------------
+
+
+class TestPlaybookContext:
+    @patch("trading.context.get_playbook")
+    def test_with_playbook(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row()
+        result = get_playbook_context(date.today())
+        assert "Playbook" in result
+        assert "NVDA" in result
+
+    @patch("trading.context.get_playbook")
+    def test_without_playbook(self, mock_get_playbook):
+        mock_get_playbook.return_value = None
+        result = get_playbook_context(date.today())
+        assert "No playbook" in result
+
+    @patch("trading.context.get_playbook")
+    def test_conservative_fallback_message(self, mock_get_playbook):
+        mock_get_playbook.return_value = None
+        result = get_playbook_context(date.today())
+        assert "conservative" in result.lower()
+
+    @patch("trading.context.get_playbook")
+    def test_market_outlook(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row()
+        result = get_playbook_context(date.today())
+        assert "Market Outlook:" in result
+        assert "Bullish on tech" in result
+
+    @patch("trading.context.get_playbook")
+    def test_priority_actions_formatting(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row()
+        result = get_playbook_context(date.today())
+        assert "Priority Actions:" in result
+        assert "BUY NVDA" in result
+        assert "confidence: 0.8" in result
+        assert "max qty: 5" in result
+        assert "thesis #1" in result
+
+    @patch("trading.context.get_playbook")
+    def test_watch_list(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row()
+        result = get_playbook_context(date.today())
+        assert "Watch List:" in result
+        assert "AAPL" in result
+        assert "MSFT" in result
+        assert "GOOGL" in result
+
+    @patch("trading.context.get_playbook")
+    def test_risk_notes(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row()
+        result = get_playbook_context(date.today())
+        assert "Risk Notes:" in result
+        assert "Fed meeting tomorrow" in result
+
+    @patch("trading.context.get_playbook")
+    def test_no_priority_actions(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row(priority_actions=[])
+        result = get_playbook_context(date.today())
+        assert "Priority Actions:" not in result
+
+    @patch("trading.context.get_playbook")
+    def test_no_watch_list(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row(watch_list=[])
+        result = get_playbook_context(date.today())
+        assert "Watch List:" not in result
+
+    @patch("trading.context.get_playbook")
+    def test_action_without_thesis_id(self, mock_get_playbook):
+        mock_get_playbook.return_value = make_playbook_row(
+            priority_actions=[
+                {"ticker": "AAPL", "action": "sell", "reasoning": "Take profits", "max_quantity": 10, "confidence": 0.7}
+            ]
+        )
+        result = get_playbook_context(date.today())
+        assert "SELL AAPL" in result
+        assert "thesis #" not in result
+
+
+# ---------------------------------------------------------------------------
+# get_attribution_context
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionContext:
+    @patch("trading.context.get_attribution_summary")
+    def test_with_data(self, mock_summary):
+        mock_summary.return_value = (
+            "Signal Attribution:\n"
+            "Predictive signal types:\n"
+            "  - news:earnings: 62% win rate, +1.50% avg 7d return (n=20)"
+        )
+        result = get_attribution_context()
+        assert "Attribution" in result
+
+    @patch("trading.context.get_attribution_summary")
+    def test_without_data(self, mock_summary):
+        mock_summary.return_value = "Signal Attribution:\n- No attribution data yet"
+        result = get_attribution_context()
+        assert "No attribution" in result
+
+    @patch("trading.context.get_attribution_summary")
+    def test_delegates_to_attribution_summary(self, mock_summary):
+        mock_summary.return_value = "test result"
+        result = get_attribution_context()
+        assert result == "test result"
+        mock_summary.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # get_theses_context
 # ---------------------------------------------------------------------------
 
@@ -434,56 +550,93 @@ class TestGetThesesContext:
 
 
 class TestBuildTradingContext:
-    @patch("trading.context.get_strategy_context", return_value="Current Strategy:\nDefault")
+    @patch("trading.context.get_attribution_context", return_value="Signal Attribution:\n- test")
     @patch("trading.context.get_decision_outcomes_context", return_value="Recent Decision Outcomes:\n- None")
     @patch("trading.context.get_signal_trend_context", return_value="7-Day Signal Trend:\n- None")
     @patch("trading.context.get_ticker_signals_context", return_value="Today's Signals:\n- None")
-    @patch("trading.context.get_theses_context", return_value="Active Theses:\n- None")
     @patch("trading.context.get_macro_context", return_value="Macro Context:\n- None")
+    @patch("trading.context.get_theses_context", return_value="Active Theses:\n- None")
     @patch("trading.context.get_portfolio_context", return_value="Current Portfolio:\n- None")
+    @patch("trading.context.get_playbook_context", return_value="Today's Playbook:\n- Test playbook")
     def test_combines_all_sections(
-        self, mock_port, mock_macro, mock_theses, mock_ticker,
-        mock_trend, mock_outcomes, mock_strategy
+        self, mock_playbook, mock_port, mock_theses, mock_macro,
+        mock_ticker, mock_trend, mock_outcomes, mock_attribution
     ):
         account = {"cash": Decimal("100000"), "buying_power": Decimal("200000")}
         result = build_trading_context(account)
 
+        assert "Playbook" in result
         assert "Current Portfolio:" in result
         assert "Macro Context:" in result
         assert "Active Theses:" in result
         assert "Today's Signals:" in result
         assert "7-Day Signal Trend:" in result
         assert "Recent Decision Outcomes:" in result
-        assert "Current Strategy:" in result
+        assert "Attribution" in result
 
-    @patch("trading.context.get_strategy_context", return_value="Strategy: test")
+    @patch("trading.context.get_attribution_context", return_value="Attribution: test")
     @patch("trading.context.get_decision_outcomes_context", return_value="Outcomes: test")
     @patch("trading.context.get_signal_trend_context", return_value="Trend: test")
     @patch("trading.context.get_ticker_signals_context", return_value="Signals: test")
-    @patch("trading.context.get_theses_context", return_value="Theses: test")
     @patch("trading.context.get_macro_context", return_value="Macro: test")
+    @patch("trading.context.get_theses_context", return_value="Theses: test")
     @patch("trading.context.get_portfolio_context", return_value="Portfolio: test")
+    @patch("trading.context.get_playbook_context", return_value="Playbook: test")
     def test_passes_account_info_to_portfolio(
-        self, mock_port, mock_macro, mock_theses, mock_ticker,
-        mock_trend, mock_outcomes, mock_strategy
+        self, mock_playbook, mock_port, mock_theses, mock_macro,
+        mock_ticker, mock_trend, mock_outcomes, mock_attribution
     ):
         account = {"cash": Decimal("50000"), "buying_power": Decimal("100000")}
         build_trading_context(account)
         mock_port.assert_called_once_with(account)
 
-    @patch("trading.context.get_strategy_context", return_value="Strategy")
+    @patch("trading.context.get_attribution_context", return_value="Attribution")
     @patch("trading.context.get_decision_outcomes_context", return_value="Outcomes")
     @patch("trading.context.get_signal_trend_context", return_value="Trend")
     @patch("trading.context.get_ticker_signals_context", return_value="Signals")
-    @patch("trading.context.get_theses_context", return_value="Theses")
     @patch("trading.context.get_macro_context", return_value="Macro")
+    @patch("trading.context.get_theses_context", return_value="Theses")
     @patch("trading.context.get_portfolio_context", return_value="Portfolio")
+    @patch("trading.context.get_playbook_context", return_value="Playbook")
     def test_sections_separated_by_blank_lines(
-        self, mock_port, mock_macro, mock_theses, mock_ticker,
-        mock_trend, mock_outcomes, mock_strategy
+        self, mock_playbook, mock_port, mock_theses, mock_macro,
+        mock_ticker, mock_trend, mock_outcomes, mock_attribution
     ):
         account = {"cash": Decimal("50000"), "buying_power": Decimal("100000")}
         result = build_trading_context(account)
 
         # Sections separated by empty lines create "\n\n" sequences
         assert "\n\n" in result
+
+    @patch("trading.context.get_attribution_context", return_value="Attribution: test")
+    @patch("trading.context.get_decision_outcomes_context", return_value="Outcomes: test")
+    @patch("trading.context.get_signal_trend_context", return_value="Trend: test")
+    @patch("trading.context.get_ticker_signals_context", return_value="Signals: test")
+    @patch("trading.context.get_macro_context", return_value="Macro: test")
+    @patch("trading.context.get_theses_context", return_value="Theses: test")
+    @patch("trading.context.get_portfolio_context", return_value="Portfolio: test")
+    @patch("trading.context.get_playbook_context", return_value="Playbook: test")
+    def test_passes_playbook_date(
+        self, mock_playbook, mock_port, mock_theses, mock_macro,
+        mock_ticker, mock_trend, mock_outcomes, mock_attribution
+    ):
+        account = {"cash": Decimal("50000"), "buying_power": Decimal("100000")}
+        target_date = date(2025, 6, 15)
+        build_trading_context(account, playbook_date=target_date)
+        mock_playbook.assert_called_once_with(target_date)
+
+    @patch("trading.context.get_attribution_context", return_value="Attribution: test")
+    @patch("trading.context.get_decision_outcomes_context", return_value="Outcomes: test")
+    @patch("trading.context.get_signal_trend_context", return_value="Trend: test")
+    @patch("trading.context.get_ticker_signals_context", return_value="Signals: test")
+    @patch("trading.context.get_macro_context", return_value="Macro: test")
+    @patch("trading.context.get_theses_context", return_value="Theses: test")
+    @patch("trading.context.get_portfolio_context", return_value="Portfolio: test")
+    @patch("trading.context.get_playbook_context", return_value="Playbook: test")
+    def test_defaults_playbook_date_to_today(
+        self, mock_playbook, mock_port, mock_theses, mock_macro,
+        mock_ticker, mock_trend, mock_outcomes, mock_attribution
+    ):
+        account = {"cash": Decimal("50000"), "buying_power": Decimal("100000")}
+        build_trading_context(account)
+        mock_playbook.assert_called_once_with(date.today())
