@@ -243,45 +243,6 @@ def get_decision_outcomes_context(days: int = 30) -> str:
     return "\n".join(lines)
 
 
-def get_strategy_context() -> str:
-    """
-    Build current strategy section.
-
-    Returns:
-        Formatted strategy context string
-    """
-    from .db import get_cursor
-
-    with get_cursor() as cur:
-        cur.execute("""
-            SELECT * FROM strategy
-            ORDER BY date DESC
-            LIMIT 1
-        """)
-        strategy = cur.fetchone()
-
-    if not strategy:
-        return "Current Strategy:\nNo strategy defined. Default: conservative, broad market focus."
-
-    lines = ["Current Strategy:"]
-
-    if strategy.get("description"):
-        lines.append(strategy["description"])
-
-    if strategy.get("risk_tolerance"):
-        lines.append(f"Risk tolerance: {strategy['risk_tolerance']}")
-
-    if strategy.get("focus_sectors"):
-        sectors = ", ".join(strategy["focus_sectors"])
-        lines.append(f"Focus sectors: {sectors}")
-
-    if strategy.get("watchlist"):
-        tickers = ", ".join(strategy["watchlist"])
-        lines.append(f"Watchlist: {tickers}")
-
-    return "\n".join(lines)
-
-
 def get_theses_context() -> str:
     """
     Build active theses section for trading context.

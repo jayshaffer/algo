@@ -12,7 +12,6 @@ from trading.context import (
     get_ticker_signals_context,
     get_signal_trend_context,
     get_decision_outcomes_context,
-    get_strategy_context,
     get_theses_context,
     get_playbook_context,
     get_attribution_context,
@@ -307,62 +306,6 @@ class TestGetDecisionOutcomesContext:
         # Should only show 5 lines with outcomes
         outcome_lines = [line for line in result.split("\n") if "(7d)" in line]
         assert len(outcome_lines) == 5
-
-
-# ---------------------------------------------------------------------------
-# get_strategy_context
-# ---------------------------------------------------------------------------
-
-
-class TestGetStrategyContext:
-    @patch("trading.db.get_cursor")
-    def test_no_strategy(self, mock_get_cursor):
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = None
-        mock_get_cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
-        mock_get_cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-        result = get_strategy_context()
-        assert "No strategy defined" in result
-        assert "conservative" in result
-
-    @patch("trading.db.get_cursor")
-    def test_with_strategy(self, mock_get_cursor):
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = {
-            "description": "Aggressive growth strategy",
-            "risk_tolerance": "high",
-            "focus_sectors": ["tech", "healthcare"],
-            "watchlist": ["AAPL", "MSFT", "AMZN"],
-        }
-        mock_get_cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
-        mock_get_cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-        result = get_strategy_context()
-
-        assert "Current Strategy:" in result
-        assert "Aggressive growth strategy" in result
-        assert "high" in result
-        assert "tech" in result
-        assert "AAPL" in result
-
-    @patch("trading.db.get_cursor")
-    def test_strategy_with_partial_fields(self, mock_get_cursor):
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = {
-            "description": "Balanced approach",
-            "risk_tolerance": None,
-            "focus_sectors": None,
-            "watchlist": None,
-        }
-        mock_get_cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
-        mock_get_cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-        result = get_strategy_context()
-
-        assert "Balanced approach" in result
-        assert "Focus sectors" not in result
-        assert "Watchlist" not in result
 
 
 # ---------------------------------------------------------------------------

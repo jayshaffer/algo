@@ -9,7 +9,6 @@ from trading.learn import (
     LearningResult,
     run_learning_loop,
 )
-from trading.strategy import StrategyRecommendation
 
 
 # ---------------------------------------------------------------------------
@@ -27,16 +26,14 @@ def _make_backfill_result(total_filled=5):
     }
 
 
-def _make_strategy():
-    """Create a mock StrategyRecommendation."""
-    return StrategyRecommendation(
-        watchlist=["AAPL", "MSFT"],
-        avoid_list=["BAD1"],
-        risk_tolerance="moderate",
-        focus_sectors=["tech"],
-        description="Test strategy",
-        reasoning=["reason1", "reason2"],
-    )
+def _make_attribution_results(count=3):
+    """Create mock attribution results."""
+    return [
+        {"category": f"news_signal:cat{i}", "sample_size": 10 - i,
+         "avg_outcome_7d": 1.5, "avg_outcome_30d": 3.0,
+         "win_rate_7d": 0.6, "win_rate_30d": 0.55}
+        for i in range(count)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -48,36 +45,35 @@ class TestLearningResult:
 
     def test_can_construct_with_all_fields(self):
         ts = datetime(2025, 1, 15, 10, 0, 0)
-        strategy = _make_strategy()
         result = LearningResult(
             timestamp=ts,
             outcomes_backfilled=5,
+            attribution_computed=3,
             pattern_report="test report",
-            strategy=strategy,
             errors=[],
         )
         assert result.timestamp == ts
         assert result.outcomes_backfilled == 5
+        assert result.attribution_computed == 3
         assert result.pattern_report == "test report"
-        assert result.strategy is strategy
         assert result.errors == []
 
-    def test_can_have_none_strategy(self):
+    def test_can_have_zero_attribution(self):
         result = LearningResult(
             timestamp=datetime.now(),
             outcomes_backfilled=0,
+            attribution_computed=0,
             pattern_report="",
-            strategy=None,
             errors=[],
         )
-        assert result.strategy is None
+        assert result.attribution_computed == 0
 
     def test_can_have_errors(self):
         result = LearningResult(
             timestamp=datetime.now(),
             outcomes_backfilled=0,
+            attribution_computed=0,
             pattern_report="",
-            strategy=None,
             errors=["Error 1", "Error 2"],
         )
         assert len(result.errors) == 2
@@ -90,66 +86,64 @@ class TestLearningResult:
 class TestRunLearningLoopFull:
     """Tests for run_learning_loop() with all steps enabled."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
     def test_full_loop_returns_learning_result(self, mock_backfill,
-                                                 mock_patterns, mock_strategy):
+                                                 mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(5)
         mock_patterns.return_value = "Pattern report content"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(3)
 
         result = run_learning_loop(analysis_days=60)
 
         assert isinstance(result, LearningResult)
         assert result.outcomes_backfilled == 5
         assert result.pattern_report == "Pattern report content"
-        assert result.strategy is not None
+        assert result.attribution_computed == 3
         assert result.errors == []
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
     def test_full_loop_calls_all_steps(self, mock_backfill,
-                                        mock_patterns, mock_strategy):
+                                        mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = ""
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         run_learning_loop(analysis_days=60, dry_run=False)
 
         mock_backfill.assert_called_once_with(dry_run=False)
         mock_patterns.assert_called_once_with(days=60)
-        mock_strategy.assert_called_once_with(days=60, dry_run=False)
+        mock_attribution.assert_called_once()
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_dry_run_passed_to_backfill_and_strategy(self, mock_backfill,
-                                                       mock_patterns, mock_strategy):
+    def test_dry_run_passed_to_backfill(self, mock_backfill,
+                                          mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = ""
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(0)
 
         run_learning_loop(analysis_days=30, dry_run=True)
 
         mock_backfill.assert_called_once_with(dry_run=True)
-        mock_strategy.assert_called_once_with(days=30, dry_run=True)
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_analysis_days_passed_to_patterns_and_strategy(self, mock_backfill,
-                                                             mock_patterns,
-                                                             mock_strategy):
+    def test_analysis_days_passed_to_patterns(self, mock_backfill,
+                                                mock_patterns,
+                                                mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = ""
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(0)
 
         run_learning_loop(analysis_days=90)
 
         mock_patterns.assert_called_once_with(days=90)
-        mock_strategy.assert_called_once_with(days=90, dry_run=False)
 
 
 # ---------------------------------------------------------------------------
@@ -159,60 +153,60 @@ class TestRunLearningLoopFull:
 class TestRunLearningLoopSkipBackfill:
     """Tests for run_learning_loop() with skip_backfill=True."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_skips_backfill_step(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_skips_backfill_step(self, mock_backfill, mock_patterns, mock_attribution):
         mock_patterns.return_value = "report"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60, skip_backfill=True)
 
         mock_backfill.assert_not_called()
         assert result.outcomes_backfilled == 0
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_still_runs_patterns_and_strategy(self, mock_backfill,
-                                                mock_patterns, mock_strategy):
+    def test_still_runs_patterns_and_attribution(self, mock_backfill,
+                                                   mock_patterns, mock_attribution):
         mock_patterns.return_value = "report"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         run_learning_loop(analysis_days=60, skip_backfill=True)
 
         mock_patterns.assert_called_once()
-        mock_strategy.assert_called_once()
+        mock_attribution.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# run_learning_loop - skip_strategy
+# run_learning_loop - skip_attribution
 # ---------------------------------------------------------------------------
 
-class TestRunLearningLoopSkipStrategy:
-    """Tests for run_learning_loop() with skip_strategy=True."""
+class TestRunLearningLoopSkipAttribution:
+    """Tests for run_learning_loop() with skip_attribution=True."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_skips_strategy_step(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_skips_attribution_step(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(3)
         mock_patterns.return_value = "report"
 
-        result = run_learning_loop(analysis_days=60, skip_strategy=True)
+        result = run_learning_loop(analysis_days=60, skip_attribution=True)
 
-        mock_strategy.assert_not_called()
-        assert result.strategy is None
+        mock_attribution.assert_not_called()
+        assert result.attribution_computed == 0
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
     def test_still_runs_backfill_and_patterns(self, mock_backfill,
-                                                mock_patterns, mock_strategy):
+                                                mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(2)
         mock_patterns.return_value = "report"
 
-        run_learning_loop(analysis_days=60, skip_strategy=True)
+        run_learning_loop(analysis_days=60, skip_attribution=True)
 
         mock_backfill.assert_called_once()
         mock_patterns.assert_called_once()
@@ -225,23 +219,23 @@ class TestRunLearningLoopSkipStrategy:
 class TestRunLearningLoopSkipBoth:
     """Tests for run_learning_loop() with both steps skipped."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_only_runs_patterns(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_only_runs_patterns(self, mock_backfill, mock_patterns, mock_attribution):
         mock_patterns.return_value = "report"
 
         result = run_learning_loop(
             analysis_days=60,
             skip_backfill=True,
-            skip_strategy=True,
+            skip_attribution=True,
         )
 
         mock_backfill.assert_not_called()
-        mock_strategy.assert_not_called()
+        mock_attribution.assert_not_called()
         mock_patterns.assert_called_once()
         assert result.outcomes_backfilled == 0
-        assert result.strategy is None
+        assert result.attribution_computed == 0
         assert result.pattern_report == "report"
 
 
@@ -252,13 +246,13 @@ class TestRunLearningLoopSkipBoth:
 class TestRunLearningLoopErrors:
     """Tests for error handling in run_learning_loop()."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_backfill_error_captured(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_backfill_error_captured(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.side_effect = Exception("DB connection failed")
         mock_patterns.return_value = "report"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60)
 
@@ -267,13 +261,13 @@ class TestRunLearningLoopErrors:
         assert "DB connection failed" in result.errors[0]
         assert result.outcomes_backfilled == 0
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_pattern_error_captured(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_pattern_error_captured(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.side_effect = Exception("SQL syntax error")
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60)
 
@@ -281,73 +275,73 @@ class TestRunLearningLoopErrors:
         assert "Pattern analysis failed" in result.errors[0]
         assert result.pattern_report == ""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_strategy_error_captured(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_attribution_error_captured(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = "report"
-        mock_strategy.side_effect = Exception("Strategy generation failed")
+        mock_attribution.side_effect = Exception("Attribution computation failed")
 
         result = run_learning_loop(analysis_days=60)
 
         assert len(result.errors) == 1
-        assert "Strategy evolution failed" in result.errors[0]
-        assert result.strategy is None
+        assert "Attribution computation failed" in result.errors[0]
+        assert result.attribution_computed == 0
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_all_steps_fail(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_all_steps_fail(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.side_effect = Exception("backfill error")
         mock_patterns.side_effect = Exception("patterns error")
-        mock_strategy.side_effect = Exception("strategy error")
+        mock_attribution.side_effect = Exception("attribution error")
 
         result = run_learning_loop(analysis_days=60)
 
         assert len(result.errors) == 3
         assert result.outcomes_backfilled == 0
         assert result.pattern_report == ""
-        assert result.strategy is None
+        assert result.attribution_computed == 0
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
     def test_backfill_error_does_not_prevent_patterns(self, mock_backfill,
-                                                        mock_patterns, mock_strategy):
+                                                        mock_patterns, mock_attribution):
         mock_backfill.side_effect = Exception("backfill error")
         mock_patterns.return_value = "patterns ok"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60)
 
         mock_patterns.assert_called_once()
         assert result.pattern_report == "patterns ok"
-        assert result.strategy is not None
+        assert result.attribution_computed == 2
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_pattern_error_does_not_prevent_strategy(self, mock_backfill,
-                                                       mock_patterns, mock_strategy):
+    def test_pattern_error_does_not_prevent_attribution(self, mock_backfill,
+                                                          mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(3)
         mock_patterns.side_effect = Exception("patterns error")
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60)
 
-        mock_strategy.assert_called_once()
-        assert result.strategy is not None
+        mock_attribution.assert_called_once()
+        assert result.attribution_computed == 2
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
     def test_skipped_backfill_error_not_recorded(self, mock_backfill,
-                                                   mock_patterns, mock_strategy):
+                                                   mock_patterns, mock_attribution):
         """Skipped steps should not produce errors even if they would fail."""
         mock_backfill.side_effect = Exception("should not be called")
         mock_patterns.return_value = "report"
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(2)
 
         result = run_learning_loop(analysis_days=60, skip_backfill=True)
 
@@ -361,13 +355,13 @@ class TestRunLearningLoopErrors:
 class TestRunLearningLoopMisc:
     """Miscellaneous tests for run_learning_loop()."""
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_result_has_timestamp(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_result_has_timestamp(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = ""
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(0)
 
         before = datetime.now()
         result = run_learning_loop(analysis_days=60)
@@ -375,32 +369,30 @@ class TestRunLearningLoopMisc:
 
         assert before <= result.timestamp <= after
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_default_parameters(self, mock_backfill, mock_patterns, mock_strategy):
+    def test_default_parameters(self, mock_backfill, mock_patterns, mock_attribution):
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = ""
-        mock_strategy.return_value = _make_strategy()
+        mock_attribution.return_value = _make_attribution_results(0)
 
         run_learning_loop()
 
         # Default analysis_days=60, dry_run=False
         mock_backfill.assert_called_once_with(dry_run=False)
         mock_patterns.assert_called_once_with(days=60)
-        mock_strategy.assert_called_once_with(days=60, dry_run=False)
+        mock_attribution.assert_called_once()
 
-    @patch("trading.learn.evolve_strategy")
+    @patch("trading.learn.compute_signal_attribution")
     @patch("trading.learn.generate_pattern_report")
     @patch("trading.learn.run_backfill")
-    def test_dry_run_with_strategy(self, mock_backfill, mock_patterns, mock_strategy):
-        """In dry_run mode, strategy object is still returned but not saved."""
+    def test_attribution_count_matches_results(self, mock_backfill, mock_patterns, mock_attribution):
+        """attribution_computed should equal the length of attribution results."""
         mock_backfill.return_value = _make_backfill_result(0)
         mock_patterns.return_value = "report"
-        strategy = _make_strategy()
-        mock_strategy.return_value = strategy
+        mock_attribution.return_value = _make_attribution_results(5)
 
-        result = run_learning_loop(analysis_days=60, dry_run=True)
+        result = run_learning_loop(analysis_days=60)
 
-        assert result.strategy is strategy
-        mock_strategy.assert_called_once_with(days=60, dry_run=True)
+        assert result.attribution_computed == 5

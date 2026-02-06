@@ -1,12 +1,12 @@
-"""Learning loop orchestrator - backfill, analyze, evolve."""
+"""Learning loop orchestrator - backfill and compute attribution."""
 
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 
 from .backfill import run_backfill
+from .attribution import compute_signal_attribution
 from .patterns import generate_pattern_report
-from .strategy import evolve_strategy, StrategyRecommendation
 
 
 @dataclass
@@ -14,8 +14,8 @@ class LearningResult:
     """Result of a learning loop run."""
     timestamp: datetime
     outcomes_backfilled: int
+    attribution_computed: int
     pattern_report: str
-    strategy: StrategyRecommendation | None
     errors: list[str]
 
 
@@ -23,20 +23,20 @@ def run_learning_loop(
     analysis_days: int = 60,
     dry_run: bool = False,
     skip_backfill: bool = False,
-    skip_strategy: bool = False,
+    skip_attribution: bool = False,
 ) -> LearningResult:
     """
     Run the complete learning loop.
 
     1. Backfill decision outcomes (7d, 30d P&L)
     2. Analyze patterns in historical data
-    3. Evolve strategy based on what's working
+    3. Compute signal attribution
 
     Args:
         analysis_days: Days of history to analyze
         dry_run: If True, don't update database
         skip_backfill: Skip the backfill step
-        skip_strategy: Skip strategy evolution
+        skip_attribution: Skip attribution computation
 
     Returns:
         LearningResult with details
@@ -45,7 +45,7 @@ def run_learning_loop(
     errors = []
     outcomes_backfilled = 0
     pattern_report = ""
-    strategy = None
+    attribution_computed = 0
 
     print("=" * 60)
     print(f"Learning Loop - {timestamp.isoformat()}")
@@ -80,18 +80,20 @@ def run_learning_loop(
         print(f"Error: {e}")
     print()
 
-    # Step 3: Evolve strategy
-    if not skip_strategy:
-        print("[Step 3] Evolving strategy...")
+    # Step 3: Compute signal attribution
+    if not skip_attribution:
+        print("[Step 3] Computing signal attribution...")
         print("-" * 40)
         try:
-            strategy = evolve_strategy(days=analysis_days, dry_run=dry_run)
+            attribution_results = compute_signal_attribution()
+            attribution_computed = len(attribution_results)
+            print(f"  Computed attribution for {attribution_computed} signal categories")
         except Exception as e:
-            errors.append(f"Strategy evolution failed: {e}")
+            errors.append(f"Attribution computation failed: {e}")
             print(f"Error: {e}")
         print()
     else:
-        print("[Step 3] Skipping strategy evolution")
+        print("[Step 3] Skipping attribution computation")
         print()
 
     # Summary
@@ -99,7 +101,7 @@ def run_learning_loop(
     print("Learning Loop Complete")
     print("=" * 60)
     print(f"  Outcomes backfilled: {outcomes_backfilled}")
-    print(f"  Strategy updated: {'Yes' if strategy and not dry_run else 'No'}")
+    print(f"  Attribution categories computed: {attribution_computed}")
     print(f"  Errors: {len(errors)}")
 
     if errors:
@@ -110,8 +112,8 @@ def run_learning_loop(
     return LearningResult(
         timestamp=timestamp,
         outcomes_backfilled=outcomes_backfilled,
+        attribution_computed=attribution_computed,
         pattern_report=pattern_report,
-        strategy=strategy,
         errors=errors,
     )
 
@@ -124,7 +126,7 @@ def main():
     parser.add_argument("--days", type=int, default=60, help="Days of history to analyze")
     parser.add_argument("--dry-run", action="store_true", help="Don't update database")
     parser.add_argument("--skip-backfill", action="store_true", help="Skip outcome backfill")
-    parser.add_argument("--skip-strategy", action="store_true", help="Skip strategy evolution")
+    parser.add_argument("--skip-attribution", action="store_true", help="Skip attribution computation")
     parser.add_argument("--patterns-only", action="store_true", help="Only run pattern analysis")
 
     args = parser.parse_args()
@@ -139,7 +141,7 @@ def main():
         analysis_days=args.days,
         dry_run=args.dry_run,
         skip_backfill=args.skip_backfill,
-        skip_strategy=args.skip_strategy,
+        skip_attribution=args.skip_attribution,
     )
 
     if result.errors:
