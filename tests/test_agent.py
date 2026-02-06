@@ -50,6 +50,31 @@ class TestTradingDecisionDataclass:
         )
         assert d.thesis_id is None
 
+    def test_decisions_include_signal_refs(self):
+        """Decisions should include signal_refs list."""
+        decision = TradingDecision(
+            action="buy",
+            ticker="NVDA",
+            quantity=5,
+            reasoning="Entry trigger hit per playbook",
+            confidence="high",
+            thesis_id=42,
+            signal_refs=[{"type": "news_signal", "id": 15}, {"type": "thesis", "id": 42}],
+        )
+        assert len(decision.signal_refs) == 2
+        assert decision.signal_refs[0]["type"] == "news_signal"
+
+    def test_signal_refs_defaults_to_empty(self):
+        """signal_refs should default to empty list."""
+        decision = TradingDecision(
+            action="hold",
+            ticker="AAPL",
+            quantity=None,
+            reasoning="No action",
+            confidence="low",
+        )
+        assert decision.signal_refs == []
+
 
 class TestThesisInvalidationDataclass:
     def test_creates_correctly(self):

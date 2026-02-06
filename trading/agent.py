@@ -18,6 +18,11 @@ class TradingDecision:
     reasoning: str
     confidence: str     # high, medium, low
     thesis_id: Optional[int] = None  # If acting on a thesis
+    signal_refs: list = None  # [{"type": "news_signal", "id": 15}, ...]
+
+    def __post_init__(self):
+        if self.signal_refs is None:
+            self.signal_refs = []
 
 
 @dataclass
@@ -36,45 +41,45 @@ class AgentResponse:
     risk_assessment: str
 
 
-TRADING_SYSTEM_PROMPT = """You are a trading agent for an automated trading system. Your job is to analyze market signals and make trading decisions.
+TRADING_SYSTEM_PROMPT = """You are executing a trading playbook prepared by a senior strategist. Your job is to translate the playbook into concrete trading decisions.
 
 You will receive:
-1. Current portfolio state (positions, cash, buying power)
-2. Macro economic context (Fed policy, trade news, etc.)
-3. Active trade theses (pre-researched trade ideas with entry/exit triggers)
-4. Ticker-specific signals (earnings, analyst ratings, etc.)
-5. 7-day signal trends
-6. Recent decision outcomes (to learn from)
-7. Current strategy guidelines
+1. Today's Playbook — priority actions, watch list, risk notes from the strategist
+2. Current portfolio state (positions, cash, buying power)
+3. Active theses with entry/exit triggers
+4. Macro economic context
+5. Overnight ticker signals
+6. Signal attribution scores (which signal types have been historically predictive)
+7. Recent decision outcomes
 
-Based on this context, decide whether to BUY, SELL, or HOLD for each relevant ticker.
+For each priority action in the playbook, decide: execute as-is, adjust quantity/timing, or skip (with reason).
+
+You may propose additional trades if overnight signals warrant it, but playbook actions come first.
 
 Rules:
 - Be conservative with position sizing (suggest 1-5% of buying power per trade)
 - Provide clear reasoning for each decision
-- Consider both signals AND macro context
-- Learn from recent decision outcomes
-- Stay within the current strategy's risk tolerance
-- If uncertain, recommend HOLD
+- Weight playbook actions heavily — they represent pre-analyzed opportunities
+- Consider signal attribution scores — give more weight to historically predictive signal types
+- If no playbook is available, operate in conservative mode: hold everything, no new positions
 - Never suggest using more than available buying power
+- If uncertain, recommend HOLD
 
-Thesis handling:
-- Review active theses and check if entry trigger conditions are met
-- You MAY act on a thesis even without today's signals if the entry trigger is satisfied
-- If you observe conditions that match a thesis's invalidation criteria, flag it for invalidation
-- When acting on a thesis, reference the thesis in your reasoning
-- Theses represent pre-researched conviction ideas - give them appropriate weight
+CRITICAL — Signal Citation:
+For EVERY decision, you MUST cite which signal IDs and/or thesis IDs informed it in the signal_refs field. This is required for the learning loop. Use the format:
+  [{"type": "news_signal", "id": <id>}, {"type": "thesis", "id": <id>}, ...]
 
-Respond with valid JSON only in this format:
+Respond with valid JSON only:
 {
     "decisions": [
         {
             "action": "buy" | "sell" | "hold",
-            "ticker": "AAPL",
-            "quantity": 10,
-            "reasoning": "Strong earnings beat with positive analyst sentiment...",
+            "ticker": "NVDA",
+            "quantity": 5,
+            "reasoning": "Playbook priority action — entry trigger hit...",
             "confidence": "high" | "medium" | "low",
-            "thesis_id": null
+            "thesis_id": 42,
+            "signal_refs": [{"type": "thesis", "id": 42}, {"type": "news_signal", "id": 15}]
         }
     ],
     "thesis_invalidations": [
@@ -83,8 +88,8 @@ Respond with valid JSON only in this format:
             "reason": "Observed condition matching invalidation criteria..."
         }
     ],
-    "market_summary": "Brief summary of current market conditions...",
-    "risk_assessment": "Current risk level and concerns..."
+    "market_summary": "Brief summary...",
+    "risk_assessment": "Current risk level..."
 }
 
 If no action is warranted, return an empty decisions array with explanation in market_summary.
@@ -160,6 +165,7 @@ def get_trading_decisions(
             reasoning=d.get("reasoning", ""),
             confidence=d.get("confidence", "low"),
             thesis_id=d.get("thesis_id"),
+            signal_refs=d.get("signal_refs", []),
         ))
 
     thesis_invalidations = []
