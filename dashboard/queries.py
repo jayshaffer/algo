@@ -180,18 +180,45 @@ def get_performance_metrics(days: int = 30):
         return None
 
 
-# --- Strategy ---
+# --- Playbook ---
 
-def get_current_strategy():
-    """Get current strategy."""
+def get_today_playbook():
+    """Get today's playbook."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT date, description, watchlist, risk_tolerance, focus_sectors
-            FROM strategy
-            ORDER BY date DESC
+            SELECT * FROM playbooks
+            WHERE date = CURRENT_DATE
+            ORDER BY created_at DESC
             LIMIT 1
         """)
         return cur.fetchone()
+
+
+# --- Signal Attribution ---
+
+def get_signal_attribution():
+    """Get signal attribution scores."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT category, sample_size, avg_outcome_7d, avg_outcome_30d,
+                   win_rate_7d, win_rate_30d, updated_at
+            FROM signal_attribution
+            ORDER BY sample_size DESC
+        """)
+        return cur.fetchall()
+
+
+# --- Decision Signals ---
+
+def get_decision_signal_refs(decision_id):
+    """Get signal refs for a decision."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT signal_type, signal_id
+            FROM decision_signals
+            WHERE decision_id = %s
+        """, (decision_id,))
+        return cur.fetchall()
 
 
 # --- Theses ---

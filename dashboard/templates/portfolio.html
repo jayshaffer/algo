@@ -60,23 +60,23 @@
     </div>
 </div>
 
-<!-- Strategy -->
-{% if strategy %}
+<!-- Today's Playbook -->
+{% if playbook %}
 <div class="bg-white rounded-lg shadow mt-6">
     <div class="p-4 border-b">
-        <h2 class="text-lg font-semibold">Current Strategy</h2>
+        <h2 class="text-lg font-semibold">Today's Playbook</h2>
     </div>
     <div class="p-4">
-        <p class="mb-2">{{ strategy.description or 'No description' }}</p>
-        <div class="flex gap-4 text-sm">
-            <span class="bg-gray-100 px-2 py-1 rounded">Risk: {{ strategy.risk_tolerance or 'Not set' }}</span>
-            {% if strategy.focus_sectors %}
-            <span class="bg-gray-100 px-2 py-1 rounded">Sectors: {{ strategy.focus_sectors|join(', ') }}</span>
-            {% endif %}
-            {% if strategy.watchlist %}
-            <span class="bg-gray-100 px-2 py-1 rounded">Watchlist: {{ strategy.watchlist|join(', ') }}</span>
-            {% endif %}
+        <p class="mb-2">{{ playbook.market_outlook or 'No outlook' }}</p>
+        {% if playbook.risk_notes %}
+        <p class="text-sm text-yellow-700 bg-yellow-50 p-2 rounded mb-2">{{ playbook.risk_notes }}</p>
+        {% endif %}
+        {% if playbook.watch_list %}
+        <div class="text-sm">
+            <span class="bg-gray-100 px-2 py-1 rounded">Watchlist: {{ playbook.watch_list|join(', ') }}</span>
         </div>
+        {% endif %}
+        <a href="/playbook" class="text-blue-600 text-sm hover:underline mt-2 inline-block">View full playbook</a>
     </div>
 </div>
 {% endif %}

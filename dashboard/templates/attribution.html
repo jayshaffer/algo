@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Attribution - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Signal Attribution</h1>
+
+{% if scores %}
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Attribution Scores by Signal Category</h2>
+    </div>
+    <div class="p-4">
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Category</th>
+                    <th class="pb-2">Sample Size</th>
+                    <th class="pb-2">Avg 7d Outcome</th>
+                    <th class="pb-2">Avg 30d Outcome</th>
+                    <th class="pb-2">Win Rate 7d</th>
+                    <th class="pb-2">Win Rate 30d</th>
+                    <th class="pb-2">Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in scores %}
+                <tr class="border-t">
+                    <td class="py-2 font-semibold">{{ row.category }}</td>
+                    <td class="py-2">{{ row.sample_size }}</td>
+                    <td class="py-2 {% if row.avg_outcome_7d and row.avg_outcome_7d|float > 0 %}text-green-600{% elif row.avg_outcome_7d and row.avg_outcome_7d|float < 0 %}text-red-600{% endif %}">
+                        {{ "%.2f%%"|format(row.avg_outcome_7d|float) if row.avg_outcome_7d is not none else '-' }}
+                    </td>
+                    <td class="py-2 {% if row.avg_outcome_30d and row.avg_outcome_30d|float > 0 %}text-green-600{% elif row.avg_outcome_30d and row.avg_outcome_30d|float < 0 %}text-red-600{% endif %}">
+                        {{ "%.2f%%"|format(row.avg_outcome_30d|float) if row.avg_outcome_30d is not none else '-' }}
+                    </td>
+                    <td class="py-2">{{ "%.0f%%"|format(row.win_rate_7d|float * 100) if row.win_rate_7d is not none else '-' }}</td>
+                    <td class="py-2">{{ "%.0f%%"|format(row.win_rate_30d|float * 100) if row.win_rate_30d is not none else '-' }}</td>
+                    <td class="py-2 text-gray-500 text-sm">{{ row.updated_at.strftime('%Y-%m-%d') if row.updated_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center">
+    <p class="text-gray-500 text-lg">No attribution data available</p>
+    <p class="text-gray-400 text-sm mt-2">Attribution scores are calculated after decisions have outcome data</p>
+</div>
+{% endif %}
+{% endblock %}

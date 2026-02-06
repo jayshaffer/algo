@@ -5,7 +5,8 @@ from flask import Flask, render_template, jsonify, request
 from queries import (
     get_positions,
     get_latest_snapshot,
-    get_current_strategy,
+    get_today_playbook,
+    get_signal_attribution,
     get_recent_ticker_signals,
     get_recent_macro_signals,
     get_signal_summary,
@@ -26,14 +27,28 @@ def portfolio():
     """Portfolio overview page."""
     positions = get_positions()
     snapshot = get_latest_snapshot()
-    strategy = get_current_strategy()
+    playbook = get_today_playbook()
 
     return render_template(
         "portfolio.html",
         positions=positions,
         snapshot=snapshot,
-        strategy=strategy,
+        playbook=playbook,
     )
+
+
+@app.route("/playbook")
+def playbook():
+    """Today's playbook view."""
+    today = get_today_playbook()
+    return render_template("playbook.html", playbook=today)
+
+
+@app.route("/attribution")
+def attribution():
+    """Signal attribution dashboard."""
+    scores = get_signal_attribution()
+    return render_template("attribution.html", scores=scores)
 
 
 @app.route("/signals")

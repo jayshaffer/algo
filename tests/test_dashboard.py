@@ -15,6 +15,8 @@ from tests.conftest import (
     make_decision_row,
     make_news_signal_row,
     make_macro_signal_row,
+    make_playbook_row,
+    make_attribution_row,
 )
 
 # Inject a mock queries module before importing dashboard.app,
@@ -42,7 +44,8 @@ def _reset_query_mocks():
     # Set safe defaults so template rendering doesn't blow up
     mock_queries.get_positions.return_value = []
     mock_queries.get_latest_snapshot.return_value = None
-    mock_queries.get_current_strategy.return_value = None
+    mock_queries.get_today_playbook.return_value = None
+    mock_queries.get_signal_attribution.return_value = []
     mock_queries.get_recent_ticker_signals.return_value = []
     mock_queries.get_recent_macro_signals.return_value = []
     mock_queries.get_signal_summary.return_value = []
@@ -106,16 +109,16 @@ class TestPortfolioPage:
         assert resp.status_code == 200
         mock_queries.get_positions.assert_called_once()
         mock_queries.get_latest_snapshot.assert_called_once()
-        mock_queries.get_current_strategy.assert_called_once()
+        mock_queries.get_today_playbook.assert_called_once()
 
     def test_portfolio_passes_data_to_template(self, client):
         positions = [make_position_row(ticker="AAPL"), make_position_row(ticker="TSLA", id=2)]
         snapshot = make_snapshot_row()
-        strategy = {"description": "Bullish bias", "watchlist": ["AAPL"]}
+        playbook = make_playbook_row()
 
         mock_queries.get_positions.return_value = positions
         mock_queries.get_latest_snapshot.return_value = snapshot
-        mock_queries.get_current_strategy.return_value = strategy
+        mock_queries.get_today_playbook.return_value = playbook
 
         resp = client.get("/")
         assert resp.status_code == 200
@@ -124,6 +127,54 @@ class TestPortfolioPage:
         mock_queries.get_latest_snapshot.return_value = None
         resp = client.get("/")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Playbook page
+# ---------------------------------------------------------------------------
+
+
+class TestPlaybookPage:
+    """Tests for GET /playbook."""
+
+    def test_playbook_renders_with_data(self, client):
+        playbook = make_playbook_row()
+        mock_queries.get_today_playbook.return_value = playbook
+
+        resp = client.get("/playbook")
+        assert resp.status_code == 200
+        mock_queries.get_today_playbook.assert_called_once()
+
+    def test_playbook_renders_empty(self, client):
+        mock_queries.get_today_playbook.return_value = None
+
+        resp = client.get("/playbook")
+        assert resp.status_code == 200
+        assert b"No playbook for today" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Attribution page
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionPage:
+    """Tests for GET /attribution."""
+
+    def test_attribution_renders_with_data(self, client):
+        scores = [make_attribution_row(), make_attribution_row(category="macro:fed", id=2)]
+        mock_queries.get_signal_attribution.return_value = scores
+
+        resp = client.get("/attribution")
+        assert resp.status_code == 200
+        mock_queries.get_signal_attribution.assert_called_once()
+
+    def test_attribution_renders_empty(self, client):
+        mock_queries.get_signal_attribution.return_value = []
+
+        resp = client.get("/attribution")
+        assert resp.status_code == 200
+        assert b"No attribution data available" in resp.data
 
 
 # ---------------------------------------------------------------------------
