@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from .backfill import run_backfill
+from .attribution import compute_signal_attribution, get_attribution_summary
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
 from .tools import TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session
 
@@ -50,6 +52,57 @@ CLAUDE_IDEATION_SYSTEM = """You are an autonomous investment research agent. You
 - Use `get_macro_context` to understand broader market environment
 
 Begin your research session now. When you've completed your analysis and thesis management, provide a brief summary of your findings and actions."""
+
+
+CLAUDE_STRATEGIST_SYSTEM = """You are the strategist for an automated trading system. You run after market close to review results, manage theses, and write tomorrow's playbook for the executor.
+
+## Your Daily Process
+
+1. **Review**: Check the portfolio state, recent decision outcomes, and signal attribution scores you've been given. Identify what's working and what isn't.
+
+2. **Thesis Management**: For each active thesis:
+   - If still valid, keep it
+   - If conditions changed, update it
+   - If invalidation criteria met, close it
+   - If aged out without action, close as expired
+
+3. **Research & New Theses**: Use web search to investigate opportunities. Create 2-4 new well-reasoned theses with specific entry/exit triggers.
+
+4. **Write Playbook**: This is your primary output. Use the `write_playbook` tool to create tomorrow's trading plan with:
+   - Market outlook
+   - Priority actions (specific trades the executor should consider)
+   - Watch list (tickers to monitor)
+   - Risk notes (warnings, upcoming events)
+
+## Tool Usage
+- Use `get_signal_attribution` to see which signal types have been historically predictive
+- Use `get_decision_history` to review recent trading performance
+- Use `web_search` to research current market conditions and companies
+- Use `get_market_snapshot` to see sector performance and movers
+- Use thesis tools to manage trade ideas
+- Use `write_playbook` to write tomorrow's plan (REQUIRED — always write a playbook)
+
+## Critical Rules
+1. **Always write a playbook** — the executor depends on it
+2. **Quality theses only** — specific entry/exit triggers, not vague ideas
+3. **Learn from attribution** — weight signal types that have been predictive
+4. **No duplicate theses** — check existing before creating"""
+
+
+@dataclass
+class StrategistResult:
+    """Result of a strategist session."""
+    timestamp: datetime
+    model: str
+    turns_used: int
+    outcomes_backfilled: int
+    attribution_computed: int
+    theses_created: int
+    theses_updated: int
+    theses_closed: int
+    final_summary: str
+    input_tokens: int
+    output_tokens: int
 
 
 @dataclass
@@ -177,43 +230,162 @@ When you've completed your research, provide a summary of your findings and acti
     )
 
 
+def run_strategist_session(
+    model: str = "claude-opus-4-5-20251101",
+    max_turns: int = 25,
+    dry_run: bool = False,
+) -> StrategistResult:
+    """
+    Run the full strategist session.
+
+    1. Backfill decision outcomes
+    2. Compute signal attribution
+    3. Run Claude agentic loop (thesis management + playbook generation)
+
+    Args:
+        model: Claude model to use
+        max_turns: Maximum conversation turns
+        dry_run: If True, skip backfill DB writes
+
+    Returns:
+        StrategistResult with session details
+    """
+    timestamp = datetime.now()
+    print(f"[{timestamp.isoformat()}] Starting strategist session")
+    print(f"  Model: {model}")
+    print(f"  Max turns: {max_turns}")
+
+    # Step 1: Backfill outcomes
+    print("\n[Step 1] Backfilling decision outcomes...")
+    try:
+        backfill_result = run_backfill(dry_run=dry_run)
+        outcomes_backfilled = backfill_result["total_filled"]
+    except Exception as e:
+        print(f"  Backfill error (continuing): {e}")
+        outcomes_backfilled = 0
+
+    # Step 2: Compute signal attribution
+    print("\n[Step 2] Computing signal attribution...")
+    try:
+        attribution_results = compute_signal_attribution()
+        attribution_computed = len(attribution_results)
+        attribution_summary = get_attribution_summary()
+    except Exception as e:
+        print(f"  Attribution error (continuing): {e}")
+        attribution_computed = 0
+        attribution_summary = "Signal attribution unavailable."
+
+    # Step 3: Run Claude agentic loop
+    print("\n[Step 3] Running Claude strategist loop...")
+    reset_session()
+    client = get_claude_client()
+
+    initial_message = f"""Begin your strategist session. Here is the current signal attribution data:
+
+{attribution_summary}
+
+Start by:
+1. Getting the current portfolio state and active theses
+2. Reviewing recent decision history and outcomes
+3. Reviewing each active thesis and determining if updates are needed
+4. Exploring market conditions for new opportunities
+5. Creating 2-4 new theses based on your analysis
+6. Writing tomorrow's playbook using the write_playbook tool
+
+When you've completed your work, provide a summary of your findings and actions."""
+
+    result = run_agentic_loop(
+        client=client,
+        model=model,
+        system=CLAUDE_STRATEGIST_SYSTEM,
+        initial_message=initial_message,
+        tools=TOOL_DEFINITIONS,
+        tool_handlers=TOOL_HANDLERS,
+        max_turns=max_turns,
+    )
+
+    # Extract results
+    created, updated, closed = count_actions(result.messages)
+    summary = extract_final_text(result.messages) or "No summary available"
+
+    # Print summary
+    input_cost = result.input_tokens * 5 / 1_000_000
+    output_cost = result.output_tokens * 25 / 1_000_000
+    total_cost = input_cost + output_cost
+
+    print("\n" + "=" * 60)
+    print("Strategist Session Complete")
+    print("=" * 60)
+    print(f"  Outcomes backfilled: {outcomes_backfilled}")
+    print(f"  Attribution categories: {attribution_computed}")
+    print(f"  Turns used: {result.turns_used}")
+    print(f"  Stop reason: {result.stop_reason}")
+    print(f"  Theses created: {created}")
+    print(f"  Theses updated: {updated}")
+    print(f"  Theses closed: {closed}")
+    print(f"\nToken usage:")
+    print(f"  Input tokens: {result.input_tokens:,}")
+    print(f"  Output tokens: {result.output_tokens:,}")
+    print(f"  Estimated cost: ${total_cost:.4f}")
+    print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
+
+    return StrategistResult(
+        timestamp=timestamp,
+        model=model,
+        turns_used=result.turns_used,
+        outcomes_backfilled=outcomes_backfilled,
+        attribution_computed=attribution_computed,
+        theses_created=created,
+        theses_updated=updated,
+        theses_closed=closed,
+        final_summary=summary,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+    )
+
+
 def main():
-    """CLI entry point for Claude ideation."""
-    parser = argparse.ArgumentParser(description="Run Claude ideation session")
+    """CLI entry point for Claude ideation/strategist."""
+    parser = argparse.ArgumentParser(description="Run Claude strategist session")
     parser.add_argument(
         "--model",
         default="claude-opus-4-5-20251101",
-        help="Claude model to use (default: claude-opus-4-5-20251101)",
+        help="Claude model to use",
     )
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=20,
-        help="Maximum conversation turns (default: 20)",
+        default=25,
+        help="Maximum conversation turns (default: 25)",
     )
     parser.add_argument(
-        "--verbose",
-        "-v",
+        "--dry-run",
+        action="store_true",
+        help="Skip database writes for backfill",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Use legacy ideation mode (no backfill/attribution/playbook)",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging",
     )
 
     args = parser.parse_args()
 
-    # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    result = run_ideation_claude(
-        model=args.model,
-        max_turns=args.max_turns,
-    )
-
-    if result.theses_created == 0 and result.theses_updated == 0 and result.theses_closed == 0:
-        print("\nNo thesis changes made.")
+    if args.legacy:
+        run_ideation_claude(model=args.model, max_turns=args.max_turns)
+    else:
+        run_strategist_session(model=args.model, max_turns=args.max_turns, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

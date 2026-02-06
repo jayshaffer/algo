@@ -7,8 +7,10 @@ import pytest
 
 from trading.ideation_claude import (
     ClaudeIdeationResult,
+    StrategistResult,
     count_actions,
     run_ideation_claude,
+    run_strategist_session,
 )
 from trading.claude_client import AgenticLoopResult
 
@@ -372,3 +374,75 @@ class TestRunIdeationClaude:
         assert result.theses_created == 0
         assert result.theses_updated == 0
         assert result.theses_closed == 0
+
+
+# ---------------------------------------------------------------------------
+# run_strategist_session
+# ---------------------------------------------------------------------------
+
+class TestStrategistSession:
+
+    @pytest.fixture
+    def mock_strategist_deps(self):
+        """Mock all dependencies for run_strategist_session."""
+        with patch("trading.ideation_claude.run_backfill") as mock_backfill, \
+             patch("trading.ideation_claude.compute_signal_attribution") as mock_attr, \
+             patch("trading.ideation_claude.get_attribution_summary") as mock_attr_summary, \
+             patch("trading.ideation_claude.get_claude_client") as mock_client, \
+             patch("trading.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("trading.ideation_claude.reset_session"):
+            # Setup defaults
+            mock_backfill.return_value = {"total_filled": 5, "7d": {}, "30d": {}}
+            mock_attr.return_value = [{"category": "thesis", "sample_size": 10}]
+            mock_attr_summary.return_value = "Signal Attribution:\n- thesis: 62% win rate"
+            mock_loop.return_value = AgenticLoopResult(
+                messages=[],
+                turns_used=3,
+                stop_reason="end_turn",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+            yield {
+                "run_backfill": mock_backfill,
+                "compute_signal_attribution": mock_attr,
+                "get_attribution_summary": mock_attr_summary,
+                "get_claude_client": mock_client,
+                "run_agentic_loop": mock_loop,
+            }
+
+    def test_runs_backfill_first(self, mock_strategist_deps):
+        """Backfill should be called during the strategist session."""
+        run_strategist_session()
+        mock_strategist_deps["run_backfill"].assert_called_once()
+
+    def test_computes_attribution(self, mock_strategist_deps):
+        """Signal attribution should be computed during the session."""
+        run_strategist_session()
+        mock_strategist_deps["compute_signal_attribution"].assert_called_once()
+
+    def test_system_prompt_includes_strategist_role(self, mock_strategist_deps):
+        """The system prompt should reference strategist or playbook."""
+        run_strategist_session()
+        call_kwargs = mock_strategist_deps["run_agentic_loop"].call_args
+        system = call_kwargs[1]["system"] if "system" in call_kwargs[1] else call_kwargs[0][2]
+        assert "strategist" in system.lower() or "playbook" in system.lower()
+
+    def test_returns_strategist_result(self, mock_strategist_deps):
+        """Should return a StrategistResult with correct fields."""
+        result = run_strategist_session()
+        assert isinstance(result, StrategistResult)
+        assert result.outcomes_backfilled == 5
+        assert result.attribution_computed == 1
+        assert result.turns_used == 3
+
+    def test_backfill_error_doesnt_crash(self, mock_strategist_deps):
+        """If backfill raises an exception, session should continue."""
+        mock_strategist_deps["run_backfill"].side_effect = Exception("DB down")
+        result = run_strategist_session()
+        assert result.outcomes_backfilled == 0
+
+    def test_attribution_error_doesnt_crash(self, mock_strategist_deps):
+        """If attribution raises an exception, session should continue."""
+        mock_strategist_deps["compute_signal_attribution"].side_effect = Exception("fail")
+        result = run_strategist_session()
+        assert result.attribution_computed == 0
