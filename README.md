@@ -6,8 +6,8 @@ An autonomous trading system that uses local LLMs to make trading decisions, lea
 
 This system connects to Alpaca for trade execution and uses LLMs for:
 - **Trading decisions** (Claude) - analyzes market context and decides buy/sell/hold
-- **Ideation** (Qwen 2.5 14B) - generates and manages trade theses based on market data
-- **News classification** (Phi-3 Mini) - categorizes news as ticker-specific or macro signals
+- **Ideation** (Qwen3 14B) - generates and manages trade theses based on market data
+- **News classification** (Qwen3 14B) - categorizes news as ticker-specific or macro signals
 - **Relevance filtering** (Nomic Embed) - filters irrelevant news before processing
 
 Local inference runs on your GPU via Ollama. Trading decisions use Claude API.
@@ -37,7 +37,7 @@ Local inference runs on your GPU via Ollama. Trading decisions use Claude API.
 ### Data Flow
 
 ```
-News API → Filter (embeddings) → Classify (Phi-3) → Store signals
+News API → Filter (embeddings) → Classify (Qwen3) → Store signals
                                                           ↓
 Market Data → Ideation (Qwen) → Generate/review theses → Store
                                                           ↓
@@ -72,8 +72,7 @@ Cron trigger → Build context (signals + theses) → Claude decision → Execut
 
 3. **Pull required models**
    ```bash
-   docker compose exec ollama ollama pull qwen2.5:14b
-   docker compose exec ollama ollama pull phi3:mini
+   docker compose exec ollama ollama pull qwen3:14b
    docker compose exec ollama ollama pull nomic-embed-text
    ```
 
@@ -98,7 +97,7 @@ Run before market open to generate/review trade theses:
 docker compose exec trading python -m trading.ideation
 
 # Custom model
-docker compose exec trading python -m trading.ideation --model qwen2.5:32b
+docker compose exec trading python -m trading.ideation --model qwen3:32b
 ```
 
 The ideation system:
@@ -185,9 +184,9 @@ OLLAMA_URL=http://ollama:11434
 
 | Model | VRAM | Use Case |
 |-------|------|----------|
-| `qwen2.5:7b` | ~5GB | Limited VRAM (ideation) |
-| `qwen2.5:14b` | ~10GB | Recommended (ideation) |
-| `qwen2.5:32b` | ~20GB | Better reasoning (ideation) |
+| `qwen3:8b` | ~5GB | Limited VRAM (ideation) |
+| `qwen3:14b` | ~10GB | Recommended (all tasks) |
+| `qwen3:32b` | ~20GB | Better reasoning (24GB+ VRAM) |
 
 ## Database Schema
 
@@ -265,6 +264,21 @@ algo/
 5. **Strategy evolution** - Adjusts watchlist, avoid list, risk tolerance, and focus sectors
 
 The trading agent receives active theses and recent decision outcomes as part of its context, enabling it to act on pre-researched ideas and learn from past performance.
+
+## Testing
+
+```bash
+# Run unit tests (no external services needed)
+python3 -m pytest tests/
+
+# Run with coverage
+python3 -m pytest tests/ --cov=trading --cov=dashboard
+
+# Run model integration tests (requires running Ollama with qwen3:14b)
+python3 -m pytest tests/test_model_integration.py -m integration -v
+```
+
+Integration tests send real prompts to Ollama and validate that qwen3:14b returns correctly structured JSON for every prompt template (classification, trading decisions, ideation). They are skipped by default in normal test runs.
 
 ## Development
 

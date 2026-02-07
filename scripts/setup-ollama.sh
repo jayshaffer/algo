@@ -11,8 +11,8 @@ done
 echo "Ollama is ready!"
 
 echo ""
-echo "Pulling phi3:mini (news classification, ~2GB)..."
-docker compose exec ollama ollama pull phi3:mini
+echo "Pulling qwen3:14b (trading decisions + classification, ~10GB)..."
+docker compose exec ollama ollama pull qwen3:14b
 
 echo ""
 echo "Pulling nomic-embed-text (embeddings, ~270MB)..."
