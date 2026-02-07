@@ -1,4 +1,4 @@
-"""News classification using qwen2.5:14b with batch support."""
+"""News classification using qwen3:14b with batch support."""
 
 import json
 from dataclasses import dataclass
@@ -154,7 +154,7 @@ def _build_classification_result(
 
 def classify_news(headline: str, published_at: datetime) -> ClassificationResult:
     """
-    Classify a single news headline using qwen2.5:14b.
+    Classify a single news headline using qwen3:14b.
 
     Args:
         headline: News headline text
@@ -166,7 +166,7 @@ def classify_news(headline: str, published_at: datetime) -> ClassificationResult
     prompt = CLASSIFICATION_PROMPT.format(headline=headline)
 
     try:
-        result = chat_json(prompt, model="qwen2.5:14b")
+        result = chat_json(prompt, model="qwen3:14b")
     except ValueError:
         return ClassificationResult(
             news_type="noise",
@@ -230,7 +230,7 @@ def _classify_batch(
         count=len(headlines)
     )
 
-    response = chat(prompt, model="qwen2.5:14b", temperature=0.0)
+    response = chat(prompt, model="qwen3:14b", temperature=0.0)
 
     # Parse JSON array from response
     text = response.strip()
@@ -278,7 +278,7 @@ def classify_ticker_news(ticker: str, headline: str, published_at: datetime) -> 
     prompt = TICKER_CLASSIFICATION_PROMPT.format(ticker=ticker, headline=headline)
 
     try:
-        result = chat_json(prompt, model="qwen2.5:14b")
+        result = chat_json(prompt, model="qwen3:14b")
     except ValueError:
         result = {"category": "noise", "sentiment": "neutral", "confidence": "low"}
 

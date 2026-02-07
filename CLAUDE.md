@@ -11,7 +11,7 @@ Alpaca Learning Platform - an agentic trading system that uses a local LLM (Olla
 ## Project Goals
 
 - Prove whether agentic trading can find an edge
-- Local LLM (qwen2.5:14b via Ollama) makes trading decisions
+- Local LLM (qwen3:14b via Ollama) makes trading decisions
 - Daily automation after market close
 - Learning system that journals behavior and outcomes
 - Single Alpaca account with adjustable day-to-day strategy
@@ -24,12 +24,12 @@ Alpaca Learning Platform - an agentic trading system that uses a local LLM (Olla
 │                    Docker Compose Stack                      │
 ├──────────────┬──────────────┬───────────────┬───────────────┤
 │   Ollama     │  PostgreSQL  │   Trading     │   Dashboard   │
-│  (qwen2.5)   │   (pgvector) │   Agent       │   (Flask)     │
+│  (qwen3)     │   (pgvector) │   Agent       │   (Flask)     │
 │  :11434      │   :5432      │               │   :3000       │
 └──────────────┴──────────────┴───────────────┴───────────────┘
 ```
 
-- **LLM:** Ollama with qwen2.5:14b (GPU accelerated)
+- **LLM:** Ollama with qwen3:14b (GPU accelerated)
 - **Database:** PostgreSQL 16 + pgvector for RAG
 - **API:** Alpaca Trading API (read/write)
 - **Dashboard:** Flask web app on port 3000

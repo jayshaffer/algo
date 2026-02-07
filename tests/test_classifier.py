@@ -238,7 +238,7 @@ class TestClassifyNews:
 
         mock_chat_json.assert_called_once()
         call_kwargs = mock_chat_json.call_args
-        assert call_kwargs[1]["model"] == "qwen2.5:14b" or call_kwargs[0][1] == "qwen2.5:14b"
+        assert call_kwargs[1]["model"] == "qwen3:14b" or call_kwargs[0][1] == "qwen3:14b"
 
     @patch("trading.classifier.chat_json")
     def test_returns_noise_on_value_error(self, mock_chat_json):
@@ -356,7 +356,7 @@ class TestClassifyBatch:
 
         mock_chat.assert_called_once()
         _, kwargs = mock_chat.call_args
-        assert kwargs.get("model") == "qwen2.5:14b" or mock_chat.call_args[0][1] if len(mock_chat.call_args[0]) > 1 else True
+        assert kwargs.get("model") == "qwen3:14b" or mock_chat.call_args[0][1] if len(mock_chat.call_args[0]) > 1 else True
         assert kwargs.get("temperature") == 0.0
 
     @patch("trading.classifier.chat")
@@ -547,7 +547,7 @@ class TestClassifyTickerNews:
         classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
 
         _, kwargs = mock_chat_json.call_args
-        assert kwargs.get("model") == "qwen2.5:14b"
+        assert kwargs.get("model") == "qwen3:14b"
 
 
 # ---------------------------------------------------------------------------

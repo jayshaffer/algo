@@ -1,5 +1,6 @@
 """Trading agent orchestrator - daily automation entry point."""
 
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -23,6 +24,8 @@ from .agent import (
     TradingDecision,
 )
 from .db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch
+
+logger = logging.getLogger("trader")
 
 
 @dataclass
@@ -52,7 +55,7 @@ class TradingSessionResult:
 
 def run_trading_session(
     dry_run: bool = False,
-    model: str = "qwen2.5:14b"
+    model: str = "qwen3:14b"
 ) -> TradingSessionResult:
     """
     Run a complete trading session.
@@ -74,39 +77,38 @@ def run_trading_session(
     errors = []
     timestamp = datetime.now()
 
-    print(f"[{timestamp.isoformat()}] Starting trading session")
-    print(f"  Dry run: {dry_run}")
-    print(f"  Model: {model}")
+    logger.info("Starting trading session (dry_run=%s, model=%s)", dry_run, model)
 
     # Step 1: Sync positions and orders
-    print("\n[Step 1] Syncing positions and orders from Alpaca...")
+    logger.info("[Step 1] Syncing positions and orders from Alpaca")
     try:
         positions_synced = sync_positions_from_alpaca()
-        print(f"  Synced {positions_synced} positions")
+        logger.info("Synced %d positions", positions_synced)
     except Exception as e:
         errors.append(f"Position sync failed: {e}")
-        print(f"  Error: {e}")
+        logger.error("Position sync failed: %s", e)
         positions_synced = 0
 
     try:
         orders_synced = sync_orders_from_alpaca()
-        print(f"  Synced {orders_synced} open orders")
+        logger.info("Synced %d open orders", orders_synced)
     except Exception as e:
         errors.append(f"Order sync failed: {e}")
-        print(f"  Error: {e}")
+        logger.error("Order sync failed: %s", e)
         orders_synced = 0
 
     # Step 2: Take account snapshot
-    print("\n[Step 2] Taking account snapshot...")
+    logger.info("[Step 2] Taking account snapshot")
     try:
         account_info = get_account_info()
         snapshot_id = take_account_snapshot()
-        print(f"  Snapshot ID: {snapshot_id}")
-        print(f"  Portfolio value: ${float(account_info['portfolio_value']):,.2f}")
-        print(f"  Buying power: ${float(account_info['buying_power']):,.2f}")
+        logger.info("Snapshot ID: %d", snapshot_id)
+        logger.info("Portfolio value: $%s  Buying power: $%s",
+                     f"{float(account_info['portfolio_value']):,.2f}",
+                     f"{float(account_info['buying_power']):,.2f}")
     except Exception as e:
         errors.append(f"Account snapshot failed: {e}")
-        print(f"  Error: {e}")
+        logger.error("Account snapshot failed: %s", e, exc_info=True)
         return TradingSessionResult(
             timestamp=timestamp,
             account_snapshot_id=0,
@@ -121,24 +123,24 @@ def run_trading_session(
         )
 
     # Step 3: Build trading context
-    print("\n[Step 3] Building trading context...")
+    logger.info("[Step 3] Building trading context")
     try:
         context = build_trading_context(account_info)
-        print(f"  Context built ({len(context)} chars)")
+        logger.info("Context built (%d chars)", len(context))
     except Exception as e:
         errors.append(f"Context build failed: {e}")
-        print(f"  Error: {e}")
+        logger.error("Context build failed: %s", e, exc_info=True)
         context = f"Error building context: {e}"
 
     # Step 4: Get LLM decisions
-    print("\n[Step 4] Getting trading decisions from Ollama...")
+    logger.info("[Step 4] Getting trading decisions from Ollama")
     try:
         response = get_trading_decisions(context, model=model)
-        print(f"  Received {len(response.decisions)} decisions")
-        print(f"  Market summary: {response.market_summary[:100]}...")
+        logger.info("Received %d decisions", len(response.decisions))
+        logger.info("Market summary: %s...", response.market_summary[:100])
     except Exception as e:
         errors.append(f"LLM decision failed: {e}")
-        print(f"  Error: {e}")
+        logger.error("LLM decision failed: %s", e, exc_info=True)
         return TradingSessionResult(
             timestamp=timestamp,
             account_snapshot_id=snapshot_id,
@@ -153,7 +155,7 @@ def run_trading_session(
         )
 
     # Step 5: Validate and execute trades
-    print("\n[Step 5] Executing trades...")
+    logger.info("[Step 5] Executing trades")
     positions = {p["ticker"]: p["shares"] for p in get_positions()}
     buying_power = account_info["buying_power"]
 
@@ -164,14 +166,14 @@ def run_trading_session(
 
     for decision in response.decisions:
         if decision.action == "hold":
-            print(f"  {decision.ticker}: HOLD - {decision.reasoning[:50]}...")
+            logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             continue
 
         # Get current price for validation
         price = get_latest_price(decision.ticker)
         if price is None:
             errors.append(f"Could not get price for {decision.ticker}")
-            print(f"  {decision.ticker}: ERROR - Could not get price")
+            logger.error("%s: Could not get price", decision.ticker)
             trades_failed += 1
             continue
 
@@ -182,12 +184,12 @@ def run_trading_session(
 
         if not is_valid:
             errors.append(f"{decision.ticker} validation failed: {reason}")
-            print(f"  {decision.ticker}: INVALID - {reason}")
+            logger.warning("%s: INVALID - %s", decision.ticker, reason)
             trades_failed += 1
             continue
 
         # Execute trade
-        print(f"  {decision.ticker}: {decision.action.upper()} {decision.quantity} @ ~${price:.2f}")
+        logger.info("%s: %s %d @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
 
         result = execute_market_order(
             ticker=decision.ticker,
@@ -207,7 +209,7 @@ def run_trading_session(
                 total_sell_value += trade_value
 
             status = "[DRY RUN]" if dry_run else f"Order {result.order_id}"
-            print(f"    {status} - Success")
+            logger.info("  %s - Success", status)
 
             # Mark thesis as executed if trade was based on one
             if decision.thesis_id and not dry_run:
@@ -217,17 +219,17 @@ def run_trading_session(
                         status="executed",
                         reason=f"Trade executed: {decision.action} {decision.quantity} shares"
                     )
-                    print(f"    Thesis {decision.thesis_id} marked as executed")
+                    logger.info("  Thesis %d marked as executed", decision.thesis_id)
                 except Exception as e:
                     errors.append(f"Failed to update thesis {decision.thesis_id}: {e}")
         else:
             trades_failed += 1
             errors.append(f"{decision.ticker} execution failed: {result.error}")
-            print(f"    ERROR: {result.error}")
+            logger.error("  %s: execution failed: %s", decision.ticker, result.error)
 
     # Step 5b: Process thesis invalidations
     if response.thesis_invalidations:
-        print("\n[Step 5b] Processing thesis invalidations...")
+        logger.info("[Step 5b] Processing thesis invalidations")
         for inv in response.thesis_invalidations:
             try:
                 close_thesis(
@@ -235,13 +237,13 @@ def run_trading_session(
                     status="invalidated",
                     reason=inv.reason
                 )
-                print(f"  Thesis {inv.thesis_id}: INVALIDATED - {inv.reason[:50]}...")
+                logger.info("Thesis %d: INVALIDATED - %s...", inv.thesis_id, inv.reason[:50])
             except Exception as e:
                 errors.append(f"Failed to invalidate thesis {inv.thesis_id}: {e}")
-                print(f"  Error invalidating thesis {inv.thesis_id}: {e}")
+                logger.error("Error invalidating thesis %d: %s", inv.thesis_id, e)
 
     # Step 6: Log decisions
-    print("\n[Step 6] Logging decisions...")
+    logger.info("[Step 6] Logging decisions")
     signals_used = format_decisions_for_logging(response)
 
     for decision in response.decisions:
@@ -260,7 +262,7 @@ def run_trading_session(
             )
         except Exception as e:
             errors.append(f"Failed to log decision for {decision.ticker}: {e}")
-            print(f"  Error logging {decision.ticker}: {e}")
+            logger.error("Error logging %s: %s", decision.ticker, e)
             continue
 
         # Log signal-decision links for attribution
@@ -274,18 +276,17 @@ def run_trading_session(
             except Exception as e:
                 errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
 
-    print(f"  Logged {len(response.decisions)} decisions")
+    logger.info("Logged %d decisions", len(response.decisions))
 
     # Summary
-    print("\n" + "=" * 60)
-    print("Trading Session Complete")
-    print("=" * 60)
-    print(f"  Decisions: {len(response.decisions)}")
-    print(f"  Executed: {trades_executed}")
-    print(f"  Failed: {trades_failed}")
-    print(f"  Buy value: ${float(total_buy_value):,.2f}")
-    print(f"  Sell value: ${float(total_sell_value):,.2f}")
-    print(f"  Errors: {len(errors)}")
+    logger.info("=" * 60)
+    logger.info("Trading Session Complete")
+    logger.info("Decisions: %d | Executed: %d | Failed: %d",
+                len(response.decisions), trades_executed, trades_failed)
+    logger.info("Buy value: $%s | Sell value: $%s",
+                f"{float(total_buy_value):,.2f}", f"{float(total_sell_value):,.2f}")
+    if errors:
+        logger.info("Errors: %d", len(errors))
 
     return TradingSessionResult(
         timestamp=timestamp,
@@ -304,10 +305,13 @@ def run_trading_session(
 def main():
     """CLI entry point for trading agent."""
     import argparse
+    from .log_config import setup_logging
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="Run trading agent session")
     parser.add_argument("--dry-run", action="store_true", help="Don't execute real trades")
-    parser.add_argument("--model", default="qwen2.5:14b", help="Ollama model to use")
+    parser.add_argument("--model", default="qwen3:14b", help="Ollama model to use")
 
     args = parser.parse_args()
 
@@ -317,9 +321,9 @@ def main():
     )
 
     if result.errors:
-        print("\nErrors encountered:")
+        logger.error("Errors encountered:")
         for error in result.errors:
-            print(f"  - {error}")
+            logger.error("  - %s", error)
         sys.exit(1)
 
 

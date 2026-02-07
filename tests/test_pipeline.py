@@ -1,5 +1,6 @@
 """Tests for trading/pipeline.py - News pipeline orchestrator."""
 
+import logging
 from datetime import datetime
 from unittest.mock import patch, MagicMock, call
 
@@ -367,9 +368,9 @@ class TestRunPipeline:
     @patch("trading.pipeline.classify_news_batch")
     @patch("trading.pipeline.filter_by_relevance")
     @patch("trading.pipeline.fetch_broad_news")
-    def test_dry_run_prints_signals(
+    def test_dry_run_logs_signals(
         self, mock_fetch, mock_filter, mock_classify,
-        mock_insert_news, mock_insert_macro, capsys,
+        mock_insert_news, mock_insert_macro, caplog,
     ):
         news_items = [make_news_item(), make_news_item(id="2")]
         mock_fetch.return_value = news_items
@@ -382,11 +383,11 @@ class TestRunPipeline:
             _macro_result("fed"),
         ]
 
-        run_pipeline(dry_run=True)
+        with caplog.at_level(logging.INFO, logger="pipeline"):
+            run_pipeline(dry_run=True)
 
-        captured = capsys.readouterr()
-        assert "[DRY RUN]" in captured.out
-        assert "Ticker signal" in captured.out or "Macro signal" in captured.out
+        assert "[DRY RUN]" in caplog.text
+        assert "Ticker signal" in caplog.text or "Macro signal" in caplog.text
 
     @patch("trading.pipeline.insert_macro_signals_batch")
     @patch("trading.pipeline.insert_news_signals_batch")
@@ -501,7 +502,7 @@ class TestCheckDependencies:
     @patch("trading.pipeline.check_ollama_health")
     def test_returns_true_when_healthy(self, mock_health, mock_models):
         mock_health.return_value = True
-        mock_models.return_value = ["qwen2.5:14b", "nomic-embed-text"]
+        mock_models.return_value = ["qwen3:14b", "nomic-embed-text"]
 
         result = check_dependencies()
 
@@ -519,53 +520,51 @@ class TestCheckDependencies:
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
-    def test_warns_about_missing_models(self, mock_health, mock_models, capsys):
+    def test_warns_about_missing_models(self, mock_health, mock_models, caplog):
         mock_health.return_value = True
         mock_models.return_value = ["some-other-model:latest"]
 
-        result = check_dependencies()
+        with caplog.at_level(logging.WARNING, logger="pipeline"):
+            result = check_dependencies()
 
         assert result is True  # still returns True, just warns
-        captured = capsys.readouterr()
-        assert "qwen2.5:14b" in captured.out
-        assert "nomic-embed-text" in captured.out
-        assert "WARNING" in captured.out
+        assert "qwen3:14b" in caplog.text
+        assert "nomic-embed-text" in caplog.text
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
-    def test_no_warning_when_all_models_present(self, mock_health, mock_models, capsys):
+    def test_no_warning_when_all_models_present(self, mock_health, mock_models, caplog):
         mock_health.return_value = True
-        mock_models.return_value = ["qwen2.5:14b", "nomic-embed-text"]
+        mock_models.return_value = ["qwen3:14b", "nomic-embed-text"]
 
-        check_dependencies()
+        with caplog.at_level(logging.WARNING, logger="pipeline"):
+            check_dependencies()
 
-        captured = capsys.readouterr()
-        assert "WARNING" not in captured.out
+        assert "not found" not in caplog.text
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
-    def test_partial_model_match(self, mock_health, mock_models, capsys):
+    def test_partial_model_match(self, mock_health, mock_models, caplog):
         """Only one required model is available."""
         mock_health.return_value = True
-        mock_models.return_value = ["qwen2.5:14b"]
+        mock_models.return_value = ["qwen3:14b"]
 
-        check_dependencies()
+        with caplog.at_level(logging.WARNING, logger="pipeline"):
+            check_dependencies()
 
-        captured = capsys.readouterr()
-        assert "nomic-embed-text" in captured.out
-        assert "WARNING" in captured.out
+        assert "nomic-embed-text" in caplog.text
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
-    def test_empty_models_list(self, mock_health, mock_models, capsys):
+    def test_empty_models_list(self, mock_health, mock_models, caplog):
         mock_health.return_value = True
         mock_models.return_value = []
 
-        result = check_dependencies()
+        with caplog.at_level(logging.INFO, logger="pipeline"):
+            result = check_dependencies()
 
         assert result is True
-        captured = capsys.readouterr()
-        assert "0 models" in captured.out
+        assert "0 models" in caplog.text
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
@@ -573,7 +572,7 @@ class TestCheckDependencies:
         """Model names are matched with 'in' operator, so substrings work."""
         mock_health.return_value = True
         # The check uses: any(model in m for m in models)
-        mock_models.return_value = ["qwen2.5:14b-q4_0", "nomic-embed-text:latest"]
+        mock_models.return_value = ["qwen3:14b-q4_0", "nomic-embed-text:latest"]
 
         result = check_dependencies()
 

@@ -67,7 +67,7 @@ def embed_batch(texts: list[str], model: str = "nomic-embed-text") -> list[list[
 
 def chat(
     prompt: str,
-    model: str = "phi3:mini",
+    model: str = "qwen3:14b",
     system: Optional[str] = None,
     temperature: float = 0.1
 ) -> str:
@@ -76,7 +76,7 @@ def chat(
 
     Args:
         prompt: User prompt
-        model: Chat model (default: phi3:mini)
+        model: Chat model (default: qwen3:14b)
         system: Optional system prompt
         temperature: Sampling temperature (lower = more deterministic)
 
@@ -107,7 +107,7 @@ def chat(
 
 def chat_json(
     prompt: str,
-    model: str = "phi3:mini",
+    model: str = "qwen3:14b",
     system: Optional[str] = None
 ) -> dict:
     """

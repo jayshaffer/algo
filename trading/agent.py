@@ -104,14 +104,14 @@ def get_ollama_client() -> ollama.Client:
 
 def get_trading_decisions(
     context: str,
-    model: str = "qwen2.5:14b",
+    model: str = "qwen3:14b",
 ) -> AgentResponse:
     """
     Get trading decisions from local LLM via Ollama.
 
     Args:
         context: Compressed trading context string
-        model: Ollama model to use (default: qwen2.5:14b)
+        model: Ollama model to use (default: qwen3:14b)
 
     Returns:
         AgentResponse with decisions and analysis
