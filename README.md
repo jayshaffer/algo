@@ -1,25 +1,28 @@
 # Alpaca Learning Platform
 
-An autonomous trading system that uses local LLMs to make trading decisions, learns from outcomes, and evolves its strategy over time.
+An autonomous trading system that uses LLMs to research markets, generate trade theses, make trading decisions, and learn from outcomes.
 
 ## Overview
 
-This system connects to Alpaca for trade execution and uses LLMs for:
-- **Trading decisions** (Claude) - analyzes market context and decides buy/sell/hold
-- **Ideation** (Qwen3 14B) - generates and manages trade theses based on market data
-- **News classification** (Qwen3 14B) - categorizes news as ticker-specific or macro signals
-- **Relevance filtering** (Nomic Embed) - filters irrelevant news before processing
+This system connects to Alpaca for trade execution and uses two LLMs with distinct roles:
 
-Local inference runs on your GPU via Ollama. Trading decisions use Claude API.
+- **Claude Opus** (strategist) - researches markets via web search and tools, manages theses, writes a daily playbook
+- **Qwen3 14B** (executor) - makes buy/sell/hold decisions based on the playbook and market context
+- **Qwen3 14B** (classifier) - categorizes news as ticker-specific or macro signals
+- **Nomic Embed** (filter) - filters irrelevant news before classification
+
+Claude runs via API. Qwen3 and Nomic run locally on your GPU via Ollama.
 
 ## Features
 
-- **Autonomous trading** - Daily automation via cron after market close
-- **Ideation system** - LLM generates trade theses with entry/exit triggers, reviews and invalidates stale ideas
-- **Learning system** - Journals every decision with reasoning, tracks 7/30-day outcomes
-- **Strategy evolution** - Analyzes patterns and adjusts watchlist, risk tolerance, focus sectors
+- **Consolidated daily session** - Single cron job runs news pipeline, strategist, and executor
+- **Claude strategist** - Agentic loop with 11 tools including web search, thesis management, and attribution analysis
+- **Playbook system** - Strategist writes a daily plan (market outlook, priority actions, watch list) for the executor
+- **Signal attribution** - Tracks which signal types (news categories, macro events, theses) are predictive
+- **Ideation system** - Generates trade theses with entry/exit triggers, reviews and invalidates stale ideas
+- **Learning system** - Journals every decision with reasoning, backfills 7/30-day outcomes, analyzes patterns
 - **News pipeline** - Fetches, filters, and classifies market news into actionable signals
-- **Web dashboard** - Portfolio view, signals, decision history, performance charts
+- **Web dashboard** - Portfolio, playbook, signals, theses, attribution, decision history, performance charts
 - **Paper trading** - Test with Alpaca paper trading before going live
 
 ## Architecture
@@ -39,11 +42,11 @@ Local inference runs on your GPU via Ollama. Trading decisions use Claude API.
 ```
 News API → Filter (embeddings) → Classify (Qwen3) → Store signals
                                                           ↓
-Market Data → Ideation (Qwen) → Generate/review theses → Store
+Claude strategist (web search + tools) → Manage theses → Write playbook
                                                           ↓
-Cron trigger → Build context (signals + theses) → Claude decision → Execute trade → Log
+Executor (Qwen3) → Read playbook + context → Make decisions → Execute trades → Log
                                                           ↓
-                              Backfill outcomes → Pattern analysis → Evolve strategy
+                    Backfill outcomes → Signal attribution → Feed back to strategist
 ```
 
 ## Quick Start
@@ -52,7 +55,7 @@ Cron trigger → Build context (signals + theses) → Claude decision → Execut
 
 - Docker with GPU support (nvidia-container-toolkit)
 - Alpaca account (paper trading recommended)
-- Anthropic API key (for Claude)
+- Anthropic API key (for Claude strategist)
 - NVIDIA GPU with 16GB+ VRAM (RTX 5070 Ti or similar)
 
 ### Setup
@@ -81,33 +84,46 @@ Cron trigger → Build context (signals + theses) → Claude decision → Execut
    docker compose exec trading python main.py
    ```
 
-5. **Run first trading session (dry run)**
+5. **Run first session (dry run)**
    ```bash
-   docker compose exec trading python -m trading.trader --dry-run
+   docker compose exec trading python -m trading.session --dry-run
    ```
 
 ## Usage
 
-### Ideation Session
+### Consolidated Daily Session
 
-Run before market open to generate/review trade theses:
+The recommended way to run everything — processes news, runs the Claude strategist, then executes trades:
 
 ```bash
-# Generate and review theses
-docker compose exec trading python -m trading.ideation
+# Full session (news → strategist → executor)
+docker compose exec trading python -m trading.session
 
-# Custom model
-docker compose exec trading python -m trading.ideation --model qwen3:32b
+# Skip news pipeline
+docker compose exec trading python -m trading.session --skip-pipeline
+
+# Skip strategist (just news + executor)
+docker compose exec trading python -m trading.session --skip-ideation
 ```
 
-The ideation system:
-- Reviews existing active theses (keep, update, invalidate, expire)
-- Generates 3-5 new trade ideas based on market data
-- Each thesis includes entry/exit triggers and invalidation criteria
+### Claude Strategist
+
+Run the Claude-powered research and planning session independently:
+
+```bash
+# Strategist session (backfill → attribution → research → playbook)
+docker compose exec trading python -m trading.ideation_claude
+```
+
+The strategist:
+- Uses web search and market data tools to research opportunities
+- Reviews and manages active theses (create, update, close)
+- Analyzes signal attribution to understand what's been predictive
+- Writes a daily playbook with market outlook and priority actions
 
 ### Trading Session
 
-Run daily after market close (4:30 PM ET recommended):
+Run the Qwen3 executor independently:
 
 ```bash
 # Dry run (no real trades)
@@ -115,16 +131,13 @@ docker compose exec trading python -m trading.trader --dry-run
 
 # Live trading
 docker compose exec trading python -m trading.trader
-
-# Custom model
-docker compose exec trading python -m trading.trader --model claude-opus-4-20250514
 ```
 
-The trading agent:
+The executor:
+- Reads today's playbook for priorities and risk guidance
 - Receives active theses as part of context
-- May act on thesis if entry trigger conditions are met
-- Flags theses for invalidation if conditions observed
-- Marks theses as executed when traded
+- Acts on thesis entry triggers when conditions are met
+- Links decisions to motivating signals for attribution tracking
 
 ### News Pipeline
 
@@ -132,23 +145,23 @@ Fetch and classify recent news:
 
 ```bash
 # Process last 24 hours of news
-docker compose exec trading python pipeline.py
+docker compose exec trading python -m trading.pipeline
 
 # Custom options
-docker compose exec trading python pipeline.py --hours 48 --limit 100 --threshold 0.25
+docker compose exec trading python -m trading.pipeline --hours 48 --limit 100 --threshold 0.25
 ```
 
 ### Learning Loop
 
 ```bash
 # Backfill decision outcomes
-docker compose exec trading python backfill.py
+docker compose exec trading python -m trading.backfill
 
-# Analyze patterns and evolve strategy
-docker compose exec trading python strategy.py --days 60
+# Full learning loop (backfill + patterns + attribution)
+docker compose exec trading python -m trading.learn
 
-# Full learning loop
-docker compose exec trading python learn.py
+# Patterns only
+docker compose exec trading python -m trading.learn --patterns-only
 ```
 
 ### Dashboard
@@ -156,7 +169,10 @@ docker compose exec trading python learn.py
 Access at http://localhost:3000
 
 - `/` - Portfolio overview and positions
+- `/playbook` - Today's playbook from the Claude strategist
 - `/signals` - Recent ticker and macro signals
+- `/theses` - Active trade theses with filtering
+- `/attribution` - Signal attribution scores
 - `/decisions` - Trading decision history with reasoning
 - `/performance` - Equity curve and performance metrics
 
@@ -166,15 +182,17 @@ Access at http://localhost:3000
 
 ```bash
 # Alpaca API
-ALPACA_API_KEY=your_key
-ALPACA_SECRET_KEY=your_secret
+APCA_API_KEY_ID=your_key
+APCA_API_SECRET_KEY=your_secret
 ALPACA_BASE_URL=https://paper-api.alpaca.markets  # or https://api.alpaca.markets
 
-# Anthropic API (for trading decisions)
+# Anthropic API (for Claude strategist)
 ANTHROPIC_API_KEY=your_key
 
 # Database
-DATABASE_URL=postgresql://algo:algo@db:5432/trading
+POSTGRES_USER=algo
+POSTGRES_PASSWORD=algo
+POSTGRES_DB=trading
 
 # Ollama
 OLLAMA_URL=http://ollama:11434
@@ -184,8 +202,8 @@ OLLAMA_URL=http://ollama:11434
 
 | Model | VRAM | Use Case |
 |-------|------|----------|
-| `qwen3:8b` | ~5GB | Limited VRAM (ideation) |
-| `qwen3:14b` | ~10GB | Recommended (all tasks) |
+| `qwen3:8b` | ~5GB | Limited VRAM (executor/classifier) |
+| `qwen3:14b` | ~10GB | Recommended (all local tasks) |
 | `qwen3:32b` | ~20GB | Better reasoning (24GB+ VRAM) |
 
 ## Database Schema
@@ -195,30 +213,26 @@ OLLAMA_URL=http://ollama:11434
 | `news_signals` | Ticker-specific signals (earnings, analyst ratings, etc.) |
 | `macro_signals` | Economic/political signals (Fed, trade policy, etc.) |
 | `theses` | Trade ideas with entry/exit triggers and status |
+| `playbooks` | Daily trading plans from Claude strategist |
 | `positions` | Current portfolio holdings |
 | `account_snapshots` | Daily equity curve |
 | `decisions` | Trading journal with reasoning and outcomes |
-| `strategy` | Current strategy state and evolution history |
+| `decision_signals` | Links decisions to motivating signals for attribution |
+| `signal_attribution` | Precomputed scores for which signal types are predictive |
 
 ## Automation
 
-Example crontab for daily automation:
+Example crontab (`crontab -e` or `crontab /path/to/algo/crontab`):
 
 ```cron
-# Ideation (before market open)
-0 7 * * 1-5 cd /path/to/algo && docker compose exec -T trading python -m trading.ideation
+# Backfill outcomes (6 AM ET, Mon-Fri)
+0 8 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.backfill
 
-# News pipeline (every 6 hours during market hours)
-0 9,12,15 * * 1-5 cd /path/to/algo && docker compose exec -T trading python pipeline.py
+# Consolidated daily session (3 PM ET, Mon-Fri)
+0 19 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.session
 
-# Trading session (30 min after market close)
-30 16 * * 1-5 cd /path/to/algo && docker compose exec -T trading python -m trading.trader
-
-# Backfill outcomes (morning before market)
-0 6 * * 1-5 cd /path/to/algo && docker compose exec -T trading python backfill.py
-
-# Strategy evolution (weekly)
-0 7 * * 0 cd /path/to/algo && docker compose exec -T trading python strategy.py
+# Weekly learning loop (7 AM ET Sunday)
+0 7 * * 0 /path/to/algo/run-docker.sh trading python -m trading.learn --days 60
 ```
 
 ## Project Structure
@@ -226,30 +240,36 @@ Example crontab for daily automation:
 ```
 algo/
 ├── trading/
-│   ├── agent.py       # Claude integration for decisions
-│   ├── trader.py      # Trading session orchestrator
-│   ├── ideation.py    # Thesis generation and review
-│   ├── market_data.py # Market snapshot for ideation
-│   ├── context.py     # Context builder for LLM
-│   ├── executor.py    # Alpaca trade execution
-│   ├── pipeline.py    # News pipeline orchestrator
-│   ├── news.py        # News fetching
-│   ├── filter.py      # Relevance filtering
-│   ├── classifier.py  # News classification
-│   ├── backfill.py    # Outcome measurement
-│   ├── patterns.py    # Pattern analysis
-│   ├── strategy.py    # Strategy evolution
-│   ├── learn.py       # Learning loop
-│   ├── db.py          # Database operations
-│   └── ollama.py      # Ollama utilities
+│   ├── session.py        # Consolidated daily orchestrator
+│   ├── ideation_claude.py # Claude strategist (research + theses + playbook)
+│   ├── claude_client.py  # Claude API client with agentic loop
+│   ├── tools.py          # Tool definitions for Claude strategist
+│   ├── trader.py         # Trading session executor (Qwen3)
+│   ├── agent.py          # Qwen3 integration for trade decisions
+│   ├── context.py        # Context builder for executor
+│   ├── executor.py       # Alpaca trade execution
+│   ├── ideation.py       # Ollama-based thesis generation (legacy)
+│   ├── pipeline.py       # News pipeline orchestrator
+│   ├── news.py           # News fetching from Alpaca
+│   ├── filter.py         # Relevance filtering (embeddings)
+│   ├── classifier.py     # News classification (Qwen3)
+│   ├── attribution.py    # Signal attribution engine
+│   ├── backfill.py       # Outcome measurement (7d/30d P&L)
+│   ├── patterns.py       # Pattern analysis
+│   ├── learn.py          # Learning loop (backfill + patterns + attribution)
+│   ├── market_data.py    # Market snapshot for ideation
+│   ├── db.py             # Database operations
+│   ├── ollama.py         # Ollama utilities
+│   └── log_config.py     # Logging configuration
 ├── dashboard/
-│   ├── app.py         # Flask application
-│   ├── queries.py     # Dashboard queries
-│   └── templates/     # Jinja2 templates
+│   ├── app.py            # Flask application
+│   ├── queries.py        # Dashboard queries
+│   └── templates/        # Jinja2 templates
 ├── db/
 │   └── init/
 │       ├── 001_schema.sql
-│       └── 002_theses.sql
+│       ├── 002_theses.sql
+│       └── 005_redesign.sql
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -257,13 +277,13 @@ algo/
 
 ## How It Learns
 
-1. **Ideation** - LLM generates trade theses with entry/exit triggers based on market data
-2. **Journaling** - Every decision stored with full reasoning and signals used
-3. **Outcome tracking** - 7-day and 30-day P&L backfilled from price data
-4. **Pattern analysis** - Identifies which signals, sentiments, and tickers perform best
-5. **Strategy evolution** - Adjusts watchlist, avoid list, risk tolerance, and focus sectors
-
-The trading agent receives active theses and recent decision outcomes as part of its context, enabling it to act on pre-researched ideas and learn from past performance.
+1. **Research** - Claude strategist uses web search and market tools to research opportunities
+2. **Thesis management** - Creates theses with entry/exit triggers, reviews and closes stale ideas
+3. **Playbook** - Strategist writes a daily plan with priorities, watch list, and risk notes
+4. **Execution** - Qwen3 executor acts on playbook and theses, linking decisions to motivating signals
+5. **Outcome tracking** - 7-day and 30-day P&L backfilled from price data
+6. **Signal attribution** - Computes which signal categories (news types, macro events, theses) are predictive
+7. **Feedback loop** - Attribution scores are fed back to the strategist for next session
 
 ## Testing
 

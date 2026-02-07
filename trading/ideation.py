@@ -137,7 +137,7 @@ def build_ideation_context(account_info: dict) -> str:
     return "\n".join(sections)
 
 
-def run_ideation(model: str = "qwen3:14b") -> IdeationResult:
+def run_ideation(model: str = "qwen2.5:14b") -> IdeationResult:
     """
     Run an ideation session.
 
@@ -330,7 +330,7 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
 def main():
     """CLI entry point for ideation."""
     parser = argparse.ArgumentParser(description="Run ideation session")
-    parser.add_argument("--model", default="qwen3:14b", help="Ollama model to use")
+    parser.add_argument("--model", default="qwen2.5:14b", help="Ollama model to use")
 
     args = parser.parse_args()
 

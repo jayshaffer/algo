@@ -502,7 +502,7 @@ class TestCheckDependencies:
     @patch("trading.pipeline.check_ollama_health")
     def test_returns_true_when_healthy(self, mock_health, mock_models):
         mock_health.return_value = True
-        mock_models.return_value = ["qwen3:14b", "nomic-embed-text"]
+        mock_models.return_value = ["qwen2.5:14b", "nomic-embed-text"]
 
         result = check_dependencies()
 
@@ -528,14 +528,14 @@ class TestCheckDependencies:
             result = check_dependencies()
 
         assert result is True  # still returns True, just warns
-        assert "qwen3:14b" in caplog.text
+        assert "qwen2.5:14b" in caplog.text
         assert "nomic-embed-text" in caplog.text
 
     @patch("trading.pipeline.list_models")
     @patch("trading.pipeline.check_ollama_health")
     def test_no_warning_when_all_models_present(self, mock_health, mock_models, caplog):
         mock_health.return_value = True
-        mock_models.return_value = ["qwen3:14b", "nomic-embed-text"]
+        mock_models.return_value = ["qwen2.5:14b", "nomic-embed-text"]
 
         with caplog.at_level(logging.WARNING, logger="pipeline"):
             check_dependencies()
@@ -547,7 +547,7 @@ class TestCheckDependencies:
     def test_partial_model_match(self, mock_health, mock_models, caplog):
         """Only one required model is available."""
         mock_health.return_value = True
-        mock_models.return_value = ["qwen3:14b"]
+        mock_models.return_value = ["qwen2.5:14b"]
 
         with caplog.at_level(logging.WARNING, logger="pipeline"):
             check_dependencies()
@@ -572,7 +572,7 @@ class TestCheckDependencies:
         """Model names are matched with 'in' operator, so substrings work."""
         mock_health.return_value = True
         # The check uses: any(model in m for m in models)
-        mock_models.return_value = ["qwen3:14b-q4_0", "nomic-embed-text:latest"]
+        mock_models.return_value = ["qwen2.5:14b-q4_0", "nomic-embed-text:latest"]
 
         result = check_dependencies()
 

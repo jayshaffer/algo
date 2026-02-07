@@ -1,6 +1,6 @@
 """Integration tests that send real prompts to Ollama and validate responses.
 
-These tests require a running Ollama instance with qwen3:14b pulled.
+These tests require a running Ollama instance with qwen2.5:14b pulled.
 They verify the model produces correctly structured JSON for every
 prompt template used in the trading system.
 
@@ -28,7 +28,7 @@ from trading.ideation import IDEATION_SYSTEM_PROMPT
 
 logger = logging.getLogger("test_model_integration")
 
-MODEL = "qwen3:14b"
+MODEL = "qwen2.5:14b"
 
 VALID_NEWS_TYPES = {"ticker_specific", "macro_political", "sector", "noise"}
 VALID_CATEGORIES = {
@@ -49,14 +49,14 @@ def ollama_available():
         if not check_ollama_health():
             return False
         models = list_models()
-        return any("qwen3" in m for m in models)
+        return any("qwen2.5" in m for m in models)
     except Exception:
         return False
 
 
 skip_no_ollama = pytest.mark.skipif(
     not ollama_available(),
-    reason="Ollama not running or qwen3:14b not available",
+    reason="Ollama not running or qwen2.5:14b not available",
 )
 integration = pytest.mark.integration
 
@@ -90,7 +90,7 @@ def _timed_chat(prompt, *, model=MODEL, temperature=0.0):
 @integration
 @skip_no_ollama
 class TestClassificationPrompt:
-    """Verify qwen3:14b responds correctly to the single-headline classification prompt."""
+    """Verify qwen2.5:14b responds correctly to the single-headline classification prompt."""
 
     def test_ticker_specific_headline(self):
         """Earnings headline should be classified as ticker_specific."""
@@ -150,7 +150,7 @@ class TestClassificationPrompt:
 @integration
 @skip_no_ollama
 class TestTickerClassificationPrompt:
-    """Verify qwen3:14b responds correctly to the ticker-specific classification prompt."""
+    """Verify qwen2.5:14b responds correctly to the ticker-specific classification prompt."""
 
     def test_earnings_headline(self):
         """Earnings headline for known ticker should classify correctly."""
@@ -193,7 +193,7 @@ class TestTickerClassificationPrompt:
 @integration
 @skip_no_ollama
 class TestBatchClassificationPrompt:
-    """Verify qwen3:14b responds correctly to the batch classification prompt."""
+    """Verify qwen2.5:14b responds correctly to the batch classification prompt."""
 
     def test_batch_returns_correct_count(self):
         """Batch prompt with 3 headlines should return exactly 3 results."""
@@ -257,7 +257,7 @@ class TestBatchClassificationPrompt:
 @integration
 @skip_no_ollama
 class TestTradingDecisionPrompt:
-    """Verify qwen3:14b produces valid trading decision JSON."""
+    """Verify qwen2.5:14b produces valid trading decision JSON."""
 
     SAMPLE_CONTEXT = """Today's Playbook:
   Market outlook: Cautious — Fed meeting tomorrow, expect volatility
@@ -387,7 +387,7 @@ Recent Decisions: None"""
 @integration
 @skip_no_ollama
 class TestIdeationPrompt:
-    """Verify qwen3:14b produces valid ideation JSON."""
+    """Verify qwen2.5:14b produces valid ideation JSON."""
 
     SAMPLE_CONTEXT = """Portfolio:
   Cash: $50,000

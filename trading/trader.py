@@ -22,6 +22,7 @@ from .agent import (
     format_decisions_for_logging,
     AgentResponse,
     TradingDecision,
+    DEFAULT_EXECUTOR_MODEL,
 )
 from .db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch
 
@@ -55,7 +56,7 @@ class TradingSessionResult:
 
 def run_trading_session(
     dry_run: bool = False,
-    model: str = "qwen3:14b"
+    model: str = DEFAULT_EXECUTOR_MODEL,
 ) -> TradingSessionResult:
     """
     Run a complete trading session.
@@ -63,13 +64,13 @@ def run_trading_session(
     1. Sync positions from Alpaca
     2. Take account snapshot
     3. Build trading context
-    4. Get decisions from local LLM via Ollama
+    4. Get decisions from Claude Haiku
     5. Validate and execute trades
     6. Log decisions to database
 
     Args:
         dry_run: If True, don't execute real trades
-        model: Ollama model to use for decisions
+        model: Claude model to use for decisions
 
     Returns:
         TradingSessionResult with session details
@@ -133,7 +134,7 @@ def run_trading_session(
         context = f"Error building context: {e}"
 
     # Step 4: Get LLM decisions
-    logger.info("[Step 4] Getting trading decisions from Ollama")
+    logger.info("[Step 4] Getting trading decisions from Claude Haiku")
     try:
         response = get_trading_decisions(context, model=model)
         logger.info("Received %d decisions", len(response.decisions))
@@ -189,7 +190,7 @@ def run_trading_session(
             continue
 
         # Execute trade
-        logger.info("%s: %s %d @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
+        logger.info("%s: %s %.4g @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
 
         result = execute_market_order(
             ticker=decision.ticker,
@@ -200,7 +201,7 @@ def run_trading_session(
 
         if result.success:
             trades_executed += 1
-            trade_value = price * decision.quantity
+            trade_value = price * Decimal(str(decision.quantity))
 
             if decision.action == "buy":
                 total_buy_value += trade_value
@@ -311,7 +312,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run trading agent session")
     parser.add_argument("--dry-run", action="store_true", help="Don't execute real trades")
-    parser.add_argument("--model", default="qwen3:14b", help="Ollama model to use")
+    parser.add_argument("--model", default=DEFAULT_EXECUTOR_MODEL, help="Claude model to use")
 
     args = parser.parse_args()
 

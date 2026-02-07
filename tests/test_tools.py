@@ -538,7 +538,8 @@ class TestNewStrategistTools:
 
     @patch("trading.tools.upsert_playbook", return_value=42)
     def test_write_playbook_tool(self, mock_upsert):
-        """Should write playbook and return confirmation."""
+        """Should write playbook for today and return confirmation."""
+        from datetime import date
         result = tool_write_playbook(
             market_outlook="Bullish tech",
             priority_actions=[{"ticker": "NVDA", "action": "buy", "reasoning": "test", "confidence": 0.8}],
@@ -547,6 +548,8 @@ class TestNewStrategistTools:
         )
         assert "Playbook written" in result
         mock_upsert.assert_called_once()
+        call_kwargs = mock_upsert.call_args[1]
+        assert call_kwargs["playbook_date"] == date.today()
 
     def test_tool_definitions_include_new_tools(self):
         """TOOL_DEFINITIONS should include the 3 new tools."""
@@ -560,3 +563,11 @@ class TestNewStrategistTools:
         assert "get_signal_attribution" in TOOL_HANDLERS
         assert "get_decision_history" in TOOL_HANDLERS
         assert "write_playbook" in TOOL_HANDLERS
+
+    def test_playbook_max_quantity_accepts_fractional(self):
+        """write_playbook max_quantity schema should be 'number' for fractional shares."""
+        playbook_def = next(
+            d for d in TOOL_DEFINITIONS if d.get("name") == "write_playbook"
+        )
+        action_schema = playbook_def["input_schema"]["properties"]["priority_actions"]["items"]["properties"]
+        assert action_schema["max_quantity"]["type"] == "number"

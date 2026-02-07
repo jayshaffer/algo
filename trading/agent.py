@@ -1,12 +1,14 @@
-"""Local LLM integration for trading decisions via Ollama."""
+"""LLM integration for trading decisions via Claude Haiku."""
 
-import os
 import json
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-import ollama
+from .claude_client import get_claude_client, _call_with_retry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -14,7 +16,7 @@ class TradingDecision:
     """A trading decision from the LLM."""
     action: str         # buy, sell, hold
     ticker: str
-    quantity: Optional[int]
+    quantity: Optional[float]
     reasoning: str
     confidence: str     # high, medium, low
     thesis_id: Optional[int] = None  # If acting on a thesis
@@ -41,103 +43,79 @@ class AgentResponse:
     risk_assessment: str
 
 
-TRADING_SYSTEM_PROMPT = """You are executing a trading playbook prepared by a senior strategist. Your job is to translate the playbook into concrete trading decisions.
+TRADING_SYSTEM_PROMPT = """You are a trading executor. You receive a playbook and market context, and output trading decisions as JSON.
 
-You will receive:
-1. Today's Playbook — priority actions, watch list, risk notes from the strategist
-2. Current portfolio state (positions, cash, buying power)
+OUTPUT FORMAT: You must respond with a single JSON object and nothing else. No commentary, no markdown, no explanation outside the JSON.
+
+INPUTS:
+1. Today's Playbook — priority actions, watch list, risk notes
+2. Portfolio state (positions, cash, buying power)
 3. Active theses with entry/exit triggers
-4. Macro economic context
-5. Overnight ticker signals
-6. Signal attribution scores (which signal types have been historically predictive)
-7. Recent decision outcomes
+4. Macro context, overnight signals
+5. Signal attribution scores, recent decision outcomes
 
-For each priority action in the playbook, decide: execute as-is, adjust quantity/timing, or skip (with reason).
+RULES:
+- For each playbook action: execute, adjust, or skip (with reason)
+- You may add trades if overnight signals warrant, but playbook actions come first
+- Conservative sizing: 1-5% of buying power per trade
+- Never exceed available buying power
+- Fractional shares are supported — use them to size positions precisely by dollar amount
+- Example: to invest $500 in a $200 stock, use quantity 2.5
+- Prefer dollar-based sizing over round share counts
+- If no playbook is available: hold everything, no new positions
+- If uncertain: HOLD
+- Every decision MUST cite signal_refs for the learning loop
 
-You may propose additional trades if overnight signals warrant it, but playbook actions come first.
+JSON SCHEMA:
+{"decisions": [{"action": "buy|sell|hold", "ticker": "SYMBOL", "quantity": 2.5, "reasoning": "...", "confidence": "high|medium|low", "thesis_id": null, "signal_refs": [{"type": "news_signal|thesis", "id": 0}]}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
 
-Rules:
-- Be conservative with position sizing (suggest 1-5% of buying power per trade)
-- Provide clear reasoning for each decision
-- Weight playbook actions heavily — they represent pre-analyzed opportunities
-- Consider signal attribution scores — give more weight to historically predictive signal types
-- If no playbook is available, operate in conservative mode: hold everything, no new positions
-- Never suggest using more than available buying power
-- If uncertain, recommend HOLD
-
-CRITICAL — Signal Citation:
-For EVERY decision, you MUST cite which signal IDs and/or thesis IDs informed it in the signal_refs field. This is required for the learning loop. Use the format:
-  [{"type": "news_signal", "id": <id>}, {"type": "thesis", "id": <id>}, ...]
-
-Respond with valid JSON only:
-{
-    "decisions": [
-        {
-            "action": "buy" | "sell" | "hold",
-            "ticker": "NVDA",
-            "quantity": 5,
-            "reasoning": "Playbook priority action — entry trigger hit...",
-            "confidence": "high" | "medium" | "low",
-            "thesis_id": 42,
-            "signal_refs": [{"type": "thesis", "id": 42}, {"type": "news_signal", "id": 15}]
-        }
-    ],
-    "thesis_invalidations": [
-        {
-            "thesis_id": 123,
-            "reason": "Observed condition matching invalidation criteria..."
-        }
-    ],
-    "market_summary": "Brief summary...",
-    "risk_assessment": "Current risk level..."
-}
-
-If no action is warranted, return an empty decisions array with explanation in market_summary.
-If no theses need invalidation, return an empty thesis_invalidations array."""
+If no trades: empty decisions array, explain in market_summary.
+If no invalidations: empty thesis_invalidations array."""
 
 
-def get_ollama_client() -> ollama.Client:
-    """Create Ollama client from environment."""
-    host = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    return ollama.Client(host=host)
+DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
 
 
 def get_trading_decisions(
     context: str,
-    model: str = "qwen3:14b",
+    model: str = DEFAULT_EXECUTOR_MODEL,
 ) -> AgentResponse:
     """
-    Get trading decisions from local LLM via Ollama.
+    Get trading decisions from Claude Haiku.
 
     Args:
         context: Compressed trading context string
-        model: Ollama model to use (default: qwen3:14b)
+        model: Claude model to use (default: claude-haiku-4-5-20251001)
 
     Returns:
         AgentResponse with decisions and analysis
     """
-    client = get_ollama_client()
+    client = get_claude_client()
 
-    response = client.chat(
+    response = _call_with_retry(
+        client,
         model=model,
+        max_tokens=2000,
+        system=TRADING_SYSTEM_PROMPT,
         messages=[
             {
-                "role": "system",
-                "content": TRADING_SYSTEM_PROMPT,
-            },
-            {
                 "role": "user",
-                "content": f"Here is the current market context. Analyze and provide trading decisions.\n\n{context}"
+                "content": f"Here is the current market context. Analyze and provide trading decisions.\n\n{context}",
             }
         ],
-        options={
-            "temperature": 0.3,  # Lower temperature for more consistent JSON
-            "num_predict": 2000,
-        },
     )
 
     # Extract text response
-    response_text = response["message"]["content"]
+    response_text = ""
+    for block in response.content:
+        if hasattr(block, "text"):
+            response_text += block.text
+
+    logger.info(
+        "Haiku tokens — input: %d, output: %d",
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+    )
 
     # Parse JSON response
     try:
@@ -222,7 +200,7 @@ def validate_decision(
         if decision.quantity is None or decision.quantity <= 0:
             return False, "Buy requires positive quantity"
 
-        cost = current_price * decision.quantity
+        cost = current_price * Decimal(str(decision.quantity))
         if cost > buying_power:
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${buying_power:.2f}"
 
@@ -233,7 +211,7 @@ def validate_decision(
             return False, "Sell requires positive quantity"
 
         held = positions.get(decision.ticker, Decimal(0))
-        if decision.quantity > held:
+        if Decimal(str(decision.quantity)) > held:
             return False, f"Insufficient shares: want to sell {decision.quantity}, hold {held}"
 
         return True, "Sell order validated"

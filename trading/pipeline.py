@@ -98,8 +98,8 @@ def run_pipeline(
         logger.info("No items passed relevance filter")
         return stats
 
-    # Step 3: Classify with qwen3:14b (batched)
-    logger.info("[Step 3] Classifying with qwen3:14b (batched)")
+    # Step 3: Classify with qwen2.5:14b (batched)
+    logger.info("[Step 3] Classifying with qwen2.5:14b (batched)")
     total = len(filtered_items)
     ticker_signals_batch = []
     macro_signals_batch = []
@@ -169,7 +169,7 @@ def check_dependencies() -> bool:
         logger.info("Ollama: OK (%d models)", len(models))
 
         # Check for required models
-        required = ["qwen3:14b", "nomic-embed-text"]
+        required = ["qwen2.5:14b", "nomic-embed-text"]
         for model in required:
             if not any(model in m for m in models):
                 logger.warning("Model '%s' not found. Run setup-ollama.sh", model)

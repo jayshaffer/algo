@@ -6,10 +6,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trading.ideation_claude import (
+    CLAUDE_SESSION_STRATEGIST_SYSTEM,
+    CLAUDE_STRATEGIST_SYSTEM,
     ClaudeIdeationResult,
     StrategistResult,
     count_actions,
     run_ideation_claude,
+    run_strategist_loop,
     run_strategist_session,
 )
 from trading.claude_client import AgenticLoopResult
@@ -446,3 +449,104 @@ class TestStrategistSession:
         mock_strategist_deps["compute_signal_attribution"].side_effect = Exception("fail")
         result = run_strategist_session()
         assert result.attribution_computed == 0
+
+    def test_delegates_to_run_strategist_loop(self, mock_strategist_deps):
+        """run_strategist_session should delegate its loop to run_strategist_loop."""
+        with patch("trading.ideation_claude.run_strategist_loop") as mock_loop:
+            mock_loop.return_value = ClaudeIdeationResult(
+                timestamp=datetime.now(),
+                model="claude-opus-4-6",
+                turns_used=3,
+                theses_created=1,
+                theses_updated=0,
+                theses_closed=0,
+                final_summary="Done",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+            result = run_strategist_session()
+            mock_loop.assert_called_once()
+            assert result.theses_created == 1
+
+
+# ---------------------------------------------------------------------------
+# run_strategist_loop
+# ---------------------------------------------------------------------------
+
+class TestRunStrategistLoop:
+
+    @pytest.fixture
+    def mock_loop_deps(self):
+        """Mock dependencies for run_strategist_loop (no backfill/attribution)."""
+        with patch("trading.ideation_claude.get_attribution_summary") as mock_attr_summary, \
+             patch("trading.ideation_claude.get_claude_client") as mock_client, \
+             patch("trading.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("trading.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("trading.ideation_claude.reset_session"):
+            mock_attr_summary.return_value = "Signal Attribution:\n- thesis: 62% win rate"
+            mock_loop.return_value = AgenticLoopResult(
+                messages=[],
+                turns_used=3,
+                stop_reason="end_turn",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+            yield {
+                "get_attribution_summary": mock_attr_summary,
+                "get_claude_client": mock_client,
+                "run_agentic_loop": mock_loop,
+            }
+
+    def test_does_not_call_backfill(self, mock_loop_deps):
+        """run_strategist_loop should NOT call run_backfill."""
+        with patch("trading.ideation_claude.run_backfill") as mock_backfill:
+            run_strategist_loop()
+            mock_backfill.assert_not_called()
+
+    def test_does_not_call_compute_attribution(self, mock_loop_deps):
+        """run_strategist_loop should NOT call compute_signal_attribution."""
+        with patch("trading.ideation_claude.compute_signal_attribution") as mock_compute:
+            run_strategist_loop()
+            mock_compute.assert_not_called()
+
+    def test_reads_attribution_from_db(self, mock_loop_deps):
+        """Should call get_attribution_summary to read existing data."""
+        run_strategist_loop()
+        mock_loop_deps["get_attribution_summary"].assert_called_once()
+
+    def test_returns_claude_ideation_result(self, mock_loop_deps):
+        result = run_strategist_loop()
+        assert isinstance(result, ClaudeIdeationResult)
+        assert result.turns_used == 3
+
+    def test_uses_session_strategist_prompt_by_default(self, mock_loop_deps):
+        """Should use CLAUDE_SESSION_STRATEGIST_SYSTEM by default."""
+        run_strategist_loop()
+        call_kwargs = mock_loop_deps["run_agentic_loop"].call_args
+        system = call_kwargs[1].get("system") or call_kwargs.kwargs.get("system")
+        assert system == CLAUDE_SESSION_STRATEGIST_SYSTEM
+
+    def test_accepts_custom_system_prompt(self, mock_loop_deps):
+        """Should use the provided system_prompt override."""
+        run_strategist_loop(system_prompt=CLAUDE_STRATEGIST_SYSTEM)
+        call_kwargs = mock_loop_deps["run_agentic_loop"].call_args
+        system = call_kwargs[1].get("system") or call_kwargs.kwargs.get("system")
+        assert system == CLAUDE_STRATEGIST_SYSTEM
+
+    def test_forwards_model_and_max_turns(self, mock_loop_deps):
+        run_strategist_loop(model="claude-sonnet-4-20250514", max_turns=10)
+        call_kwargs = mock_loop_deps["run_agentic_loop"].call_args
+        assert call_kwargs[1]["model"] == "claude-sonnet-4-20250514"
+        assert call_kwargs[1]["max_turns"] == 10
+
+
+# ---------------------------------------------------------------------------
+# System prompt content
+# ---------------------------------------------------------------------------
+
+class TestSystemPromptContent:
+
+    def test_strategist_prompt_mentions_fractional_shares(self):
+        """Strategist system prompt should mention fractional shares."""
+        assert "fractional shares" in CLAUDE_STRATEGIST_SYSTEM.lower()
+        assert "fractional shares" in CLAUDE_SESSION_STRATEGIST_SYSTEM.lower()

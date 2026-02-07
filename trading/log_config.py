@@ -8,7 +8,7 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 # Loggers that get their own file handler
-FILE_LOGGERS = ["trader", "pipeline", "trading.ideation_claude", "trading.tools"]
+FILE_LOGGERS = ["trader", "pipeline", "session", "trading.ideation_claude", "trading.tools"]
 
 
 def setup_logging(level=logging.INFO, log_dir="logs"):
