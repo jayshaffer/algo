@@ -38,7 +38,9 @@
       "Bash(source:*)",
       "Bash(curl:*)",
       "Bash(/home/jay/dev/algo/.venv/bin/python -m pytest:*)",
-      "Bash(/home/jay/dev/algo/.venv/bin/pip list:*)"
+      "Bash(/home/jay/dev/algo/.venv/bin/pip list:*)",
+      "Bash(git -C /home/jay/dev/algo log --oneline -20)",
+      "Bash(grep:*)"
     ]
   }
 }

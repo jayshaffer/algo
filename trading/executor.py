@@ -299,7 +299,7 @@ def calculate_position_size(
     buying_power: Decimal,
     price: Decimal,
     risk_pct: float = 0.05
-) -> int:
+) -> float:
     """
     Calculate position size based on risk percentage.
 
@@ -309,8 +309,8 @@ def calculate_position_size(
         risk_pct: Percentage of buying power to risk (default 5%)
 
     Returns:
-        Number of shares to buy (whole shares only)
+        Number of shares to buy (supports fractional shares)
     """
     amount_to_risk = buying_power * Decimal(str(risk_pct))
-    shares = int(amount_to_risk / price)
-    return max(shares, 0)
+    shares = float(amount_to_risk / price)
+    return round(max(shares, 0), 4)

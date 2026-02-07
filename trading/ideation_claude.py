@@ -54,11 +54,11 @@ CLAUDE_IDEATION_SYSTEM = """You are an autonomous investment research agent. You
 Begin your research session now. When you've completed your analysis and thesis management, provide a brief summary of your findings and actions."""
 
 
-CLAUDE_STRATEGIST_SYSTEM = """You are the strategist for an automated trading system. You run after market close to review results, manage theses, and write tomorrow's playbook for the executor.
+_STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system. You run {timing} to review {review_scope}, manage theses, and write {date_ref} playbook for the executor{executor_note}.
 
 ## Your Daily Process
 
-1. **Review**: Check the portfolio state, recent decision outcomes, and signal attribution scores you've been given. Identify what's working and what isn't.
+1. **Review**: Check the portfolio state, recent decision outcomes, and signal attribution scores. Identify what's working and what isn't.
 
 2. **Thesis Management**: For each active thesis:
    - If still valid, keep it
@@ -68,7 +68,7 @@ CLAUDE_STRATEGIST_SYSTEM = """You are the strategist for an automated trading sy
 
 3. **Research & New Theses**: Use web search to investigate opportunities. Create 2-4 new well-reasoned theses with specific entry/exit triggers.
 
-4. **Write Playbook**: This is your primary output. Use the `write_playbook` tool to create tomorrow's trading plan with:
+4. **Write Playbook**: This is your primary output. Use the `write_playbook` tool to create {date_ref} trading plan with:
    - Market outlook
    - Priority actions (specific trades the executor should consider)
    - Watch list (tickers to monitor)
@@ -80,13 +80,28 @@ CLAUDE_STRATEGIST_SYSTEM = """You are the strategist for an automated trading sy
 - Use `web_search` to research current market conditions and companies
 - Use `get_market_snapshot` to see sector performance and movers
 - Use thesis tools to manage trade ideas
-- Use `write_playbook` to write tomorrow's plan (REQUIRED — always write a playbook)
+- Use `write_playbook` to write {date_ref} plan (REQUIRED — always write a playbook)
 
 ## Critical Rules
 1. **Always write a playbook** — the executor depends on it
 2. **Quality theses only** — specific entry/exit triggers, not vague ideas
 3. **Learn from attribution** — weight signal types that have been predictive
-4. **No duplicate theses** — check existing before creating"""
+4. **No duplicate theses** — check existing before creating
+5. **Fractional shares supported** — the executor can buy/sell fractional shares. Size playbook actions by dollar amount (e.g. "$500 of AMZN" → max_quantity: 2.5 at ~$200/share) rather than forcing round lots."""
+
+CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
+    timing="after market close",
+    review_scope="results",
+    date_ref="tomorrow's",
+    executor_note="",
+)
+
+CLAUDE_SESSION_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
+    timing="before market close",
+    review_scope="the portfolio",
+    date_ref="today's",
+    executor_note=" that runs immediately after you",
+)
 
 
 @dataclass
@@ -144,60 +159,53 @@ def count_actions(messages: list[dict]) -> tuple[int, int, int]:
     return created, updated, closed
 
 
-def run_ideation_claude(
-    model: str = "claude-opus-4-6",
-    max_turns: int = 20,
+def _run_claude_loop(
+    system: str,
+    initial_message: str,
+    model: str,
+    max_turns: int,
+    label: str,
 ) -> ClaudeIdeationResult:
-    """
-    Run an agentic ideation session with Claude.
+    """Run a Claude agentic loop and return a standardized result.
 
-    Unlike the Ollama version which uses a single LLM call with pre-fetched context,
-    this version lets Claude autonomously drive the research process using tools.
-
-    Args:
-        model: Claude model to use
-        max_turns: Maximum conversation turns
-
-    Returns:
-        ClaudeIdeationResult with session details
+    Shared core for both ideation and strategist modes.
     """
     timestamp = datetime.now()
-    print(f"[{timestamp.isoformat()}] Starting Claude ideation session")
-    print(f"  Model: {model}")
-    print(f"  Max turns: {max_turns}")
+    logger.info("Starting %s (model=%s, max_turns=%d)", label, model, max_turns)
 
-    # Reset session state (clears valid doc IDs from previous runs)
     reset_session()
-
-    # Get Claude client
     client = get_claude_client()
 
-    # Initial prompt to kick off the agent
-    initial_message = """Begin your research session. Start by:
-1. Getting the current portfolio state and active theses
-2. Reviewing each active thesis and determining if updates are needed
-3. Exploring market conditions for new opportunities
-4. Creating 2-4 new theses based on your analysis
-
-When you've completed your research, provide a summary of your findings and actions."""
-
-    # Run agentic loop
-    print("\n[Running agentic loop...]")
     result = run_agentic_loop(
         client=client,
         model=model,
-        system=CLAUDE_IDEATION_SYSTEM,
+        system=system,
         initial_message=initial_message,
         tools=TOOL_DEFINITIONS,
         tool_handlers=TOOL_HANDLERS,
         max_turns=max_turns,
     )
 
-    # Extract results
     created, updated, closed = count_actions(result.messages)
     summary = extract_final_text(result.messages) or "No summary available"
 
-    # Calculate cost estimate (cache writes 1.25x, cache reads 0.1x, uncached 1x)
+    _print_cost_summary(label, result, created, updated, closed, summary)
+
+    return ClaudeIdeationResult(
+        timestamp=timestamp,
+        model=model,
+        turns_used=result.turns_used,
+        theses_created=created,
+        theses_updated=updated,
+        theses_closed=closed,
+        final_summary=summary,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+    )
+
+
+def _print_cost_summary(label, result, created, updated, closed, summary):
+    """Print token usage and cost estimate for an agentic loop result."""
     uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
     input_cost = uncached_input * 5 / 1_000_000
     cache_write_cost = result.cache_creation_input_tokens * 6.25 / 1_000_000
@@ -205,9 +213,8 @@ When you've completed your research, provide a summary of your findings and acti
     output_cost = result.output_tokens * 25 / 1_000_000
     total_cost = input_cost + cache_write_cost + cache_read_cost + output_cost
 
-    # Print summary
     print("\n" + "=" * 60)
-    print("Claude Ideation Session Complete")
+    print(f"{label} Complete")
     print("=" * 60)
     print(f"  Turns used: {result.turns_used}")
     print(f"  Stop reason: {result.stop_reason}")
@@ -223,16 +230,65 @@ When you've completed your research, provide a summary of your findings and acti
     print(f"  Estimated cost: ${total_cost:.4f}")
     print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
 
-    return ClaudeIdeationResult(
-        timestamp=timestamp,
+
+def run_ideation_claude(
+    model: str = "claude-opus-4-6",
+    max_turns: int = 20,
+) -> ClaudeIdeationResult:
+    """Run an agentic ideation session with Claude.
+
+    Lets Claude autonomously drive the research process using tools.
+    """
+    initial_message = """Begin your research session. Start by:
+1. Getting the current portfolio state and active theses
+2. Reviewing each active thesis and determining if updates are needed
+3. Exploring market conditions for new opportunities
+4. Creating 2-4 new theses based on your analysis
+
+When you've completed your research, provide a summary of your findings and actions."""
+
+    return _run_claude_loop(
+        system=CLAUDE_IDEATION_SYSTEM,
+        initial_message=initial_message,
         model=model,
-        turns_used=result.turns_used,
-        theses_created=created,
-        theses_updated=updated,
-        theses_closed=closed,
-        final_summary=summary,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
+        max_turns=max_turns,
+        label="Claude Ideation Session",
+    )
+
+
+def run_strategist_loop(
+    model: str = "claude-opus-4-6",
+    max_turns: int = 25,
+    system_prompt: str = None,
+) -> ClaudeIdeationResult:
+    """Run only the Claude strategist agentic loop.
+
+    Reads existing attribution from DB via get_attribution_summary().
+    Does NOT run backfill or compute attribution — those are learning-system
+    operations handled separately.
+    """
+    attribution_summary = get_attribution_summary()
+
+    initial_message = f"""Begin your strategist session. Here is the current signal attribution data:
+
+{attribution_summary}
+
+Start by:
+1. Getting the current portfolio state and active theses
+2. Reviewing recent decision history and outcomes
+3. Reviewing each active thesis and determining if updates are needed
+4. Exploring market conditions for new opportunities
+5. Creating 2-4 new theses based on your analysis
+6. Writing today's playbook using the write_playbook tool
+
+When you've completed your work, provide a summary of your findings and actions."""
+
+    return _run_claude_loop(
+        system=system_prompt or CLAUDE_SESSION_STRATEGIST_SYSTEM,
+        initial_message=initial_message,
+        model=model,
+        max_turns=max_turns,
+        label="Strategist Loop",
     )
 
 
@@ -275,84 +331,33 @@ def run_strategist_session(
     try:
         attribution_results = compute_signal_attribution()
         attribution_computed = len(attribution_results)
-        attribution_summary = get_attribution_summary()
     except Exception as e:
         print(f"  Attribution error (continuing): {e}")
         attribution_computed = 0
-        attribution_summary = "Signal attribution unavailable."
 
-    # Step 3: Run Claude agentic loop
+    # Step 3: Run Claude agentic loop (delegates to run_strategist_loop)
     print("\n[Step 3] Running Claude strategist loop...")
-    reset_session()
-    client = get_claude_client()
-
-    initial_message = f"""Begin your strategist session. Here is the current signal attribution data:
-
-{attribution_summary}
-
-Start by:
-1. Getting the current portfolio state and active theses
-2. Reviewing recent decision history and outcomes
-3. Reviewing each active thesis and determining if updates are needed
-4. Exploring market conditions for new opportunities
-5. Creating 2-4 new theses based on your analysis
-6. Writing tomorrow's playbook using the write_playbook tool
-
-When you've completed your work, provide a summary of your findings and actions."""
-
-    result = run_agentic_loop(
-        client=client,
+    loop_result = run_strategist_loop(
         model=model,
-        system=CLAUDE_STRATEGIST_SYSTEM,
-        initial_message=initial_message,
-        tools=TOOL_DEFINITIONS,
-        tool_handlers=TOOL_HANDLERS,
         max_turns=max_turns,
+        system_prompt=CLAUDE_STRATEGIST_SYSTEM,
     )
 
-    # Extract results
-    created, updated, closed = count_actions(result.messages)
-    summary = extract_final_text(result.messages) or "No summary available"
-
-    # Print summary (cache writes 1.25x, cache reads 0.1x, uncached 1x)
-    uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
-    input_cost = uncached_input * 5 / 1_000_000
-    cache_write_cost = result.cache_creation_input_tokens * 6.25 / 1_000_000
-    cache_read_cost = result.cache_read_input_tokens * 0.50 / 1_000_000
-    output_cost = result.output_tokens * 25 / 1_000_000
-    total_cost = input_cost + cache_write_cost + cache_read_cost + output_cost
-
-    print("\n" + "=" * 60)
-    print("Strategist Session Complete")
-    print("=" * 60)
     print(f"  Outcomes backfilled: {outcomes_backfilled}")
     print(f"  Attribution categories: {attribution_computed}")
-    print(f"  Turns used: {result.turns_used}")
-    print(f"  Stop reason: {result.stop_reason}")
-    print(f"  Theses created: {created}")
-    print(f"  Theses updated: {updated}")
-    print(f"  Theses closed: {closed}")
-    print(f"\nToken usage:")
-    print(f"  Input tokens: {result.input_tokens:,}")
-    if result.cache_read_input_tokens:
-        print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")
-        print(f"  Cache write tokens: {result.cache_creation_input_tokens:,}")
-    print(f"  Output tokens: {result.output_tokens:,}")
-    print(f"  Estimated cost: ${total_cost:.4f}")
-    print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
 
     return StrategistResult(
         timestamp=timestamp,
         model=model,
-        turns_used=result.turns_used,
+        turns_used=loop_result.turns_used,
         outcomes_backfilled=outcomes_backfilled,
         attribution_computed=attribution_computed,
-        theses_created=created,
-        theses_updated=updated,
-        theses_closed=closed,
-        final_summary=summary,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
+        theses_created=loop_result.theses_created,
+        theses_updated=loop_result.theses_updated,
+        theses_closed=loop_result.theses_closed,
+        final_summary=loop_result.final_summary,
+        input_tokens=loop_result.input_tokens,
+        output_tokens=loop_result.output_tokens,
     )
 
 

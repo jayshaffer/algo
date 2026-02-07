@@ -10,7 +10,6 @@ from trading.agent import (
     TradingDecision,
     ThesisInvalidation,
     AgentResponse,
-    get_ollama_client,
     get_trading_decisions,
     format_decisions_for_logging,
     validate_decision,
@@ -100,32 +99,30 @@ class TestAgentResponseDataclass:
 
 
 # ---------------------------------------------------------------------------
-# get_ollama_client
-# ---------------------------------------------------------------------------
-
-
-class TestGetOllamaClient:
-    def test_uses_env_variable(self, monkeypatch):
-        monkeypatch.setenv("OLLAMA_URL", "http://custom:9999")
-        with patch("trading.agent.ollama.Client") as mock_client:
-            get_ollama_client()
-            mock_client.assert_called_once_with(host="http://custom:9999")
-
-    def test_defaults_to_localhost(self, monkeypatch):
-        monkeypatch.delenv("OLLAMA_URL", raising=False)
-        with patch("trading.agent.ollama.Client") as mock_client:
-            get_ollama_client()
-            mock_client.assert_called_once_with(host="http://localhost:11434")
-
-
-# ---------------------------------------------------------------------------
 # get_trading_decisions
 # ---------------------------------------------------------------------------
 
 
-def _make_ollama_chat_response(data: dict) -> dict:
-    """Helper to build a mock ollama chat response."""
-    return {"message": {"content": json.dumps(data)}}
+def _make_claude_response(data: dict, wrap=None):
+    """Helper to build a mock Claude messages response."""
+    text = json.dumps(data)
+    if wrap == "json":
+        text = "```json\n" + text + "\n```"
+    elif wrap == "generic":
+        text = "```\n" + text + "\n```"
+
+    text_block = MagicMock()
+    text_block.text = text
+    text_block.type = "text"
+
+    usage = MagicMock()
+    usage.input_tokens = 100
+    usage.output_tokens = 50
+
+    response = MagicMock()
+    response.content = [text_block]
+    response.usage = usage
+    return response
 
 
 def _sample_llm_data(
@@ -156,12 +153,11 @@ def _sample_llm_data(
 
 
 class TestGetTradingDecisions:
-    @patch("trading.agent.get_ollama_client")
-    def test_parses_valid_json_response(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_parses_valid_json_response(self, mock_get_client, mock_retry):
         data = _sample_llm_data()
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
         resp = get_trading_decisions("some context")
 
@@ -173,76 +169,76 @@ class TestGetTradingDecisions:
         assert resp.market_summary == "All good"
         assert resp.risk_assessment == "Low risk"
 
-    @patch("trading.agent.get_ollama_client")
-    def test_parses_json_wrapped_in_markdown_code_block(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_parses_json_wrapped_in_markdown_code_block(self, mock_get_client, mock_retry):
         data = _sample_llm_data()
-        raw = "```json\n" + json.dumps(data) + "\n```"
-        mock_client = MagicMock()
-        mock_client.chat.return_value = {"message": {"content": raw}}
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data, wrap="json")
 
         resp = get_trading_decisions("ctx")
         assert len(resp.decisions) == 1
         assert resp.decisions[0].ticker == "AAPL"
 
-    @patch("trading.agent.get_ollama_client")
-    def test_parses_json_wrapped_in_generic_code_block(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_parses_json_wrapped_in_generic_code_block(self, mock_get_client, mock_retry):
         data = _sample_llm_data()
-        raw = "```\n" + json.dumps(data) + "\n```"
-        mock_client = MagicMock()
-        mock_client.chat.return_value = {"message": {"content": raw}}
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data, wrap="generic")
 
         resp = get_trading_decisions("ctx")
         assert len(resp.decisions) == 1
 
-    @patch("trading.agent.get_ollama_client")
-    def test_raises_valueerror_on_invalid_json(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_client.chat.return_value = {"message": {"content": "not json at all"}}
-        mock_get_client.return_value = mock_client
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_raises_valueerror_on_invalid_json(self, mock_get_client, mock_retry):
+        text_block = MagicMock()
+        text_block.text = "not json at all"
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 50
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+        mock_retry.return_value = response
 
         with pytest.raises(ValueError, match="Failed to parse LLM response"):
             get_trading_decisions("ctx")
 
-    @patch("trading.agent.get_ollama_client")
-    def test_empty_decisions_array(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_empty_decisions_array(self, mock_get_client, mock_retry):
         data = _sample_llm_data(decisions=[])
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
         resp = get_trading_decisions("ctx")
         assert resp.decisions == []
         assert resp.market_summary == "All good"
 
-    @patch("trading.agent.get_ollama_client")
-    def test_thesis_invalidations_parsed(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_thesis_invalidations_parsed(self, mock_get_client, mock_retry):
         data = _sample_llm_data(
             thesis_invalidations=[
                 {"thesis_id": 42, "reason": "Revenue dropped"},
                 {"thesis_id": 99, "reason": "Market shifted"},
             ]
         )
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
         resp = get_trading_decisions("ctx")
         assert len(resp.thesis_invalidations) == 2
         assert resp.thesis_invalidations[0].thesis_id == 42
         assert resp.thesis_invalidations[1].reason == "Market shifted"
 
-    @patch("trading.agent.get_ollama_client")
-    def test_missing_optional_fields_use_defaults(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_missing_optional_fields_use_defaults(self, mock_get_client, mock_retry):
         """If the LLM omits optional fields, defaults are applied."""
         data = {
             "decisions": [{"ticker": "TSLA"}],
             "thesis_invalidations": [],
         }
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
         resp = get_trading_decisions("ctx")
         d = resp.decisions[0]
@@ -252,27 +248,25 @@ class TestGetTradingDecisions:
         assert resp.market_summary == ""  # default
         assert resp.risk_assessment == ""  # default
 
-    @patch("trading.agent.get_ollama_client")
-    def test_custom_model_passed_to_chat(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_custom_model_passed_to_api(self, mock_get_client, mock_retry):
         data = _sample_llm_data()
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
-        get_trading_decisions("ctx", model="llama3:8b")
-        call_kwargs = mock_client.chat.call_args
-        assert call_kwargs.kwargs.get("model") or call_kwargs[1].get("model") == "llama3:8b"
+        get_trading_decisions("ctx", model="claude-sonnet-4-20250514")
+        call_kwargs = mock_retry.call_args
+        assert call_kwargs.kwargs.get("model") == "claude-sonnet-4-20250514"
 
-    @patch("trading.agent.get_ollama_client")
-    def test_multiple_decisions_parsed(self, mock_get_client):
+    @patch("trading.agent._call_with_retry")
+    @patch("trading.agent.get_claude_client")
+    def test_multiple_decisions_parsed(self, mock_get_client, mock_retry):
         data = _sample_llm_data(decisions=[
             {"action": "buy", "ticker": "AAPL", "quantity": 5, "reasoning": "r1", "confidence": "high"},
             {"action": "sell", "ticker": "MSFT", "quantity": 3, "reasoning": "r2", "confidence": "medium"},
             {"action": "hold", "ticker": "GOOG", "quantity": None, "reasoning": "r3", "confidence": "low"},
         ])
-        mock_client = MagicMock()
-        mock_client.chat.return_value = _make_ollama_chat_response(data)
-        mock_get_client.return_value = mock_client
+        mock_retry.return_value = _make_claude_response(data)
 
         resp = get_trading_decisions("ctx")
         assert len(resp.decisions) == 3
@@ -484,6 +478,40 @@ class TestValidateDecision:
             positions={"AAPL": Decimal("10")},
         )
         assert is_valid is False
+
+    # --- fractional shares ---
+    def test_buy_fractional_quantity_valid(self):
+        decision = make_trading_decision(action="buy", ticker="AMZN", quantity=2.5)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("200"),
+            positions={},
+        )
+        assert is_valid is True
+        assert "validated" in reason.lower()
+
+    def test_sell_fractional_quantity_valid(self):
+        decision = make_trading_decision(action="sell", ticker="AMZN", quantity=1.5)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("200"),
+            positions={"AMZN": Decimal("3.0")},
+        )
+        assert is_valid is True
+        assert "validated" in reason.lower()
+
+    def test_sell_fractional_exceeds_held(self):
+        decision = make_trading_decision(action="sell", ticker="AMZN", quantity=2.5)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("200"),
+            positions={"AMZN": Decimal("1.0")},
+        )
+        assert is_valid is False
+        assert "Insufficient shares" in reason
 
     # --- unknown action ---
     def test_unknown_action(self):

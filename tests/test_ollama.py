@@ -213,7 +213,7 @@ class TestChat:
         chat("Hello")
 
         payload = mock_post.call_args[1]["json"]
-        assert payload["model"] == "phi3:mini"
+        assert payload["model"] == "qwen2.5:14b"
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ class TestListModels:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "models": [
-                {"name": "phi3:mini"},
+                {"name": "qwen2.5:14b"},
                 {"name": "nomic-embed-text"},
                 {"name": "llama3:8b"},
             ]
@@ -432,7 +432,7 @@ class TestListModels:
         mock_get.return_value = mock_response
 
         result = list_models()
-        assert result == ["phi3:mini", "nomic-embed-text", "llama3:8b"]
+        assert result == ["qwen2.5:14b", "nomic-embed-text", "llama3:8b"]
 
     @patch("trading.ollama.httpx.get")
     def test_returns_empty_list_when_no_models(self, mock_get, ollama_env):
