@@ -1,12 +1,13 @@
-"""Tests for trading/classifier.py - News classification with Claude Haiku."""
+"""Tests for v2/classifier.py - News classification with Claude Haiku."""
 
 import json
+import inspect
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from trading.classifier import (
+from v2.classifier import (
     TickerSignal,
     MacroSignal,
     ClassificationResult,
@@ -16,6 +17,7 @@ from trading.classifier import (
     classify_news,
     classify_news_batch,
     _classify_batch,
+    classify_ticker_news,
 )
 
 
@@ -29,30 +31,6 @@ def _make_mock_response(text: str) -> MagicMock:
     mock_content_block.text = text
     mock_response.content = [mock_content_block]
     return mock_response
-
-
-# ---------------------------------------------------------------------------
-# _strip_code_fences tests
-# ---------------------------------------------------------------------------
-
-class TestStripCodeFences:
-    """Tests for _strip_code_fences()."""
-
-    def test_strips_json_code_fence(self):
-        text = '```json\n{"type": "noise"}\n```'
-        assert _strip_code_fences(text) == '{"type": "noise"}'
-
-    def test_strips_plain_code_fence(self):
-        text = '```\n{"type": "noise"}\n```'
-        assert _strip_code_fences(text) == '{"type": "noise"}'
-
-    def test_no_code_fence(self):
-        text = '{"type": "noise"}'
-        assert _strip_code_fences(text) == '{"type": "noise"}'
-
-    def test_strips_surrounding_whitespace(self):
-        text = '  \n{"type": "noise"}\n  '
-        assert _strip_code_fences(text) == '{"type": "noise"}'
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +76,6 @@ class TestBuildClassificationResult:
         assert len(result.ticker_signals) == 3
         tickers = [s.ticker for s in result.ticker_signals]
         assert tickers == ["AAPL", "MSFT", "GOOG"]
-        # All signals share the same headline, category, sentiment, confidence
         for signal in result.ticker_signals:
             assert signal.headline == "Tech giants face scrutiny"
             assert signal.category == "product"
@@ -143,6 +120,18 @@ class TestBuildClassificationResult:
         assert result.news_type == "ticker_specific"
         assert result.ticker_signals == []
 
+    def test_ticker_specific_missing_optional_fields_use_defaults(self):
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["TSLA"],
+        }
+        result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
+
+        signal = result.ticker_signals[0]
+        assert signal.category == "noise"
+        assert signal.sentiment == "neutral"
+        assert signal.confidence == "low"
+
     def test_macro_political(self):
         entry = {
             "type": "macro_political",
@@ -185,18 +174,9 @@ class TestBuildClassificationResult:
         assert result.macro_signal is not None
 
         macro = result.macro_signal
-        assert macro.category == "sector"  # always "sector" for sector type
+        assert macro.category == "sector"
         assert macro.affected_sectors == ["energy", "industrial"]
         assert macro.sentiment == "bullish"
-
-    def test_sector_type_defaults(self):
-        entry = {"type": "sector"}
-        result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
-
-        macro = result.macro_signal
-        assert macro.category == "sector"
-        assert macro.affected_sectors == ["all"]
-        assert macro.sentiment == "neutral"
 
     def test_noise_type(self):
         entry = {"type": "noise"}
@@ -214,18 +194,6 @@ class TestBuildClassificationResult:
         assert result.ticker_signals == []
         assert result.macro_signal is None
 
-    def test_ticker_specific_missing_optional_fields_use_defaults(self):
-        entry = {
-            "type": "ticker_specific",
-            "tickers": ["TSLA"],
-        }
-        result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
-
-        signal = result.ticker_signals[0]
-        assert signal.category == "noise"
-        assert signal.sentiment == "neutral"
-        assert signal.confidence == "low"
-
     def test_unknown_type_produces_no_signals(self):
         entry = {"type": "unknown_type"}
         result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
@@ -242,7 +210,7 @@ class TestBuildClassificationResult:
 class TestClassifyNews:
     """Tests for classify_news()."""
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_returns_classification_result(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -261,7 +229,7 @@ class TestClassifyNews:
         assert len(result.ticker_signals) == 1
         assert result.ticker_signals[0].ticker == "AAPL"
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_calls_claude_with_correct_model(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -276,7 +244,7 @@ class TestClassifyNews:
         assert call_kwargs["model"] == CLASSIFICATION_MODEL
         assert call_kwargs["max_tokens"] == 256
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_returns_noise_on_exception(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -288,7 +256,7 @@ class TestClassifyNews:
         assert result.ticker_signals == []
         assert result.macro_signal is None
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_returns_noise_on_invalid_json(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -300,7 +268,7 @@ class TestClassifyNews:
         assert result.ticker_signals == []
         assert result.macro_signal is None
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_headline_in_prompt(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -314,7 +282,7 @@ class TestClassifyNews:
         messages = call_kwargs["messages"]
         assert "My specific headline text" in messages[0]["content"]
 
-    @patch("trading.classifier.get_claude_client")
+    @patch("v2.classifier.get_claude_client")
     def test_strips_code_fences_from_response(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -328,154 +296,13 @@ class TestClassifyNews:
 
 
 # ---------------------------------------------------------------------------
-# _classify_batch tests
-# ---------------------------------------------------------------------------
-
-class TestClassifyBatch:
-    """Tests for _classify_batch()."""
-
-    @patch("trading.classifier.get_claude_client")
-    def test_parses_json_array_response(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        response_text = json.dumps([
-            {"type": "ticker_specific", "tickers": ["AAPL"], "category": "earnings",
-             "sentiment": "bullish", "confidence": "high"},
-            {"type": "noise"},
-        ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
-
-        headlines = ["AAPL earnings", "Random news"]
-        dates = [SAMPLE_PUBLISHED_AT, SAMPLE_PUBLISHED_AT]
-        results = _classify_batch(headlines, dates)
-
-        assert len(results) == 2
-        assert results[0].news_type == "ticker_specific"
-        assert results[1].news_type == "noise"
-
-    @patch("trading.classifier.get_claude_client")
-    def test_handles_markdown_code_block(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        inner = json.dumps([{"type": "noise"}])
-        mock_client.messages.create.return_value = _make_mock_response(
-            f"```json\n{inner}\n```"
-        )
-
-        results = _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
-
-        assert len(results) == 1
-        assert results[0].news_type == "noise"
-
-    @patch("trading.classifier.get_claude_client")
-    def test_handles_plain_code_block(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        inner = json.dumps([{"type": "noise"}])
-        mock_client.messages.create.return_value = _make_mock_response(
-            f"```\n{inner}\n```"
-        )
-
-        results = _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
-
-        assert len(results) == 1
-
-    @patch("trading.classifier.get_claude_client")
-    def test_pads_missing_results_with_noise(self, mock_get_client):
-        """If LLM returns fewer results than headlines, pad with noise."""
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        response_text = json.dumps([{"type": "ticker_specific", "tickers": ["AAPL"],
-                                     "category": "earnings", "sentiment": "bullish",
-                                     "confidence": "high"}])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
-
-        headlines = ["AAPL news", "MSFT news", "GOOG news"]
-        dates = [SAMPLE_PUBLISHED_AT] * 3
-        results = _classify_batch(headlines, dates)
-
-        assert len(results) == 3
-        assert results[0].news_type == "ticker_specific"
-        assert results[1].news_type == "noise"
-        assert results[2].news_type == "noise"
-
-    @patch("trading.classifier.get_claude_client")
-    def test_truncates_extra_results(self, mock_get_client):
-        """If LLM returns more results than headlines, truncate."""
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        response_text = json.dumps([
-            {"type": "noise"},
-            {"type": "noise"},
-            {"type": "noise"},
-        ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
-
-        results = _classify_batch(["only one"], [SAMPLE_PUBLISHED_AT])
-
-        assert len(results) == 1
-
-    @patch("trading.classifier.get_claude_client")
-    def test_raises_on_non_array_response(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
-            json.dumps({"type": "noise"})
-        )
-
-        with pytest.raises(ValueError, match="Expected JSON array"):
-            _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
-
-    @patch("trading.classifier.get_claude_client")
-    def test_raises_on_invalid_json(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
-            "not valid json at all"
-        )
-
-        with pytest.raises(json.JSONDecodeError):
-            _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
-
-    @patch("trading.classifier.get_claude_client")
-    def test_uses_correct_model_and_max_tokens(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
-            json.dumps([{"type": "noise"}])
-        )
-
-        _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
-
-        mock_client.messages.create.assert_called_once()
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["model"] == CLASSIFICATION_MODEL
-        assert call_kwargs["max_tokens"] == 4096
-
-    @patch("trading.classifier.get_claude_client")
-    def test_headlines_numbered_in_prompt(self, mock_get_client):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
-            json.dumps([{"type": "noise"}, {"type": "noise"}])
-        )
-
-        _classify_batch(["First headline", "Second headline"], [SAMPLE_PUBLISHED_AT] * 2)
-
-        call_kwargs = mock_client.messages.create.call_args[1]
-        prompt = call_kwargs["messages"][0]["content"]
-        assert '1. "First headline"' in prompt
-        assert '2. "Second headline"' in prompt
-
-
-# ---------------------------------------------------------------------------
 # classify_news_batch tests
 # ---------------------------------------------------------------------------
 
 class TestClassifyNewsBatch:
     """Tests for classify_news_batch()."""
 
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier._classify_batch")
     def test_processes_single_batch(self, mock_batch):
         noise_result = ClassificationResult(news_type="noise", ticker_signals=[], macro_signal=None)
         mock_batch.return_value = [noise_result, noise_result]
@@ -487,7 +314,7 @@ class TestClassifyNewsBatch:
         assert len(results) == 2
         mock_batch.assert_called_once()
 
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier._classify_batch")
     def test_splits_into_batches(self, mock_batch):
         noise_result = ClassificationResult(news_type="noise", ticker_signals=[], macro_signal=None)
         mock_batch.return_value = [noise_result, noise_result]
@@ -499,7 +326,7 @@ class TestClassifyNewsBatch:
         assert len(results) == 4
         assert mock_batch.call_count == 2
 
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier._classify_batch")
     def test_batch_size_larger_than_input(self, mock_batch):
         noise_result = ClassificationResult(news_type="noise", ticker_signals=[], macro_signal=None)
         mock_batch.return_value = [noise_result]
@@ -509,8 +336,8 @@ class TestClassifyNewsBatch:
         assert len(results) == 1
         mock_batch.assert_called_once()
 
-    @patch("trading.classifier.classify_news")
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier.classify_news")
+    @patch("v2.classifier._classify_batch")
     def test_fallback_to_individual_on_batch_error(self, mock_batch, mock_individual):
         mock_batch.side_effect = Exception("Batch failed")
         noise_result = ClassificationResult(news_type="noise", ticker_signals=[], macro_signal=None)
@@ -523,8 +350,8 @@ class TestClassifyNewsBatch:
         assert len(results) == 2
         assert mock_individual.call_count == 2
 
-    @patch("trading.classifier.classify_news")
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier.classify_news")
+    @patch("v2.classifier._classify_batch")
     def test_fallback_individual_also_fails_returns_noise(self, mock_batch, mock_individual):
         mock_batch.side_effect = Exception("Batch failed")
         mock_individual.side_effect = Exception("Individual also failed")
@@ -536,15 +363,15 @@ class TestClassifyNewsBatch:
         assert results[0].ticker_signals == []
         assert results[0].macro_signal is None
 
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier._classify_batch")
     def test_empty_input(self, mock_batch):
         results = classify_news_batch([], [], batch_size=50)
 
         assert results == []
         mock_batch.assert_not_called()
 
-    @patch("trading.classifier.classify_news")
-    @patch("trading.classifier._classify_batch")
+    @patch("v2.classifier.classify_news")
+    @patch("v2.classifier._classify_batch")
     def test_partial_batch_failure_only_affects_that_batch(self, mock_batch, mock_individual):
         """First batch succeeds, second batch fails and falls back."""
         ticker_result = ClassificationResult(
@@ -571,14 +398,318 @@ class TestClassifyNewsBatch:
 
     def test_default_batch_size_is_50(self):
         """Verify default batch_size parameter is 50."""
-        import inspect
         sig = inspect.signature(classify_news_batch)
         assert sig.parameters["batch_size"].default == 50
 
+    @patch("v2.classifier.get_claude_client")
+    def test_batch_calls_haiku_model(self, mock_get_client):
+        """Verify batch classification uses Claude Haiku."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps([{"type": "noise"}])
+        )
+
+        classify_news_batch(["H1"], [SAMPLE_PUBLISHED_AT], batch_size=50)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == CLASSIFICATION_MODEL
+
 
 # ---------------------------------------------------------------------------
-# Dataclass tests
+# _classify_batch tests
 # ---------------------------------------------------------------------------
+
+class TestClassifyBatch:
+    """Tests for _classify_batch()."""
+
+    @patch("v2.classifier.get_claude_client")
+    def test_parses_json_array_response(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        response_text = json.dumps([
+            {"type": "ticker_specific", "tickers": ["AAPL"], "category": "earnings",
+             "sentiment": "bullish", "confidence": "high"},
+            {"type": "noise"},
+        ])
+        mock_client.messages.create.return_value = _make_mock_response(response_text)
+
+        headlines = ["AAPL earnings", "Random news"]
+        dates = [SAMPLE_PUBLISHED_AT, SAMPLE_PUBLISHED_AT]
+        results = _classify_batch(headlines, dates)
+
+        assert len(results) == 2
+        assert results[0].news_type == "ticker_specific"
+        assert results[1].news_type == "noise"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_handles_markdown_code_block(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        inner = json.dumps([{"type": "noise"}])
+        mock_client.messages.create.return_value = _make_mock_response(
+            f"```json\n{inner}\n```"
+        )
+
+        results = _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
+
+        assert len(results) == 1
+        assert results[0].news_type == "noise"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_handles_plain_code_block(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        inner = json.dumps([{"type": "noise"}])
+        mock_client.messages.create.return_value = _make_mock_response(
+            f"```\n{inner}\n```"
+        )
+
+        results = _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
+
+        assert len(results) == 1
+
+    @patch("v2.classifier.get_claude_client")
+    def test_pads_missing_results_with_noise(self, mock_get_client):
+        """If LLM returns fewer results than headlines, pad with noise."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        response_text = json.dumps([{"type": "ticker_specific", "tickers": ["AAPL"],
+                                     "category": "earnings", "sentiment": "bullish",
+                                     "confidence": "high"}])
+        mock_client.messages.create.return_value = _make_mock_response(response_text)
+
+        headlines = ["AAPL news", "MSFT news", "GOOG news"]
+        dates = [SAMPLE_PUBLISHED_AT] * 3
+        results = _classify_batch(headlines, dates)
+
+        assert len(results) == 3
+        assert results[0].news_type == "ticker_specific"
+        assert results[1].news_type == "noise"
+        assert results[2].news_type == "noise"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_truncates_extra_results(self, mock_get_client):
+        """If LLM returns more results than headlines, truncate."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        response_text = json.dumps([
+            {"type": "noise"},
+            {"type": "noise"},
+            {"type": "noise"},
+        ])
+        mock_client.messages.create.return_value = _make_mock_response(response_text)
+
+        results = _classify_batch(["only one"], [SAMPLE_PUBLISHED_AT])
+
+        assert len(results) == 1
+
+    @patch("v2.classifier.get_claude_client")
+    def test_raises_on_non_array_response(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps({"type": "noise"})
+        )
+
+        with pytest.raises(ValueError, match="Expected JSON array"):
+            _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
+
+    @patch("v2.classifier.get_claude_client")
+    def test_raises_on_invalid_json(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            "not valid json at all"
+        )
+
+        with pytest.raises(json.JSONDecodeError):
+            _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
+
+    @patch("v2.classifier.get_claude_client")
+    def test_uses_correct_model_and_max_tokens(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps([{"type": "noise"}])
+        )
+
+        _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
+
+        mock_client.messages.create.assert_called_once()
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == CLASSIFICATION_MODEL
+        assert call_kwargs["max_tokens"] == 4096
+
+    @patch("v2.classifier.get_claude_client")
+    def test_headlines_numbered_in_prompt(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps([{"type": "noise"}, {"type": "noise"}])
+        )
+
+        _classify_batch(["First headline", "Second headline"], [SAMPLE_PUBLISHED_AT] * 2)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert '1. "First headline"' in prompt
+        assert '2. "Second headline"' in prompt
+
+
+# ---------------------------------------------------------------------------
+# classify_ticker_news tests
+# ---------------------------------------------------------------------------
+
+class TestClassifyTickerNews:
+    """Tests for classify_ticker_news()."""
+
+    @patch("v2.classifier.get_claude_client")
+    def test_returns_ticker_signal(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(json.dumps({
+            "category": "earnings",
+            "sentiment": "bullish",
+            "confidence": "high",
+        }))
+
+        result = classify_ticker_news("AAPL", "Apple beats Q3", SAMPLE_PUBLISHED_AT)
+
+        assert isinstance(result, TickerSignal)
+        assert result.ticker == "AAPL"
+        assert result.headline == "Apple beats Q3"
+        assert result.category == "earnings"
+        assert result.sentiment == "bullish"
+        assert result.confidence == "high"
+        assert result.published_at == SAMPLE_PUBLISHED_AT
+
+    @patch("v2.classifier.get_claude_client")
+    def test_calls_claude_with_correct_model(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps({"category": "noise", "sentiment": "neutral", "confidence": "low"})
+        )
+
+        classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
+
+        mock_client.messages.create.assert_called_once()
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == CLASSIFICATION_MODEL
+        assert call_kwargs["max_tokens"] == 256
+
+    @patch("v2.classifier.get_claude_client")
+    def test_uppercases_ticker(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps({"category": "earnings", "sentiment": "bullish", "confidence": "high"})
+        )
+
+        result = classify_ticker_news("aapl", "headline", SAMPLE_PUBLISHED_AT)
+
+        assert result.ticker == "AAPL"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_returns_defaults_on_exception(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.side_effect = Exception("API error")
+
+        result = classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
+
+        assert result.ticker == "AAPL"
+        assert result.category == "noise"
+        assert result.sentiment == "neutral"
+        assert result.confidence == "low"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_returns_defaults_on_invalid_json(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response("not json")
+
+        result = classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
+
+        assert result.category == "noise"
+        assert result.sentiment == "neutral"
+        assert result.confidence == "low"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_ticker_in_prompt(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            json.dumps({"category": "noise", "sentiment": "neutral", "confidence": "low"})
+        )
+
+        classify_ticker_news("TSLA", "Tesla earnings", SAMPLE_PUBLISHED_AT)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "TSLA" in prompt
+        assert "Tesla earnings" in prompt
+
+    @patch("v2.classifier.get_claude_client")
+    def test_strips_code_fences_from_response(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(
+            '```json\n{"category": "earnings", "sentiment": "bullish", "confidence": "high"}\n```'
+        )
+
+        result = classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
+
+        assert result.category == "earnings"
+        assert result.sentiment == "bullish"
+        assert result.confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# _strip_code_fences tests
+# ---------------------------------------------------------------------------
+
+class TestStripCodeFences:
+    """Tests for _strip_code_fences()."""
+
+    def test_strips_json_code_fence(self):
+        text = '```json\n{"type": "noise"}\n```'
+        assert _strip_code_fences(text) == '{"type": "noise"}'
+
+    def test_strips_plain_code_fence(self):
+        text = '```\n{"type": "noise"}\n```'
+        assert _strip_code_fences(text) == '{"type": "noise"}'
+
+    def test_no_code_fence(self):
+        text = '{"type": "noise"}'
+        assert _strip_code_fences(text) == '{"type": "noise"}'
+
+    def test_strips_surrounding_whitespace(self):
+        text = '  \n{"type": "noise"}\n  '
+        assert _strip_code_fences(text) == '{"type": "noise"}'
+
+
+# ---------------------------------------------------------------------------
+# Constants and dataclass tests
+# ---------------------------------------------------------------------------
+
+class TestConstants:
+    """Tests for module-level constants."""
+
+    def test_classification_model(self):
+        assert CLASSIFICATION_MODEL == "claude-haiku-4-5-20251001"
+
+    def test_no_classify_filtered_news(self):
+        """Verify classify_filtered_news was removed in v2."""
+        import v2.classifier as mod
+        assert not hasattr(mod, "classify_filtered_news")
+
+    def test_no_filtered_news_item_import(self):
+        """Verify FilteredNewsItem is not referenced in v2."""
+        import v2.classifier as mod
+        assert not hasattr(mod, "FilteredNewsItem")
+
 
 class TestDataclasses:
     """Tests for classifier dataclasses."""
@@ -615,31 +746,3 @@ class TestDataclasses:
         assert result.news_type == "ticker_specific"
         assert result.ticker_signals == []
         assert result.macro_signal is None
-
-    def test_classification_result_with_both_signals(self):
-        ticker = TickerSignal(
-            ticker="AAPL", headline="h", category="earnings",
-            sentiment="bullish", confidence="high", published_at=SAMPLE_PUBLISHED_AT,
-        )
-        macro = MacroSignal(
-            headline="h", category="fed", affected_sectors=["all"],
-            sentiment="neutral", published_at=SAMPLE_PUBLISHED_AT,
-        )
-        result = ClassificationResult(
-            news_type="mixed",
-            ticker_signals=[ticker],
-            macro_signal=macro,
-        )
-        assert len(result.ticker_signals) == 1
-        assert result.macro_signal is not None
-
-
-# ---------------------------------------------------------------------------
-# CLASSIFICATION_MODEL constant test
-# ---------------------------------------------------------------------------
-
-class TestConstants:
-    """Tests for module-level constants."""
-
-    def test_classification_model(self):
-        assert CLASSIFICATION_MODEL == "claude-haiku-4-5-20251001"

@@ -1,12 +1,13 @@
-# Algo Trading Crontab
+# Algo Trading Crontab (v2)
 # Install with: crontab /home/jay/dev/algo/crontab
 # All times are MST (America/Denver, UTC-7)
 
-# Backfill outcomes (4 AM MST / 6 AM ET, Mon-Fri) — learning system
-0 4 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.backfill >> /home/jay/dev/algo/logs/backfill.log 2>&1
+# Daily session (1 PM MST / 3 PM ET, Mon-Fri)
+# Stage 0: backfill outcomes + compute attribution + build constraints
+# Stage 1: news pipeline (fetch, Haiku classify, store)
+# Stage 2: Claude Opus strategist (thesis management, playbook generation)
+# Stage 3: Claude Haiku executor (validate, execute, log)
+0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session >> /home/jay/dev/algo/logs/session.log 2>&1
 
-# Consolidated daily session (1 PM MST / 3 PM ET, Mon-Fri)
-0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.session >> /home/jay/dev/algo/logs/session.log 2>&1
-
-# Learning loop (5 AM MST / 7 AM ET, Sunday) — weekly learning
-0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m trading.learn --days 60 >> /home/jay/dev/algo/logs/learn.log 2>&1
+# Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
+0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60 >> /home/jay/dev/algo/logs/learn.log 2>&1
