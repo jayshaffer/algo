@@ -1,9 +1,12 @@
 """Shared test fixtures for the trading platform test suite."""
 
 import json
+import logging
+import os
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +15,50 @@ from trading.news import NewsItem
 from trading.filter import FilteredNewsItem
 from trading.classifier import TickerSignal, MacroSignal, ClassificationResult
 from trading.agent import TradingDecision, ThesisInvalidation, AgentResponse
+
+
+# ---------------------------------------------------------------------------
+# Integration test logging
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True, scope="session")
+def _integration_logging(request):
+    """Configure logging for integration test runs.
+
+    Adds a console handler (INFO) and a file handler (DEBUG) writing to
+    logs/integration_tests.log.  Only activates when the integration marker
+    is selected (i.e. ``-m integration``).
+    """
+    markers = request.config.option.markexpr
+    if not markers or "integration" not in markers:
+        return
+
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Console at INFO
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(fmt)
+
+    # File at DEBUG (captures prompts / raw responses)
+    file_handler = RotatingFileHandler(
+        os.path.join(log_dir, "integration_tests.log"),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(console)
+    root.addHandler(file_handler)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ Alpaca Learning Platform - an agentic trading system that uses a local LLM (Olla
 │                    Docker Compose Stack                      │
 ├──────────────┬──────────────┬───────────────┬───────────────┤
 │   Ollama     │  PostgreSQL  │   Trading     │   Dashboard   │
-│  (qwen2.5)   │   (pgvector) │   Agent       │   (Flask)     │
+│  (qwen2.5)     │   (pgvector) │   Agent       │   (Flask)     │
 │  :11434      │   :5432      │               │   :3000       │
 └──────────────┴──────────────┴───────────────┴───────────────┘
 ```

@@ -1,21 +1,12 @@
 # Algo Trading Crontab
 # Install with: crontab /home/jay/dev/algo/crontab
-# All times are ET (Eastern Time)
+# All times are MST (America/Denver, UTC-7)
 
-# Backfill outcomes (6 AM, before market open, Mon-Fri)
-0 8 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.backfill >> /home/jay/dev/algo/logs/backfill.log 2>&1
+# Backfill outcomes (4 AM MST / 6 AM ET, Mon-Fri) — learning system
+0 4 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.backfill >> /home/jay/dev/algo/logs/backfill.log 2>&1
 
-# News pipeline (6:30 AM, before ideation, Mon-Fri)
-30 8 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.pipeline >> /home/jay/dev/algo/logs/pipeline.log 2>&1
+# Consolidated daily session (1 PM MST / 3 PM ET, Mon-Fri)
+0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.session >> /home/jay/dev/algo/logs/session.log 2>&1
 
-# Ideation - generate/review theses (7 AM, after pipeline, Mon-Fri)
-0 9 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.ideation_claude >> /home/jay/dev/algo/logs/ideation.log 2>&1
-
-# News pipeline (4 PM, before trading session, Mon-Fri)
-0 16 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.pipeline >> /home/jay/dev/algo/logs/pipeline.log 2>&1
-
-# Trading session (4:30 PM, 30 min after market close, Mon-Fri)
-30 18 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m trading.trader >> /home/jay/dev/algo/logs/trader.log 2>&1
-
-# Learning loop with attribution (7 AM Sunday, weekly)
-0 7 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m trading.learn --days 60 >> /home/jay/dev/algo/logs/learn.log 2>&1
+# Learning loop (5 AM MST / 7 AM ET, Sunday) — weekly learning
+0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m trading.learn --days 60 >> /home/jay/dev/algo/logs/learn.log 2>&1

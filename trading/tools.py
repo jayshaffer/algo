@@ -1,7 +1,7 @@
 """Tool definitions and implementations for Claude ideation agent."""
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 from .attribution import get_attribution_summary
@@ -214,18 +214,18 @@ def tool_write_playbook(
     watch_list: list,
     risk_notes: str,
 ) -> str:
-    """Write tomorrow's playbook to the database."""
+    """Write today's playbook to the database."""
     logger.info("Writing playbook")
     try:
-        tomorrow = date.today() + timedelta(days=1)
+        playbook_date = date.today()
         playbook_id = upsert_playbook(
-            playbook_date=tomorrow,
+            playbook_date=playbook_date,
             market_outlook=market_outlook,
             priority_actions=priority_actions,
             watch_list=watch_list,
             risk_notes=risk_notes,
         )
-        return f"Playbook written for {tomorrow} (ID: {playbook_id})"
+        return f"Playbook written for {playbook_date} (ID: {playbook_id})"
     except Exception as e:
         logger.exception("Failed to write playbook")
         return f"Error writing playbook: {e}"
@@ -439,7 +439,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "write_playbook",
         "description": (
-            "Write tomorrow's trading playbook. This is the primary output of "
+            "Write today's trading playbook. This is the primary output of "
             "the strategist session — it tells the executor what to do."
         ),
         "input_schema": {
@@ -447,7 +447,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "market_outlook": {
                     "type": "string",
-                    "description": "Brief market outlook for tomorrow",
+                    "description": "Brief market outlook for today",
                 },
                 "priority_actions": {
                     "type": "array",
@@ -459,7 +459,7 @@ TOOL_DEFINITIONS = [
                             "action": {"type": "string", "enum": ["buy", "sell"]},
                             "thesis_id": {"type": "integer"},
                             "reasoning": {"type": "string"},
-                            "max_quantity": {"type": "integer"},
+                            "max_quantity": {"type": "number"},
                             "confidence": {"type": "number"},
                         },
                         "required": ["ticker", "action", "reasoning", "confidence"],

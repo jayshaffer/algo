@@ -1,5 +1,6 @@
 """News pipeline orchestrator - fetch, filter, classify, store."""
 
+import logging
 import sys
 from datetime import datetime
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from .filter import filter_by_relevance, FilteredNewsItem, DEFAULT_STRATEGY_CONT
 from .classifier import classify_news_batch
 from .db import insert_news_signals_batch, insert_macro_signals_batch
 from .ollama import check_ollama_health, list_models
+
+logger = logging.getLogger("pipeline")
 
 
 @dataclass
@@ -56,26 +59,26 @@ def run_pipeline(
         errors=0
     )
 
-    print(f"[{datetime.now().isoformat()}] Starting news pipeline")
-    print(f"  Hours: {hours}, Limit: {limit}, Threshold: {relevance_threshold}")
+    logger.info("Starting news pipeline (hours=%d, limit=%d, threshold=%.2f)",
+                hours, limit, relevance_threshold)
 
     # Step 1: Fetch news
-    print("\n[Step 1] Fetching news from Alpaca...")
+    logger.info("[Step 1] Fetching news from Alpaca")
     try:
         news_items = fetch_broad_news(hours=hours, limit=limit)
         stats.news_fetched = len(news_items)
-        print(f"  Fetched {stats.news_fetched} news items")
+        logger.info("Fetched %d news items", stats.news_fetched)
     except Exception as e:
-        print(f"  Error fetching news: {e}")
+        logger.error("Error fetching news: %s", e, exc_info=True)
         stats.errors += 1
         return stats
 
     if not news_items:
-        print("  No news items to process")
+        logger.info("No news items to process")
         return stats
 
     # Step 2: Filter by relevance
-    print("\n[Step 2] Filtering by relevance...")
+    logger.info("[Step 2] Filtering by relevance")
     try:
         filtered_items = filter_by_relevance(
             news_items,
@@ -84,18 +87,19 @@ def run_pipeline(
         )
         stats.news_filtered = len(filtered_items)
         dropped = stats.news_fetched - stats.news_filtered
-        print(f"  Kept {stats.news_filtered} items, dropped {dropped} below threshold")
+        logger.info("Kept %d items, dropped %d below threshold",
+                     stats.news_filtered, dropped)
     except Exception as e:
-        print(f"  Error filtering news: {e}")
+        logger.error("Error filtering news: %s", e, exc_info=True)
         stats.errors += 1
         return stats
 
     if not filtered_items:
-        print("  No items passed relevance filter")
+        logger.info("No items passed relevance filter")
         return stats
 
     # Step 3: Classify with qwen2.5:14b (batched)
-    print("\n[Step 3] Classifying with qwen2.5:14b (batched)...")
+    logger.info("[Step 3] Classifying with qwen2.5:14b (batched)")
     total = len(filtered_items)
     ticker_signals_batch = []
     macro_signals_batch = []
@@ -112,7 +116,8 @@ def run_pipeline(
 
         for signal in result.ticker_signals:
             if dry_run:
-                print(f"  [DRY RUN] Ticker signal: {signal.ticker} - {signal.sentiment} ({signal.category})")
+                logger.info("[DRY RUN] Ticker signal: %s - %s (%s)",
+                            signal.ticker, signal.sentiment, signal.category)
             else:
                 ticker_signals_batch.append((
                     signal.ticker, signal.headline, signal.category,
@@ -122,56 +127,54 @@ def run_pipeline(
         if result.macro_signal:
             signal = result.macro_signal
             if dry_run:
-                print(f"  [DRY RUN] Macro signal: {signal.category} - {signal.sentiment}")
+                logger.info("[DRY RUN] Macro signal: %s - %s",
+                            signal.category, signal.sentiment)
             else:
                 macro_signals_batch.append((
                     signal.headline, signal.category, signal.affected_sectors,
                     signal.sentiment, signal.published_at
                 ))
 
-    print(f"  Classified {total} items")
+    logger.info("Classified %d items", total)
 
     # Step 4: Batch store signals (single transaction per type)
     if not dry_run:
-        print("\n[Step 4] Storing signals...")
+        logger.info("[Step 4] Storing signals")
         try:
             stats.ticker_signals_stored = insert_news_signals_batch(ticker_signals_batch)
         except Exception as e:
-            print(f"  Error batch-inserting ticker signals: {e}")
+            logger.error("Error batch-inserting ticker signals: %s", e, exc_info=True)
             stats.errors += 1
 
         try:
             stats.macro_signals_stored = insert_macro_signals_batch(macro_signals_batch)
         except Exception as e:
-            print(f"  Error batch-inserting macro signals: {e}")
+            logger.error("Error batch-inserting macro signals: %s", e, exc_info=True)
             stats.errors += 1
 
-    print(f"\n[Complete]")
-    print(f"  Ticker signals: {stats.ticker_signals_stored}")
-    print(f"  Macro signals: {stats.macro_signals_stored}")
-    print(f"  Noise dropped: {stats.noise_dropped}")
-    print(f"  Errors: {stats.errors}")
+    logger.info("Pipeline complete — ticker: %d, macro: %d, noise: %d, errors: %d",
+                stats.ticker_signals_stored, stats.macro_signals_stored,
+                stats.noise_dropped, stats.errors)
 
     return stats
 
 
 def check_dependencies() -> bool:
     """Check that required services are available."""
-    print("Checking dependencies...")
+    logger.info("Checking dependencies")
 
     # Check Ollama
-    print("  Ollama: ", end="")
     if check_ollama_health():
         models = list_models()
-        print(f"OK ({len(models)} models)")
+        logger.info("Ollama: OK (%d models)", len(models))
 
         # Check for required models
         required = ["qwen2.5:14b", "nomic-embed-text"]
         for model in required:
             if not any(model in m for m in models):
-                print(f"  WARNING: Model '{model}' not found. Run setup-ollama.sh")
+                logger.warning("Model '%s' not found. Run setup-ollama.sh", model)
     else:
-        print("NOT AVAILABLE")
+        logger.warning("Ollama: NOT AVAILABLE")
         return False
 
     return True
@@ -180,6 +183,9 @@ def check_dependencies() -> bool:
 def main():
     """CLI entry point for news pipeline."""
     import argparse
+    from .log_config import setup_logging
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="Run news processing pipeline")
     parser.add_argument("--hours", type=int, default=24, help="Hours of news to fetch")
@@ -192,10 +198,10 @@ def main():
 
     if args.check:
         if check_dependencies():
-            print("\nAll dependencies OK")
+            logger.info("All dependencies OK")
             sys.exit(0)
         else:
-            print("\nDependency check failed")
+            logger.error("Dependency check failed")
             sys.exit(1)
 
     # Run pipeline

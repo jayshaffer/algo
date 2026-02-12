@@ -491,8 +491,8 @@ class TestCalculatePositionSize:
             price=Decimal("150"),
             risk_pct=0.05,
         )
-        # 100000 * 0.05 = 5000 / 150 = 33.33 => 33
-        assert shares == 33
+        # 100000 * 0.05 = 5000 / 150 = 33.3333
+        assert shares == pytest.approx(33.3333, abs=0.0001)
 
     def test_small_buying_power(self):
         shares = calculate_position_size(
@@ -500,15 +500,15 @@ class TestCalculatePositionSize:
             price=Decimal("150"),
             risk_pct=0.05,
         )
-        # 100 * 0.05 = 5 / 150 = 0.03 => 0
-        assert shares == 0
+        # 100 * 0.05 = 5 / 150 = 0.0333
+        assert shares == pytest.approx(0.0333, abs=0.0001)
 
-    def test_returns_integer(self):
+    def test_returns_float(self):
         shares = calculate_position_size(
             buying_power=Decimal("10000"),
             price=Decimal("33.33"),
         )
-        assert isinstance(shares, int)
+        assert isinstance(shares, float)
 
     def test_zero_buying_power(self):
         shares = calculate_position_size(
@@ -524,7 +524,7 @@ class TestCalculatePositionSize:
             risk_pct=0.50,
         )
         # 100000 * 0.50 = 50000 / 100 = 500
-        assert shares == 500
+        assert shares == 500.0
 
     def test_very_expensive_stock(self):
         shares = calculate_position_size(
@@ -532,8 +532,8 @@ class TestCalculatePositionSize:
             price=Decimal("5000"),
             risk_pct=0.05,
         )
-        # 10000 * 0.05 = 500 / 5000 = 0.1 => 0
-        assert shares == 0
+        # 10000 * 0.05 = 500 / 5000 = 0.1
+        assert shares == 0.1
 
     def test_cheap_stock_many_shares(self):
         shares = calculate_position_size(
@@ -542,7 +542,7 @@ class TestCalculatePositionSize:
             risk_pct=0.05,
         )
         # 100000 * 0.05 = 5000 / 1 = 5000
-        assert shares == 5000
+        assert shares == 5000.0
 
     def test_never_negative(self):
         """Even with unusual inputs, result should be >= 0."""
@@ -559,4 +559,4 @@ class TestCalculatePositionSize:
             price=Decimal("100"),
         )
         # Default 5%: 100000 * 0.05 = 5000 / 100 = 50
-        assert shares == 50
+        assert shares == 50.0
