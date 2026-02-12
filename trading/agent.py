@@ -67,7 +67,7 @@ RULES:
 - Every decision MUST cite signal_refs for the learning loop
 
 JSON SCHEMA:
-{"decisions": [{"action": "buy|sell|hold", "ticker": "SYMBOL", "quantity": 2.5, "reasoning": "...", "confidence": "high|medium|low", "thesis_id": null, "signal_refs": [{"type": "news_signal|thesis", "id": 0}]}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
+{"decisions": [{"action": "buy|sell|hold", "ticker": "SYMBOL", "quantity": 2.5, "confidence": "high|medium|low", "thesis_id": null, "signal_refs": [{"type": "news_signal|thesis", "id": 0}]}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
 
 If no trades: empty decisions array, explain in market_summary.
 If no invalidations: empty thesis_invalidations array."""
@@ -95,7 +95,7 @@ def get_trading_decisions(
     response = _call_with_retry(
         client,
         model=model,
-        max_tokens=2000,
+        max_tokens=4096,
         system=TRADING_SYSTEM_PROMPT,
         messages=[
             {
@@ -112,10 +112,17 @@ def get_trading_decisions(
             response_text += block.text
 
     logger.info(
-        "Haiku tokens — input: %d, output: %d",
+        "Haiku tokens — input: %d, output: %d, stop_reason: %s",
         response.usage.input_tokens,
         response.usage.output_tokens,
+        response.stop_reason,
     )
+
+    if response.stop_reason == "max_tokens":
+        raise ValueError(
+            f"Executor response truncated at {response.usage.output_tokens} tokens. "
+            "Context may be too large — consider reducing input size."
+        )
 
     # Parse JSON response
     try:

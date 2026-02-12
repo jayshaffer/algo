@@ -40,7 +40,9 @@
       "Bash(/home/jay/dev/algo/.venv/bin/python -m pytest:*)",
       "Bash(/home/jay/dev/algo/.venv/bin/pip list:*)",
       "Bash(git -C /home/jay/dev/algo log --oneline -20)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git -C /home/jay/dev/algo log --oneline --all)",
+      "Bash(git -C /home/jay/dev/algo branch -v)"
     ]
   }
 }
