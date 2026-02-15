@@ -372,8 +372,13 @@ def get_playbook_actions(playbook_id) -> list:
 
 
 def delete_playbook_actions(playbook_id) -> int:
-    """Delete all actions for a playbook."""
+    """Delete all actions for a playbook, clearing decision references first."""
     with get_cursor() as cur:
+        cur.execute(
+            "UPDATE decisions SET playbook_action_id = NULL "
+            "WHERE playbook_action_id IN (SELECT id FROM playbook_actions WHERE playbook_id = %s)",
+            (playbook_id,),
+        )
         cur.execute("DELETE FROM playbook_actions WHERE playbook_id = %s", (playbook_id,))
         return cur.rowcount
 

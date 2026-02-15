@@ -52,6 +52,7 @@
                     <th class="pb-2">Date</th>
                     <th class="pb-2">Ticker</th>
                     <th class="pb-2">Action</th>
+                    <th class="pb-2">Source</th>
                     <th class="pb-2">Qty</th>
                     <th class="pb-2">Price</th>
                     <th class="pb-2">Account Equity</th>
@@ -69,6 +70,15 @@
                             {{ d.action|upper }}
                         </span>
                     </td>
+                    <td class="py-2">
+                        {% if d.is_off_playbook %}
+                        <span class="px-2 py-0.5 rounded text-sm bg-orange-100 text-orange-800">Off-Playbook</span>
+                        {% elif d.playbook_action_id %}
+                        <span class="px-2 py-0.5 rounded text-sm bg-blue-100 text-blue-800">Playbook</span>
+                        {% else %}
+                        <span class="text-gray-400">-</span>
+                        {% endif %}
+                    </td>
                     <td class="py-2">{{ d.quantity or '-' }}</td>
                     <td class="py-2">{{ "$%.2f"|format(d.price|float) if d.price else '-' }}</td>
                     <td class="py-2 text-sm text-gray-600">${{ "%.0f"|format(d.account_equity|float) if d.account_equity else '-' }}</td>
@@ -80,8 +90,21 @@
                     </td>
                 </tr>
                 <tr class="border-t bg-gray-50">
-                    <td colspan="8" class="py-2 px-4 text-sm text-gray-600">
+                    <td colspan="9" class="py-2 px-4 text-sm text-gray-600">
                         <strong>Reasoning:</strong> {{ d.reasoning or 'No reasoning provided' }}
+                        {% if signal_refs.get(d.id) %}
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            {% for ref in signal_refs[d.id] %}
+                            <span class="inline-block px-2 py-0.5 rounded text-xs
+                                {% if ref.signal_type == 'news_signal' %}bg-blue-50 text-blue-700
+                                {% elif ref.signal_type == 'macro_signal' %}bg-purple-50 text-purple-700
+                                {% elif ref.signal_type == 'thesis' %}bg-green-50 text-green-700
+                                {% endif %}">
+                                {{ ref.label }}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}

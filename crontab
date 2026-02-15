@@ -7,7 +7,7 @@
 # Stage 1: news pipeline (fetch, Haiku classify, store)
 # Stage 2: Claude Opus strategist (thesis management, playbook generation)
 # Stage 3: Claude Haiku executor (validate, execute, log)
-0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session >> /home/jay/dev/algo/logs/session.log 2>&1
+0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
-0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60 >> /home/jay/dev/algo/logs/learn.log 2>&1
+0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60

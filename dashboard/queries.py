@@ -53,6 +53,19 @@ def get_latest_snapshot():
         return cur.fetchone()
 
 
+def get_open_orders():
+    """Get active open orders."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT order_id, ticker, side, order_type, qty, filled_qty,
+                   limit_price, stop_price, status, submitted_at
+            FROM open_orders
+            WHERE status IN ('new', 'partially_filled', 'accepted', 'pending_new')
+            ORDER BY submitted_at DESC
+        """)
+        return cur.fetchall()
+
+
 # --- Signals ---
 
 def get_recent_ticker_signals(days: int = 7, limit: int = 50):
@@ -104,8 +117,9 @@ def get_recent_decisions(days: int = 30, limit: int = 50):
     """Get recent trading decisions with outcomes."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT date, ticker, action, quantity, price, reasoning,
-                   account_equity, buying_power, outcome_7d, outcome_30d
+            SELECT id, date, ticker, action, quantity, price, reasoning,
+                   account_equity, buying_power, outcome_7d, outcome_30d,
+                   is_off_playbook, playbook_action_id
             FROM decisions
             WHERE date > CURRENT_DATE - INTERVAL '%s days'
             ORDER BY date DESC, id DESC
@@ -194,6 +208,21 @@ def get_today_playbook():
         return cur.fetchone()
 
 
+def get_playbook_actions(playbook_id):
+    """Get structured playbook actions with thesis details."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT pa.id, pa.playbook_id, pa.ticker, pa.action, pa.thesis_id,
+                   pa.reasoning, pa.confidence, pa.max_quantity, pa.priority,
+                   pa.created_at, t.thesis AS thesis_text, t.direction AS thesis_direction
+            FROM playbook_actions pa
+            LEFT JOIN theses t ON pa.thesis_id = t.id
+            WHERE pa.playbook_id = %s
+            ORDER BY pa.priority ASC NULLS LAST
+        """, (playbook_id,))
+        return cur.fetchall()
+
+
 # --- Signal Attribution ---
 
 def get_signal_attribution():
@@ -219,6 +248,46 @@ def get_decision_signal_refs(decision_id):
             WHERE decision_id = %s
         """, (decision_id,))
         return cur.fetchall()
+
+
+def get_decision_signal_refs_batch(decision_ids):
+    """Get signal refs for multiple decisions in one query.
+
+    Returns dict[int, list] grouped by decision_id.
+    """
+    if not decision_ids:
+        return {}
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT ds.decision_id, ds.signal_type, ds.signal_id,
+                   ns.headline AS news_headline,
+                   ms.headline AS macro_headline,
+                   t.thesis AS thesis_text
+            FROM decision_signals ds
+            LEFT JOIN news_signals ns
+                ON ds.signal_type = 'news_signal' AND ds.signal_id = ns.id
+            LEFT JOIN macro_signals ms
+                ON ds.signal_type = 'macro_signal' AND ds.signal_id = ms.id
+            LEFT JOIN theses t
+                ON ds.signal_type = 'thesis' AND ds.signal_id = t.id
+            WHERE ds.decision_id = ANY(%s)
+            ORDER BY ds.decision_id, ds.signal_type
+        """, (decision_ids,))
+        rows = cur.fetchall()
+
+    result = {}
+    for row in rows:
+        did = row['decision_id']
+        label = (row['news_headline']
+                 or row['macro_headline']
+                 or row['thesis_text']
+                 or f"{row['signal_type']}#{row['signal_id']}")
+        result.setdefault(did, []).append({
+            'signal_type': row['signal_type'],
+            'signal_id': row['signal_id'],
+            'label': label,
+        })
+    return result
 
 
 # --- Theses ---

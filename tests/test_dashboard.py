@@ -17,6 +17,8 @@ from tests.conftest import (
     make_macro_signal_row,
     make_playbook_row,
     make_attribution_row,
+    make_open_order_row,
+    make_playbook_action_row,
 )
 
 # Inject a mock queries module before importing dashboard.app,
@@ -44,7 +46,9 @@ def _reset_query_mocks():
     # Set safe defaults so template rendering doesn't blow up
     mock_queries.get_positions.return_value = []
     mock_queries.get_latest_snapshot.return_value = None
+    mock_queries.get_open_orders.return_value = []
     mock_queries.get_today_playbook.return_value = None
+    mock_queries.get_playbook_actions.return_value = []
     mock_queries.get_signal_attribution.return_value = []
     mock_queries.get_recent_ticker_signals.return_value = []
     mock_queries.get_recent_macro_signals.return_value = []
@@ -67,6 +71,7 @@ def _reset_query_mocks():
         "avg_outcome_7d": None,
         "avg_outcome_30d": None,
     }
+    mock_queries.get_decision_signal_refs_batch.return_value = {}
     mock_queries.get_equity_curve.return_value = []
     mock_queries.get_performance_metrics.return_value = None
     mock_queries.close_thesis.return_value = True
@@ -128,6 +133,27 @@ class TestPortfolioPage:
         resp = client.get("/")
         assert resp.status_code == 200
 
+    def test_portfolio_renders_open_orders(self, client):
+        orders = [
+            make_open_order_row(ticker="AAPL", side="buy", status="new"),
+            make_open_order_row(id=2, ticker="TSLA", side="sell", status="partially_filled"),
+        ]
+        mock_queries.get_open_orders.return_value = orders
+
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"AAPL" in resp.data
+        assert b"TSLA" in resp.data
+        assert b"BUY" in resp.data
+        assert b"SELL" in resp.data
+        mock_queries.get_open_orders.assert_called_once()
+
+    def test_portfolio_empty_open_orders(self, client):
+        mock_queries.get_open_orders.return_value = []
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"No open orders" in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Playbook page
@@ -151,6 +177,40 @@ class TestPlaybookPage:
         resp = client.get("/playbook")
         assert resp.status_code == 200
         assert b"No playbook for today" in resp.data
+
+    def test_playbook_renders_structured_actions(self, client):
+        playbook = make_playbook_row()
+        mock_queries.get_today_playbook.return_value = playbook
+        actions = [
+            make_playbook_action_row(ticker="NVDA", confidence="high", priority=1),
+            make_playbook_action_row(id=2, ticker="AAPL", confidence="medium", priority=2, thesis_id=None),
+        ]
+        mock_queries.get_playbook_actions.return_value = actions
+
+        resp = client.get("/playbook")
+        assert resp.status_code == 200
+        assert b"NVDA" in resp.data
+        assert b"AAPL" in resp.data
+        # Confidence badges
+        assert b">high<" in resp.data
+        assert b">medium<" in resp.data
+        mock_queries.get_playbook_actions.assert_called_once_with(playbook['id'])
+
+    def test_playbook_empty_actions(self, client):
+        playbook = make_playbook_row()
+        mock_queries.get_today_playbook.return_value = playbook
+        mock_queries.get_playbook_actions.return_value = []
+
+        resp = client.get("/playbook")
+        assert resp.status_code == 200
+        assert b"No priority actions" in resp.data
+
+    def test_playbook_null_playbook_no_actions_query(self, client):
+        mock_queries.get_today_playbook.return_value = None
+
+        resp = client.get("/playbook")
+        assert resp.status_code == 200
+        mock_queries.get_playbook_actions.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +317,46 @@ class TestDecisionsPage:
             "avg_outcome_7d": Decimal("1.5"),
             "avg_outcome_30d": Decimal("3.0"),
         }
+
+        resp = client.get("/decisions")
+        assert resp.status_code == 200
+
+    def test_decisions_off_playbook_badge(self, client):
+        decision = make_decision_row(id=10, is_off_playbook=True)
+        mock_queries.get_recent_decisions.return_value = [decision]
+
+        resp = client.get("/decisions")
+        assert resp.status_code == 200
+        assert b"Off-Playbook" in resp.data
+
+    def test_decisions_playbook_badge(self, client):
+        decision = make_decision_row(id=10, playbook_action_id=5)
+        mock_queries.get_recent_decisions.return_value = [decision]
+
+        resp = client.get("/decisions")
+        assert resp.status_code == 200
+        assert b"Playbook" in resp.data
+
+    def test_decisions_signal_refs_rendering(self, client):
+        decision = make_decision_row(id=10)
+        mock_queries.get_recent_decisions.return_value = [decision]
+        mock_queries.get_decision_signal_refs_batch.return_value = {
+            10: [
+                {"signal_type": "news_signal", "signal_id": 1, "label": "AAPL beats earnings"},
+                {"signal_type": "thesis", "signal_id": 2, "label": "Strong fundamentals"},
+            ]
+        }
+
+        resp = client.get("/decisions")
+        assert resp.status_code == 200
+        assert b"AAPL beats earnings" in resp.data
+        assert b"Strong fundamentals" in resp.data
+        mock_queries.get_decision_signal_refs_batch.assert_called_once_with([10])
+
+    def test_decisions_empty_signal_refs(self, client):
+        decision = make_decision_row(id=10)
+        mock_queries.get_recent_decisions.return_value = [decision]
+        mock_queries.get_decision_signal_refs_batch.return_value = {}
 
         resp = client.get("/decisions")
         assert resp.status_code == 200
