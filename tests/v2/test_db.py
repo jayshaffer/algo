@@ -602,3 +602,104 @@ class TestDashboardQueries:
         get_theses(status_filter="active", sort_by="confidence")
         sql = mock_cursor.execute.call_args[0][0]
         assert "CASE confidence" in sql
+
+
+class TestStrategyState:
+    def test_insert_strategy_state(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_strategy_state
+        result = insert_strategy_state(
+            identity_text="Momentum-focused trader",
+            risk_posture="moderate",
+            sector_biases={"tech": "overweight"},
+            preferred_signals=["earnings"],
+            avoided_signals=["legal"],
+            version=1,
+        )
+        assert result == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO strategy_state" in sql
+
+    def test_get_current_strategy_state(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1, "identity_text": "test", "is_current": True}
+        from v2.database.trading_db import get_current_strategy_state
+        result = get_current_strategy_state()
+        assert result is not None
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "is_current = TRUE" in sql
+
+    def test_get_current_strategy_state_none(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = None
+        from v2.database.trading_db import get_current_strategy_state
+        result = get_current_strategy_state()
+        assert result is None
+
+    def test_clear_current_strategy_state(self, mock_db, mock_cursor):
+        from v2.database.trading_db import clear_current_strategy_state
+        clear_current_strategy_state()
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE strategy_state" in sql
+        assert "is_current = FALSE" in sql
+
+
+class TestStrategyRules:
+    def test_insert_strategy_rule(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_strategy_rule
+        result = insert_strategy_rule(
+            rule_text="Fade legal news signals",
+            category="news_signal:legal",
+            direction="constraint",
+            confidence=0.8,
+            supporting_evidence="38% win rate over 12 trades",
+        )
+        assert result == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO strategy_rules" in sql
+
+    def test_get_active_strategy_rules(self, mock_db, mock_cursor):
+        mock_cursor.fetchall.return_value = [{"id": 1, "rule_text": "test", "status": "active"}]
+        from v2.database.trading_db import get_active_strategy_rules
+        result = get_active_strategy_rules()
+        assert len(result) == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "status = 'active'" in sql
+
+    def test_retire_strategy_rule(self, mock_db, mock_cursor):
+        mock_cursor.rowcount = 1
+        from v2.database.trading_db import retire_strategy_rule
+        result = retire_strategy_rule(rule_id=1)
+        assert result is True
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "status = 'retired'" in sql
+        assert "retired_at" in sql
+
+    def test_retire_strategy_rule_not_found(self, mock_db, mock_cursor):
+        mock_cursor.rowcount = 0
+        from v2.database.trading_db import retire_strategy_rule
+        result = retire_strategy_rule(rule_id=999)
+        assert result is False
+
+
+class TestStrategyMemos:
+    def test_insert_strategy_memo(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_strategy_memo
+        result = insert_strategy_memo(
+            session_date="2026-02-15",
+            memo_type="reflection",
+            content="Today we learned...",
+            strategy_state_id=1,
+        )
+        assert result == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO strategy_memos" in sql
+
+    def test_get_recent_strategy_memos(self, mock_db, mock_cursor):
+        mock_cursor.fetchall.return_value = [{"id": 1, "content": "test"}]
+        from v2.database.trading_db import get_recent_strategy_memos
+        result = get_recent_strategy_memos(n=5)
+        assert len(result) == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "LIMIT" in sql
+        assert "ORDER BY" in sql

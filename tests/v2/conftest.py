@@ -180,3 +180,51 @@ def make_playbook_action_row(**kwargs):
     }
     defaults.update(kwargs)
     return defaults
+
+
+def make_strategy_state_row(**kwargs):
+    """Create a strategy_state dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "identity_text": "Momentum-focused trader favoring earnings signals",
+        "risk_posture": "moderate",
+        "sector_biases": {"tech": "overweight"},
+        "preferred_signals": ["earnings", "fed"],
+        "avoided_signals": ["legal"],
+        "version": 1,
+        "is_current": True,
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_strategy_rule_row(**kwargs):
+    """Create a strategy_rules dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "rule_text": "Fade legal news signals — 38% win rate over 12 trades",
+        "category": "news_signal:legal",
+        "direction": "constraint",
+        "confidence": Decimal("0.80"),
+        "supporting_evidence": "Historical win rate below 40% across 12 decisions",
+        "status": "active",
+        "created_at": datetime.now(),
+        "retired_at": None,
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_strategy_memo_row(**kwargs):
+    """Create a strategy_memos dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "session_date": date.today(),
+        "memo_type": "reflection",
+        "content": "Today's session showed strong performance in tech earnings plays.",
+        "strategy_state_id": 1,
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults

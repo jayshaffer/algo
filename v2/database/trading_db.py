@@ -431,3 +431,75 @@ def get_signal_attribution() -> list:
     with get_cursor() as cur:
         cur.execute("SELECT * FROM signal_attribution ORDER BY sample_size DESC")
         return cur.fetchall()
+
+
+# --- Strategy State ---
+
+def insert_strategy_state(identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version) -> int:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO strategy_state (identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (identity_text, risk_posture, Json(sector_biases), Json(preferred_signals), Json(avoided_signals), version))
+        return cur.fetchone()["id"]
+
+
+def get_current_strategy_state() -> dict | None:
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM strategy_state WHERE is_current = TRUE LIMIT 1")
+        return cur.fetchone()
+
+
+def clear_current_strategy_state():
+    with get_cursor() as cur:
+        cur.execute("UPDATE strategy_state SET is_current = FALSE WHERE is_current = TRUE")
+
+
+# --- Strategy Rules ---
+
+def insert_strategy_rule(rule_text, category, direction, confidence, supporting_evidence=None) -> int:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO strategy_rules (rule_text, category, direction, confidence, supporting_evidence)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, (rule_text, category, direction, confidence, supporting_evidence))
+        return cur.fetchone()["id"]
+
+
+def get_active_strategy_rules() -> list:
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM strategy_rules WHERE status = 'active' ORDER BY created_at DESC")
+        return cur.fetchall()
+
+
+def retire_strategy_rule(rule_id) -> bool:
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE strategy_rules SET status = 'retired', retired_at = NOW()
+            WHERE id = %s AND status = 'active'
+        """, (rule_id,))
+        return cur.rowcount > 0
+
+
+# --- Strategy Memos ---
+
+def insert_strategy_memo(session_date, memo_type, content, strategy_state_id=None) -> int:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO strategy_memos (session_date, memo_type, content, strategy_state_id)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (session_date, memo_type, content, strategy_state_id))
+        return cur.fetchone()["id"]
+
+
+def get_recent_strategy_memos(n=5) -> list:
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM strategy_memos
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (n,))
+        return cur.fetchall()
