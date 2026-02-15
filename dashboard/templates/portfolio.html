@@ -60,6 +60,57 @@
     </div>
 </div>
 
+<!-- Open Orders -->
+<div class="bg-white rounded-lg shadow mt-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Open Orders</h2>
+    </div>
+    <div class="p-4">
+        {% if open_orders %}
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Ticker</th>
+                    <th class="pb-2">Side</th>
+                    <th class="pb-2">Type</th>
+                    <th class="pb-2">Qty</th>
+                    <th class="pb-2">Filled</th>
+                    <th class="pb-2">Limit Price</th>
+                    <th class="pb-2">Stop Price</th>
+                    <th class="pb-2">Status</th>
+                    <th class="pb-2">Submitted</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for o in open_orders %}
+                <tr class="border-t">
+                    <td class="py-2 font-semibold">{{ o.ticker }}</td>
+                    <td class="py-2">
+                        <span class="px-2 py-0.5 rounded text-sm {% if o.side == 'buy' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+                            {{ o.side|upper }}
+                        </span>
+                    </td>
+                    <td class="py-2 text-sm">{{ o.order_type }}</td>
+                    <td class="py-2">{{ o.qty }}</td>
+                    <td class="py-2">{{ o.filled_qty }}</td>
+                    <td class="py-2">{{ "$%.2f"|format(o.limit_price|float) if o.limit_price else '-' }}</td>
+                    <td class="py-2">{{ "$%.2f"|format(o.stop_price|float) if o.stop_price else '-' }}</td>
+                    <td class="py-2">
+                        <span class="px-2 py-0.5 rounded text-sm {% if o.status == 'partially_filled' %}bg-yellow-100 text-yellow-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                            {{ o.status }}
+                        </span>
+                    </td>
+                    <td class="py-2 text-gray-500 text-sm">{{ o.submitted_at.strftime('%Y-%m-%d %H:%M') if o.submitted_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No open orders</p>
+        {% endif %}
+    </div>
+</div>
+
 <!-- Today's Playbook -->
 {% if playbook %}
 <div class="bg-white rounded-lg shadow mt-6">

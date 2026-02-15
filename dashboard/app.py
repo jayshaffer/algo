@@ -5,13 +5,16 @@ from flask import Flask, render_template, jsonify, request
 from queries import (
     get_positions,
     get_latest_snapshot,
+    get_open_orders,
     get_today_playbook,
+    get_playbook_actions,
     get_signal_attribution,
     get_recent_ticker_signals,
     get_recent_macro_signals,
     get_signal_summary,
     get_recent_decisions,
     get_decision_stats,
+    get_decision_signal_refs_batch,
     get_equity_curve,
     get_performance_metrics,
     get_thesis_stats,
@@ -28,12 +31,14 @@ def portfolio():
     positions = get_positions()
     snapshot = get_latest_snapshot()
     playbook = get_today_playbook()
+    open_orders = get_open_orders()
 
     return render_template(
         "portfolio.html",
         positions=positions,
         snapshot=snapshot,
         playbook=playbook,
+        open_orders=open_orders,
     )
 
 
@@ -41,7 +46,8 @@ def portfolio():
 def playbook():
     """Today's playbook view."""
     today = get_today_playbook()
-    return render_template("playbook.html", playbook=today)
+    actions = get_playbook_actions(today['id']) if today else []
+    return render_template("playbook.html", playbook=today, actions=actions)
 
 
 @app.route("/attribution")
@@ -89,11 +95,14 @@ def decisions():
     """Decision history page."""
     recent_decisions = get_recent_decisions(days=30, limit=50)
     stats = get_decision_stats(days=30)
+    decision_ids = [d['id'] for d in recent_decisions] if recent_decisions else []
+    signal_refs = get_decision_signal_refs_batch(decision_ids)
 
     return render_template(
         "decisions.html",
         decisions=recent_decisions,
         stats=stats,
+        signal_refs=signal_refs,
     )
 
 

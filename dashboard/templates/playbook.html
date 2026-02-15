@@ -34,29 +34,51 @@
         <h2 class="text-lg font-semibold">Priority Actions</h2>
     </div>
     <div class="p-4">
-        {% if playbook.priority_actions %}
+        {% if actions %}
         <table class="w-full">
             <thead>
                 <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">#</th>
                     <th class="pb-2">Ticker</th>
                     <th class="pb-2">Action</th>
+                    <th class="pb-2">Thesis</th>
                     <th class="pb-2">Reasoning</th>
                     <th class="pb-2">Max Qty</th>
                     <th class="pb-2">Confidence</th>
                 </tr>
             </thead>
             <tbody>
-                {% for action in playbook.priority_actions %}
+                {% for action in actions %}
                 <tr class="border-t">
+                    <td class="py-2 text-gray-500">{{ action.priority or '-' }}</td>
                     <td class="py-2 font-semibold">{{ action.ticker }}</td>
                     <td class="py-2">
                         <span class="px-2 py-0.5 rounded text-sm {% if action.action == 'buy' %}bg-green-100 text-green-800{% elif action.action == 'sell' %}bg-red-100 text-red-800{% else %}bg-gray-100 text-gray-800{% endif %}">
                             {{ action.action }}
                         </span>
                     </td>
+                    <td class="py-2 text-sm">
+                        {% if action.thesis_id %}
+                        <a href="/theses?status=all" class="text-blue-600 hover:underline">
+                            {{ action.thesis_direction|upper if action.thesis_direction else '' }} #{{ action.thesis_id }}
+                        </a>
+                        {% else %}
+                        <span class="text-gray-400">-</span>
+                        {% endif %}
+                    </td>
                     <td class="py-2 text-sm">{{ action.reasoning }}</td>
                     <td class="py-2">{{ action.max_quantity }}</td>
-                    <td class="py-2 text-sm">{{ "%.0f%%"|format(action.confidence * 100) if action.confidence else '-' }}</td>
+                    <td class="py-2 text-sm">
+                        {% if action.confidence == 'high' %}
+                        <span class="px-2 py-0.5 rounded bg-green-100 text-green-800">high</span>
+                        {% elif action.confidence == 'medium' %}
+                        <span class="px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">medium</span>
+                        {% elif action.confidence == 'low' %}
+                        <span class="px-2 py-0.5 rounded bg-gray-100 text-gray-800">low</span>
+                        {% else %}
+                        <span class="text-gray-400">-</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

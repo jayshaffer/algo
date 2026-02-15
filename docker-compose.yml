@@ -29,7 +29,7 @@ services:
       retries: 5
 
   trading:
-    build: ./trading
+    build: ./v2
     depends_on:
       ollama:
         condition: service_started

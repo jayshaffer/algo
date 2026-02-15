@@ -288,6 +288,8 @@ def make_decision_row(**kwargs):
         "buying_power": Decimal("50000"),
         "outcome_7d": Decimal("2.5"),
         "outcome_30d": Decimal("5.0"),
+        "is_off_playbook": False,
+        "playbook_action_id": None,
     }
     defaults.update(kwargs)
     return defaults
@@ -368,6 +370,46 @@ def make_attribution_row(**kwargs):
         "win_rate_7d": Decimal("0.62"),
         "win_rate_30d": Decimal("0.55"),
         "updated_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_open_order_row(**kwargs):
+    """Create an open order dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "order_id": "order-abc-123",
+        "ticker": "AAPL",
+        "side": "buy",
+        "order_type": "limit",
+        "qty": Decimal("10"),
+        "filled_qty": Decimal("0"),
+        "limit_price": Decimal("150.00"),
+        "stop_price": None,
+        "status": "new",
+        "submitted_at": datetime.now() - timedelta(hours=1),
+        "updated_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_playbook_action_row(**kwargs):
+    """Create a playbook action dict with thesis join fields like what DB returns."""
+    defaults = {
+        "id": 1,
+        "playbook_id": 1,
+        "ticker": "NVDA",
+        "action": "buy",
+        "thesis_id": 1,
+        "reasoning": "Entry trigger hit",
+        "confidence": "high",
+        "max_quantity": Decimal("5"),
+        "priority": 1,
+        "created_at": datetime.now(),
+        "thesis_text": "Strong fundamentals and AI demand",
+        "thesis_direction": "long",
     }
     defaults.update(kwargs)
     return defaults
