@@ -21,6 +21,7 @@ from .pipeline import PipelineStats, run_pipeline, check_dependencies
 from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .agent import DEFAULT_EXECUTOR_MODEL
 from .trader import TradingSessionResult, run_trading_session
+from .twitter import TwitterStageResult, run_twitter_stage
 
 logger = logging.getLogger("session")
 
@@ -32,13 +33,16 @@ class SessionResult:
     pipeline_result: Optional[PipelineStats] = None
     strategist_result: Optional[ClaudeIdeationResult] = None
     trading_result: Optional[TradingSessionResult] = None
+    twitter_result: Optional[TwitterStageResult] = None
 
     pipeline_error: Optional[str] = None
     strategist_error: Optional[str] = None
     trading_error: Optional[str] = None
+    twitter_error: Optional[str] = None
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False
+    skipped_twitter: bool = False
 
     duration_seconds: float = 0.0
 
@@ -54,6 +58,7 @@ def run_session(
     max_turns: int = 25,
     skip_pipeline: bool = False,
     skip_ideation: bool = False,
+    skip_twitter: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
 ) -> SessionResult:
@@ -87,6 +92,7 @@ def run_session(
     result = SessionResult(
         skipped_pipeline=skip_pipeline,
         skipped_ideation=skip_ideation,
+        skipped_twitter=skip_twitter,
     )
 
     logger.info(
@@ -159,6 +165,17 @@ def run_session(
         result.trading_error = str(e)
         logger.error("Trading session failed: %s", e)
 
+    # Stage 4: Twitter (Bikini Bottom Capital)
+    if skip_twitter:
+        logger.info("[Stage 4] Twitter — SKIPPED")
+    else:
+        logger.info("[Stage 4] Posting to Twitter")
+        try:
+            result.twitter_result = run_twitter_stage()
+        except Exception as e:
+            result.twitter_error = str(e)
+            logger.error("Twitter stage failed: %s", e)
+
     result.duration_seconds = time.monotonic() - start
 
     # Summary
@@ -173,6 +190,8 @@ def run_session(
             logger.error("  Trading error: %s", result.trading_error)
     else:
         logger.info("  All stages completed successfully")
+    if result.twitter_error:
+        logger.warning("  Twitter error: %s", result.twitter_error)
     logger.info("=" * 60)
 
     return result
@@ -189,6 +208,7 @@ def main():
     parser.add_argument("--max-turns", type=int, default=25, help="Max strategist conversation turns")
     parser.add_argument("--skip-pipeline", action="store_true", help="Skip news pipeline stage")
     parser.add_argument("--skip-ideation", action="store_true", help="Skip strategist stage")
+    parser.add_argument("--skip-twitter", action="store_true", help="Skip Twitter posting stage")
     parser.add_argument("--pipeline-hours", type=int, default=24, help="Hours of news to fetch")
 
     args = parser.parse_args()
@@ -200,6 +220,7 @@ def main():
         max_turns=args.max_turns,
         skip_pipeline=args.skip_pipeline,
         skip_ideation=args.skip_ideation,
+        skip_twitter=args.skip_twitter,
         pipeline_hours=args.pipeline_hours,
     )
 
