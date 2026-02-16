@@ -71,14 +71,18 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
     with db.get_cursor() as cur:
         # Decisions for today
         cur.execute(
-            "SELECT ticker, action, quantity, reasoning FROM decisions WHERE date = %s ORDER BY id",
+            "SELECT ticker, action, quantity, price, reasoning FROM decisions WHERE date = %s ORDER BY id",
             (session_date,),
         )
         decisions = cur.fetchall()
         if decisions:
             lines = ["TODAY'S DECISIONS:"]
             for d in decisions:
-                lines.append(f"  {d['action'].upper()} {d['quantity']} {d['ticker']} - {d['reasoning']}")
+                qty = d['quantity']
+                if d.get('price'):
+                    lines.append(f"  {d['action'].upper()} {qty} {d['ticker']} @ ${d['price']}: {d['reasoning']}")
+                else:
+                    lines.append(f"  {d['action'].upper()} {qty} {d['ticker']}: {d['reasoning']}")
             sections.append("\n".join(lines))
 
         # Current positions
@@ -130,15 +134,13 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
 # Tweet generation (Ollama)
 # ---------------------------------------------------------------------------
 
-MR_KRABS_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running a hedge fund called Bikini Bottom Capital.
+MR_KRABS_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
 
 Your personality:
 - Obsessed with money and profits above all else
 - Use nautical language and sea metaphors naturally
 - Dramatically emotional about P&L — ecstatic about gains, devastated about losses
-- Paranoid that competitors (especially Plankton) are trying to steal your secret trading formula
-- Refer to your portfolio as "me treasure" and losses as "money overboard"
-- Occasionally mention your crew (SpongeBob, Squidward) in trading context
+- Paranoid that competitors are trying to steal your secret trading formula
 
 Generate tweets based on the trading session context provided. Each tweet must be a standalone post suitable for Twitter/X.
 
@@ -150,14 +152,15 @@ Rules:
 - Make them entertaining but grounded in the actual trading data
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
 - Vary the tweet types: session recaps, individual trade callouts, thesis commentary, market color
-- Generate 2-4 tweets per session"""
+- Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
 
 
-def generate_tweets(context: str) -> list[dict]:
+def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:
     """Generate tweets from session context using Ollama.
 
     Args:
         context: Plain-text session summary from gather_tweet_context().
+        model: Ollama model name to use for generation.
 
     Returns:
         List of dicts with 'text' and 'type' keys. Empty list on error.
@@ -166,6 +169,7 @@ def generate_tweets(context: str) -> list[dict]:
         result = chat_json(
             prompt=context,
             system=MR_KRABS_SYSTEM_PROMPT,
+            model=model,
         )
     except Exception as e:
         logger.error("Failed to generate tweets: %s", e)
@@ -181,7 +185,9 @@ def generate_tweets(context: str) -> list[dict]:
     for t in tweets:
         if not isinstance(t, dict) or "text" not in t:
             continue
-        text = t["text"][:280]
+        text = t["text"]
+        if len(text) > 280:
+            text = text[:277] + "..."
         tweet_type = t.get("type", "commentary")
         cleaned.append({"text": text, "type": tweet_type})
 
@@ -231,17 +237,19 @@ def post_tweets(tweets: list[dict]) -> list[dict]:
     client = get_twitter_client()
     if client is None:
         return [
-            {"text": t["text"], "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
+            {"text": t["text"], "type": t.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
             for t in tweets
         ]
 
     results = []
     for tweet in tweets:
+        tweet_type = tweet.get("type", "commentary")
         try:
             response = client.create_tweet(text=tweet["text"])
             tweet_id = str(response.data["id"])
             results.append({
                 "text": tweet["text"],
+                "type": tweet_type,
                 "posted": True,
                 "tweet_id": tweet_id,
                 "error": None,
@@ -251,6 +259,7 @@ def post_tweets(tweets: list[dict]) -> list[dict]:
             logger.error("Failed to post tweet: %s", e)
             results.append({
                 "text": tweet["text"],
+                "type": tweet_type,
                 "posted": False,
                 "tweet_id": None,
                 "error": str(e),
@@ -325,17 +334,10 @@ def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult
 
     # Log results to DB
     for pr in post_results:
-        tweet_type = "commentary"
-        # Find the matching tweet type from generated tweets
-        for t in tweets:
-            if t["text"] == pr["text"]:
-                tweet_type = t.get("type", "commentary")
-                break
-
         try:
             insert_tweet(
                 session_date=session_date,
-                tweet_type=tweet_type,
+                tweet_type=pr.get("type", "commentary"),
                 tweet_text=pr["text"],
                 tweet_id=pr.get("tweet_id"),
                 posted=pr["posted"],

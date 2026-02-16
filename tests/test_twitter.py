@@ -100,8 +100,8 @@ class TestGatherTweetContext:
     def test_full_context(self, mock_db):
         """All five queries return data."""
         mock_db.fetchall.side_effect = [
-            # decisions
-            [{"ticker": "AAPL", "action": "buy", "quantity": Decimal("10"), "reasoning": "Earnings beat"}],
+            # decisions (now includes price column)
+            [{"ticker": "AAPL", "action": "buy", "quantity": Decimal("10"), "price": Decimal("185.50"), "reasoning": "Earnings beat"}],
             # positions
             [{"ticker": "AAPL", "shares": Decimal("50"), "avg_cost": Decimal("150.00")}],
             # theses
@@ -116,12 +116,30 @@ class TestGatherTweetContext:
 
         context = gather_tweet_context(date(2026, 2, 15))
 
-        assert "BUY 10 AAPL" in context
+        assert "BUY 10 AAPL @ $185.50" in context
         assert "Earnings beat" in context
         assert "AAPL: 50 shares @ $150.00" in context
         assert "NVDA (long, high): AI demand" in context
         assert "portfolio=$150000" in context
         assert "Stay bullish on tech" in context
+
+        # Verify the decisions query includes price
+        decisions_sql = mock_db.execute.call_args_list[0][0][0]
+        assert "price" in decisions_sql
+
+    def test_decision_without_price(self, mock_db):
+        """Decision with no price omits the @ clause."""
+        mock_db.fetchall.side_effect = [
+            [{"ticker": "AAPL", "action": "sell", "quantity": Decimal("5"), "price": None, "reasoning": "Taking profits"}],
+            [],  # positions
+            [],  # theses
+        ]
+        mock_db.fetchone.side_effect = [None, None]
+
+        context = gather_tweet_context(date(2026, 2, 15))
+
+        assert "SELL 5 AAPL: Taking profits" in context
+        assert "@" not in context
 
     def test_empty_data(self, mock_db):
         """All queries return nothing."""
@@ -193,6 +211,17 @@ class TestGenerateTweets:
         call_kwargs = mock_chat.call_args
         assert "Mr. Krabs" in call_kwargs.kwargs.get("system", call_kwargs[1].get("system", ""))
 
+        # Verify default model is passed
+        assert call_kwargs.kwargs.get("model") == "qwen2.5:14b"
+
+    @patch("trading.twitter.chat_json")
+    def test_custom_model(self, mock_chat):
+        mock_chat.return_value = {"tweets": [{"text": "Test", "type": "recap"}]}
+        generate_tweets("context", model="llama3:8b")
+
+        call_kwargs = mock_chat.call_args
+        assert call_kwargs.kwargs.get("model") == "llama3:8b"
+
     @patch("trading.twitter.chat_json")
     def test_system_prompt_content(self, mock_chat):
         mock_chat.return_value = {"tweets": []}
@@ -201,8 +230,17 @@ class TestGenerateTweets:
         call_kwargs = mock_chat.call_args
         system = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system")
         assert "Bikini Bottom Capital" in system
+        assert "algorithmic trading operation" in system
         assert "280" in system
         assert "JSON" in system
+        # Canned phrases and character names should not be prescribed
+        assert "me treasure" not in system
+        assert "money overboard" not in system
+        assert "Plankton" not in system
+        assert "Squidward" not in system
+        assert "hedge fund" not in system
+        # Should not tell model to mention specific crew members
+        assert "mention" not in system.lower() or "crew" not in system.lower()
 
     @patch("trading.twitter.chat_json")
     def test_truncates_long_tweets(self, mock_chat):
@@ -214,6 +252,19 @@ class TestGenerateTweets:
         result = generate_tweets("context")
         assert len(result) == 1
         assert len(result[0]["text"]) == 280
+        assert result[0]["text"].endswith("...")
+        assert result[0]["text"] == "A" * 277 + "..."
+
+    @patch("trading.twitter.chat_json")
+    def test_does_not_truncate_short_tweets(self, mock_chat):
+        short_text = "A" * 280
+        mock_chat.return_value = {
+            "tweets": [{"text": short_text, "type": "recap"}]
+        }
+
+        result = generate_tweets("context")
+        assert result[0]["text"] == short_text
+        assert "..." not in result[0]["text"]
 
     @patch("trading.twitter.chat_json")
     def test_handles_empty_response(self, mock_chat):
@@ -322,6 +373,7 @@ class TestPostTweets:
         assert results[0]["posted"] is True
         assert results[0]["tweet_id"] == "12345"
         assert results[0]["error"] is None
+        assert results[0]["type"] == "recap"
         mock_client.create_tweet.assert_called_once_with(text="Hello from Bikini Bottom!")
 
     @patch("trading.twitter.get_twitter_client")
@@ -337,6 +389,7 @@ class TestPostTweets:
         assert results[0]["posted"] is False
         assert results[0]["tweet_id"] is None
         assert "Rate limit" in results[0]["error"]
+        assert results[0]["type"] == "recap"
 
     @patch("trading.twitter.get_twitter_client")
     def test_continues_after_failure(self, mock_get_client):
@@ -369,6 +422,7 @@ class TestPostTweets:
         assert len(results) == 1
         assert results[0]["posted"] is False
         assert "No Twitter credentials" in results[0]["error"]
+        assert results[0]["type"] == "recap"
 
     @patch("trading.twitter.get_twitter_client")
     def test_multiple_tweets_posted(self, mock_get_client):
@@ -411,8 +465,8 @@ class TestRunTwitterStage:
             {"text": "Portfolio is looking good!", "type": "recap"},
         ]
         mock_post.return_value = [
-            {"text": "Ahoy! Bought $AAPL!", "posted": True, "tweet_id": "111", "error": None},
-            {"text": "Portfolio is looking good!", "posted": True, "tweet_id": "222", "error": None},
+            {"text": "Ahoy! Bought $AAPL!", "type": "trade", "posted": True, "tweet_id": "111", "error": None},
+            {"text": "Portfolio is looking good!", "type": "recap", "posted": True, "tweet_id": "222", "error": None},
         ]
 
         result = run_twitter_stage(date(2026, 2, 15))
@@ -423,6 +477,10 @@ class TestRunTwitterStage:
         assert result.skipped is False
         assert result.errors == []
         assert mock_insert.call_count == 2
+
+        # Verify tweet_type comes from post_results (not text-matching workaround)
+        first_insert_kwargs = mock_insert.call_args_list[0]
+        assert first_insert_kwargs.kwargs.get("tweet_type") or first_insert_kwargs[1].get("tweet_type") == "trade"
 
     @patch("trading.twitter.get_twitter_client")
     def test_skips_without_credentials(self, mock_client):
@@ -446,8 +504,8 @@ class TestRunTwitterStage:
             {"text": "Tweet 2", "type": "trade"},
         ]
         mock_post.return_value = [
-            {"text": "Tweet 1", "posted": True, "tweet_id": "111", "error": None},
-            {"text": "Tweet 2", "posted": False, "tweet_id": None, "error": "Rate limit"},
+            {"text": "Tweet 1", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
+            {"text": "Tweet 2", "type": "trade", "posted": False, "tweet_id": None, "error": "Rate limit"},
         ]
 
         result = run_twitter_stage(date(2026, 2, 15))
@@ -491,7 +549,7 @@ class TestRunTwitterStage:
         mock_context.return_value = "context"
         mock_generate.return_value = [{"text": "Tweet", "type": "recap"}]
         mock_post.return_value = [
-            {"text": "Tweet", "posted": True, "tweet_id": "111", "error": None},
+            {"text": "Tweet", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
         ]
         mock_insert.side_effect = Exception("DB write failed")
 
