@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -313,17 +313,19 @@ class TestGenerateTweets:
 class TestGetTwitterClient:
     """Verify get_twitter_client credential handling."""
 
-    @patch("trading.twitter.tweepy")
-    def test_returns_client_with_creds(self, mock_tweepy, monkeypatch):
+    def test_returns_client_with_creds(self, monkeypatch):
         monkeypatch.setenv("TWITTER_API_KEY", "key")
         monkeypatch.setenv("TWITTER_API_SECRET", "secret")
         monkeypatch.setenv("TWITTER_ACCESS_TOKEN", "token")
         monkeypatch.setenv("TWITTER_ACCESS_TOKEN_SECRET", "token_secret")
 
+        mock_tweepy = MagicMock()
         mock_client = MagicMock()
         mock_tweepy.Client.return_value = mock_client
 
-        client = get_twitter_client()
+        with patch.dict("sys.modules", {"tweepy": mock_tweepy}):
+            client = get_twitter_client()
+
         assert client is mock_client
         mock_tweepy.Client.assert_called_once_with(
             consumer_key="key",
@@ -480,7 +482,8 @@ class TestRunTwitterStage:
 
         # Verify tweet_type comes from post_results (not text-matching workaround)
         first_insert_kwargs = mock_insert.call_args_list[0]
-        assert first_insert_kwargs.kwargs.get("tweet_type") or first_insert_kwargs[1].get("tweet_type") == "trade"
+        tweet_type = first_insert_kwargs.kwargs.get("tweet_type") or first_insert_kwargs[1].get("tweet_type")
+        assert tweet_type == "trade"
 
     @patch("trading.twitter.get_twitter_client")
     def test_skips_without_credentials(self, mock_client):

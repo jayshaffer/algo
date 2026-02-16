@@ -10,8 +10,6 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional
 
-import tweepy
-
 from . import db
 from .ollama import chat_json
 
@@ -198,7 +196,7 @@ def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:
 # Twitter client + posting
 # ---------------------------------------------------------------------------
 
-def get_twitter_client() -> Optional[tweepy.Client]:
+def get_twitter_client():
     """Create a tweepy Client from environment variables.
 
     Required env vars:
@@ -206,8 +204,15 @@ def get_twitter_client() -> Optional[tweepy.Client]:
         TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET
 
     Returns:
-        tweepy.Client if all credentials are present, None otherwise.
+        tweepy.Client if all credentials are present and tweepy is installed,
+        None otherwise.
     """
+    try:
+        import tweepy
+    except ImportError:
+        logger.warning("tweepy not installed — skipping Twitter")
+        return None
+
     api_key = os.environ.get("TWITTER_API_KEY")
     api_secret = os.environ.get("TWITTER_API_SECRET")
     access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
@@ -225,16 +230,18 @@ def get_twitter_client() -> Optional[tweepy.Client]:
     )
 
 
-def post_tweets(tweets: list[dict]) -> list[dict]:
+def post_tweets(tweets: list[dict], client=None) -> list[dict]:
     """Post a list of tweets via the Twitter API.
 
     Args:
         tweets: List of dicts with at least a 'text' key.
+        client: Optional tweepy Client. If None, creates one from env vars.
 
     Returns:
         List of result dicts with 'text', 'posted', 'tweet_id', 'error' fields.
     """
-    client = get_twitter_client()
+    if client is None:
+        client = get_twitter_client()
     if client is None:
         return [
             {"text": t["text"], "type": t.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
@@ -297,7 +304,8 @@ def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult
     result = TwitterStageResult()
 
     # Check credentials early
-    if get_twitter_client() is None:
+    client = get_twitter_client()
+    if client is None:
         result.skipped = True
         logger.info("Twitter stage skipped — no credentials")
         return result
@@ -326,7 +334,7 @@ def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult
 
     # Post tweets
     try:
-        post_results = post_tweets(tweets)
+        post_results = post_tweets(tweets, client=client)
     except Exception as e:
         result.errors.append(f"Tweet posting failed: {e}")
         logger.error("Failed to post tweets: %s", e)
