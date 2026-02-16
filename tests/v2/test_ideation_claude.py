@@ -175,3 +175,8 @@ class TestSystemPrompts:
         assert "before market close" in CLAUDE_SESSION_STRATEGIST_SYSTEM or \
                "after market close" in CLAUDE_SESSION_STRATEGIST_SYSTEM or \
                "strategist" in CLAUDE_SESSION_STRATEGIST_SYSTEM.lower()
+
+    def test_strategist_prompt_mentions_strategy_tools(self):
+        assert "get_strategy_identity" in CLAUDE_STRATEGIST_SYSTEM
+        assert "get_strategy_rules" in CLAUDE_STRATEGIST_SYSTEM
+        assert "get_strategy_history" in CLAUDE_STRATEGIST_SYSTEM

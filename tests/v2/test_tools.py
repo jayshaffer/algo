@@ -248,7 +248,7 @@ class TestCreateThesis:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 11 handler functions."""
+        """TOOL_HANDLERS should have all 14 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -261,12 +261,15 @@ class TestToolCompleteness:
             "get_signal_attribution",
             "get_decision_history",
             "write_playbook",
+            "get_strategy_identity",
+            "get_strategy_rules",
+            "get_strategy_history",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 12 entries (11 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 12
+        """TOOL_DEFINITIONS should have 15 entries (14 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 15
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -285,6 +288,9 @@ class TestToolCompleteness:
             "get_signal_attribution",
             "get_decision_history",
             "write_playbook",
+            "get_strategy_identity",
+            "get_strategy_rules",
+            "get_strategy_history",
         }
         assert tool_names == expected_names
 
@@ -300,3 +306,73 @@ class TestToolCompleteness:
             if name == "web_search":
                 continue
             assert name in TOOL_HANDLERS, f"No handler for tool definition '{name}'"
+
+
+# --- Strategy tool tests ---
+
+from tests.v2.conftest import make_strategy_state_row, make_strategy_rule_row, make_strategy_memo_row
+
+
+class TestGetStrategyIdentity:
+    @patch("v2.tools.get_current_strategy_state")
+    def test_returns_formatted_identity(self, mock_get):
+        from v2.tools import tool_get_strategy_identity
+        mock_get.return_value = make_strategy_state_row()
+        result = tool_get_strategy_identity()
+        assert "Momentum-focused" in result
+        assert "moderate" in result
+
+    @patch("v2.tools.get_current_strategy_state")
+    def test_returns_null_message_when_empty(self, mock_get):
+        from v2.tools import tool_get_strategy_identity
+        mock_get.return_value = None
+        result = tool_get_strategy_identity()
+        assert "No strategy identity" in result
+
+
+class TestGetStrategyRules:
+    @patch("v2.tools.get_active_strategy_rules")
+    def test_returns_formatted_rules(self, mock_get):
+        from v2.tools import tool_get_strategy_rules
+        mock_get.return_value = [make_strategy_rule_row()]
+        result = tool_get_strategy_rules()
+        assert "Fade legal" in result
+        assert "constraint" in result
+
+    @patch("v2.tools.get_active_strategy_rules")
+    def test_returns_empty_message(self, mock_get):
+        from v2.tools import tool_get_strategy_rules
+        mock_get.return_value = []
+        result = tool_get_strategy_rules()
+        assert "No active" in result
+
+
+class TestGetStrategyHistory:
+    @patch("v2.tools.get_recent_strategy_memos")
+    def test_returns_formatted_memos(self, mock_get):
+        from v2.tools import tool_get_strategy_history
+        mock_get.return_value = [make_strategy_memo_row()]
+        result = tool_get_strategy_history(n=5)
+        assert "reflection" in result
+
+    @patch("v2.tools.get_recent_strategy_memos")
+    def test_returns_empty_message(self, mock_get):
+        from v2.tools import tool_get_strategy_history
+        mock_get.return_value = []
+        result = tool_get_strategy_history(n=5)
+        assert "No strategy" in result
+
+
+class TestStrategyToolDefinitions:
+    def test_strategy_tools_in_definitions(self):
+        from v2.tools import TOOL_DEFINITIONS
+        names = [d.get("name") for d in TOOL_DEFINITIONS]
+        assert "get_strategy_identity" in names
+        assert "get_strategy_rules" in names
+        assert "get_strategy_history" in names
+
+    def test_strategy_tools_in_handlers(self):
+        from v2.tools import TOOL_HANDLERS
+        assert "get_strategy_identity" in TOOL_HANDLERS
+        assert "get_strategy_rules" in TOOL_HANDLERS
+        assert "get_strategy_history" in TOOL_HANDLERS

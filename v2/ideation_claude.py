@@ -73,6 +73,9 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
    - Risk notes (warnings, upcoming events)
 
 ## Tool Usage
+- Use `get_strategy_identity` to understand the system's evolving trading identity
+- Use `get_strategy_rules` to see accumulated trading rules from past performance
+- Use `get_strategy_history` to review recent strategy reflection memos
 - Use `get_signal_attribution` to see which signal types have been historically predictive
 - Use `get_decision_history` to review recent trading performance
 - Use `web_search` to research current market conditions and companies

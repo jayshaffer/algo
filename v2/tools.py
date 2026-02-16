@@ -20,6 +20,9 @@ from .database.trading_db import (
     insert_playbook_action,
     delete_playbook_actions,
     get_playbook_actions,
+    get_current_strategy_state,
+    get_active_strategy_rules,
+    get_recent_strategy_memos,
 )
 
 logger = logging.getLogger(__name__)
@@ -278,6 +281,59 @@ def tool_write_playbook(
         return f"Error writing playbook: {e}"
 
 
+def tool_get_strategy_identity() -> str:
+    """Get the system's current strategy identity."""
+    logger.info("Getting strategy identity")
+    state = get_current_strategy_state()
+    if state is None:
+        return "No strategy identity established yet. This is the first session."
+
+    lines = [
+        f"Strategy Identity (v{state['version']}, updated {state['created_at'].strftime('%Y-%m-%d')}):",
+        f"  Identity: {state['identity_text']}",
+        f"  Risk Posture: {state['risk_posture']}",
+        f"  Sector Biases: {state['sector_biases']}",
+        f"  Preferred Signals: {state['preferred_signals']}",
+        f"  Avoided Signals: {state['avoided_signals']}",
+    ]
+    return "\n".join(lines)
+
+
+def tool_get_strategy_rules() -> str:
+    """Get all active strategy rules."""
+    logger.info("Getting strategy rules")
+    rules = get_active_strategy_rules()
+    if not rules:
+        return "No active strategy rules yet."
+
+    lines = []
+    for r in rules:
+        lines.append(
+            f"Rule {r['id']} ({r['direction']}, confidence: {r['confidence']}): "
+            f"{r['rule_text']}"
+        )
+        if r.get("supporting_evidence"):
+            lines.append(f"  Evidence: {r['supporting_evidence']}")
+        lines.append(f"  Category: {r['category']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def tool_get_strategy_history(n: int = 5) -> str:
+    """Get recent strategy memos."""
+    logger.info(f"Getting strategy history (last {n})")
+    memos = get_recent_strategy_memos(n=n)
+    if not memos:
+        return "No strategy memos yet. This is the first session."
+
+    lines = []
+    for m in memos:
+        lines.append(f"[{m['session_date']}] ({m['memo_type']}):")
+        lines.append(f"  {m['content']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # --- Tool Definitions for Claude ---
 
 TOOL_DEFINITIONS = [
@@ -525,6 +581,40 @@ TOOL_DEFINITIONS = [
             "required": ["market_outlook", "priority_actions", "watch_list", "risk_notes"],
         },
     },
+    {
+        "name": "get_strategy_identity",
+        "description": (
+            "Get the system's evolving strategy identity — who it is as a trader, "
+            "risk posture, sector biases, and preferred/avoided signal types. "
+            "Returns null if no identity has been established yet (first session)."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_strategy_rules",
+        "description": (
+            "Get all active strategy rules — accumulated lessons from past performance. "
+            "Rules are either constraints (don't do X) or preferences (favor X)."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_strategy_history",
+        "description": (
+            "Get recent strategy reflection memos — session-by-session reasoning "
+            "about what the system learned and how its strategy evolved."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {
+                    "type": "integer",
+                    "description": "Number of recent memos to retrieve (default: 5)",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -540,4 +630,7 @@ TOOL_HANDLERS = {
     "get_signal_attribution": tool_get_signal_attribution,
     "get_decision_history": tool_get_decision_history,
     "write_playbook": tool_write_playbook,
+    "get_strategy_identity": tool_get_strategy_identity,
+    "get_strategy_rules": tool_get_strategy_rules,
+    "get_strategy_history": tool_get_strategy_history,
 }
