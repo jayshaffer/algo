@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 
 from v2.session import run_session, SessionResult
 from v2.strategy import StrategyReflectionResult
+from v2.twitter import TwitterStageResult
 
 
 class TestRunSession:
@@ -202,3 +203,80 @@ class TestStage4StrategyReflection:
 
         mock_reflect.assert_not_called()
         assert result.skipped_strategy is True
+
+
+class TestStage5Twitter:
+    def test_stage_5_runs_after_strategy(self):
+        """Twitter should run after strategy reflection."""
+        call_order = []
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection") as mock_reflect, \
+             patch("v2.session.run_twitter_stage") as mock_twitter:
+
+            mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
+            mock_twitter.side_effect = lambda: call_order.append("twitter")
+
+            run_session(dry_run=True)
+
+        assert call_order.index("reflection") < call_order.index("twitter")
+
+    def test_stage_5_result_captured(self):
+        """Twitter result should be in SessionResult."""
+        mock_twitter_result = TwitterStageResult(tweets_generated=2, tweets_posted=2)
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage", return_value=mock_twitter_result):
+
+            result = run_session(dry_run=True)
+
+        assert result.twitter_result is not None
+        assert result.twitter_result.tweets_posted == 2
+
+    def test_stage_5_failure_does_not_block(self):
+        """Twitter failure should be captured but not crash."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage", side_effect=Exception("Tweepy down")):
+
+            result = run_session(dry_run=True)
+
+        assert result.twitter_error == "Tweepy down"
+        assert result.twitter_result is None
+
+    def test_stage_5_error_in_has_errors(self):
+        """Twitter error should be included in has_errors check."""
+        result = SessionResult(twitter_error="test")
+        assert result.has_errors is True
+
+    def test_skip_twitter_flag(self):
+        """Twitter should be skippable."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage") as mock_twitter:
+
+            result = run_session(dry_run=True, skip_twitter=True)
+
+        mock_twitter.assert_not_called()
+        assert result.skipped_twitter is True
