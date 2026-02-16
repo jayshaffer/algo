@@ -214,3 +214,89 @@ def post_tweets(tweets: list[dict], client=None) -> list[dict]:
             })
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TwitterStageResult:
+    """Result of the Twitter posting stage."""
+    tweets_generated: int = 0
+    tweets_posted: int = 0
+    tweets_failed: int = 0
+    skipped: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult:
+    """Run the full tweet pipeline: context -> generate -> post -> log."""
+    if session_date is None:
+        session_date = date.today()
+
+    result = TwitterStageResult()
+
+    # Check credentials early
+    client = get_twitter_client()
+    if client is None:
+        result.skipped = True
+        logger.info("Twitter stage skipped — no credentials")
+        return result
+
+    # Gather context
+    try:
+        context = gather_tweet_context(session_date)
+    except Exception as e:
+        result.errors.append(f"Context gathering failed: {e}")
+        logger.error("Failed to gather tweet context: %s", e)
+        return result
+
+    # Generate tweets
+    try:
+        tweets = generate_tweets(context)
+    except Exception as e:
+        result.errors.append(f"Tweet generation failed: {e}")
+        logger.error("Failed to generate tweets: %s", e)
+        return result
+
+    result.tweets_generated = len(tweets)
+
+    if not tweets:
+        logger.info("No tweets generated")
+        return result
+
+    # Post tweets
+    try:
+        post_results = post_tweets(tweets, client=client)
+    except Exception as e:
+        result.errors.append(f"Tweet posting failed: {e}")
+        logger.error("Failed to post tweets: %s", e)
+        return result
+
+    # Log results to DB
+    for pr in post_results:
+        try:
+            insert_tweet(
+                session_date=session_date,
+                tweet_type=pr.get("type", "commentary"),
+                tweet_text=pr["text"],
+                tweet_id=pr.get("tweet_id"),
+                posted=pr["posted"],
+                error=pr.get("error"),
+            )
+        except Exception as e:
+            result.errors.append(f"Failed to log tweet: {e}")
+            logger.error("Failed to log tweet to DB: %s", e)
+
+        if pr["posted"]:
+            result.tweets_posted += 1
+        else:
+            result.tweets_failed += 1
+
+    logger.info(
+        "Twitter stage complete: generated=%d, posted=%d, failed=%d",
+        result.tweets_generated, result.tweets_posted, result.tweets_failed,
+    )
+
+    return result

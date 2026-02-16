@@ -13,6 +13,8 @@ from v2.twitter import (
     get_twitter_client,
     post_tweets,
     MR_KRABS_SYSTEM_PROMPT,
+    run_twitter_stage,
+    TwitterStageResult,
 )
 
 
@@ -308,3 +310,115 @@ class TestPostTweets:
         assert len(results) == 1
         assert results[0]["posted"] is False
         assert "No Twitter credentials" in results[0]["error"]
+
+
+class TestRunTwitterStage:
+    """Verify run_twitter_stage orchestration."""
+
+    @patch("v2.twitter.insert_tweet")
+    @patch("v2.twitter.post_tweets")
+    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_happy_path(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "Today we bought AAPL"
+        mock_generate.return_value = [
+            {"text": "Ahoy! Bought $AAPL!", "type": "trade"},
+            {"text": "Portfolio is looking good!", "type": "recap"},
+        ]
+        mock_post.return_value = [
+            {"text": "Ahoy! Bought $AAPL!", "type": "trade", "posted": True, "tweet_id": "111", "error": None},
+            {"text": "Portfolio is looking good!", "type": "recap", "posted": True, "tweet_id": "222", "error": None},
+        ]
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.tweets_generated == 2
+        assert result.tweets_posted == 2
+        assert result.tweets_failed == 0
+        assert result.skipped is False
+        assert result.errors == []
+        assert mock_insert.call_count == 2
+
+    @patch("v2.twitter.get_twitter_client")
+    def test_skips_without_credentials(self, mock_client):
+        mock_client.return_value = None
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.skipped is True
+        assert result.tweets_generated == 0
+
+    @patch("v2.twitter.insert_tweet")
+    @patch("v2.twitter.post_tweets")
+    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_post_failures_counted(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "context"
+        mock_generate.return_value = [
+            {"text": "Tweet 1", "type": "recap"},
+            {"text": "Tweet 2", "type": "trade"},
+        ]
+        mock_post.return_value = [
+            {"text": "Tweet 1", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
+            {"text": "Tweet 2", "type": "trade", "posted": False, "tweet_id": None, "error": "Rate limit"},
+        ]
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.tweets_generated == 2
+        assert result.tweets_posted == 1
+        assert result.tweets_failed == 1
+
+    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_no_tweets_generated(self, mock_client, mock_context, mock_generate):
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "No trading activity today."
+        mock_generate.return_value = []
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.tweets_generated == 0
+        assert result.tweets_posted == 0
+
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_context_error_handled(self, mock_client, mock_context):
+        mock_client.return_value = MagicMock()
+        mock_context.side_effect = Exception("DB connection failed")
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert len(result.errors) == 1
+        assert "Context gathering failed" in result.errors[0]
+
+    @patch("v2.twitter.insert_tweet")
+    @patch("v2.twitter.post_tweets")
+    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "context"
+        mock_generate.return_value = [{"text": "Tweet", "type": "recap"}]
+        mock_post.return_value = [
+            {"text": "Tweet", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
+        ]
+        mock_insert.side_effect = Exception("DB write failed")
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.tweets_posted == 1
+        assert len(result.errors) == 1
+        assert "Failed to log tweet" in result.errors[0]
+
+
+class TestTwitterStageResult:
+    """Verify dataclass defaults."""
+
+    def test_defaults(self):
+        r = TwitterStageResult()
+        assert r.tweets_generated == 0
+        assert r.tweets_posted == 0
+        assert r.tweets_failed == 0
+        assert r.skipped is False
+        assert r.errors == []
+
+    def test_mutable_default(self):
+        r1 = TwitterStageResult()
+        r2 = TwitterStageResult()
+        r1.errors.append("test")
+        assert r2.errors == []
