@@ -10,6 +10,8 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional
 
+from trading.ollama import chat_json
+
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 
@@ -91,3 +93,124 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
         return "No trading activity today."
 
     return "\n\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Tweet generation (Ollama)
+# ---------------------------------------------------------------------------
+
+MR_KRABS_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
+
+Your personality:
+- Obsessed with money and profits above all else
+- Use nautical language and sea metaphors naturally
+- Dramatically emotional about P&L — ecstatic about gains, devastated about losses
+- Paranoid that competitors are trying to steal your secret trading formula
+
+Generate tweets based on the trading session context provided. Each tweet must be a standalone post suitable for Twitter/X.
+
+Respond with JSON in this exact format:
+{"tweets": [{"text": "tweet text here", "type": "recap|trade|thesis|commentary"}]}
+
+Rules:
+- Keep each tweet under 280 characters
+- Make them entertaining but grounded in the actual trading data
+- Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
+- Vary the tweet types: session recaps, individual trade callouts, thesis commentary, market color
+- Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
+
+
+def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:
+    """Generate tweets from session context using Ollama."""
+    try:
+        result = chat_json(
+            prompt=context,
+            system=MR_KRABS_SYSTEM_PROMPT,
+            model=model,
+        )
+    except Exception as e:
+        logger.error("Failed to generate tweets: %s", e)
+        return []
+
+    tweets = result.get("tweets")
+    if not tweets or not isinstance(tweets, list):
+        logger.warning("LLM returned no tweets or malformed response: %s", result)
+        return []
+
+    cleaned = []
+    for t in tweets:
+        if not isinstance(t, dict) or "text" not in t:
+            continue
+        text = t["text"]
+        if len(text) > 280:
+            text = text[:277] + "..."
+        tweet_type = t.get("type", "commentary")
+        cleaned.append({"text": text, "type": tweet_type})
+
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Twitter client + posting
+# ---------------------------------------------------------------------------
+
+def get_twitter_client():
+    """Create a tweepy Client from environment variables."""
+    try:
+        import tweepy
+    except ImportError:
+        logger.warning("tweepy not installed — skipping Twitter")
+        return None
+
+    api_key = os.environ.get("TWITTER_API_KEY")
+    api_secret = os.environ.get("TWITTER_API_SECRET")
+    access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
+    access_token_secret = os.environ.get("TWITTER_ACCESS_TOKEN_SECRET")
+
+    if not all([api_key, api_secret, access_token, access_token_secret]):
+        logger.warning("Twitter credentials not configured — skipping")
+        return None
+
+    return tweepy.Client(
+        consumer_key=api_key,
+        consumer_secret=api_secret,
+        access_token=access_token,
+        access_token_secret=access_token_secret,
+    )
+
+
+def post_tweets(tweets: list[dict], client=None) -> list[dict]:
+    """Post a list of tweets via the Twitter API."""
+    if client is None:
+        client = get_twitter_client()
+    if client is None:
+        return [
+            {"text": t["text"], "type": t.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
+            for t in tweets
+        ]
+
+    results = []
+    for tweet in tweets:
+        tweet_type = tweet.get("type", "commentary")
+        try:
+            response = client.create_tweet(text=tweet["text"])
+            tweet_id = str(response.data["id"])
+            results.append({
+                "text": tweet["text"],
+                "type": tweet_type,
+                "posted": True,
+                "tweet_id": tweet_id,
+                "error": None,
+            })
+            logger.info("Posted tweet %s: %s...", tweet_id, tweet["text"][:50])
+        except Exception as e:
+            logger.error("Failed to post tweet: %s", e)
+            results.append({
+                "text": tweet["text"],
+                "type": tweet_type,
+                "posted": False,
+                "tweet_id": None,
+                "error": str(e),
+            })
+
+    return results
