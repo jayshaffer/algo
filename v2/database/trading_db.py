@@ -503,3 +503,26 @@ def get_recent_strategy_memos(n=5) -> list:
             LIMIT %s
         """, (n,))
         return cur.fetchall()
+
+
+# --- Tweets ---
+
+def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=False, error=None) -> int:
+    """Insert a tweet record and return its id."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO tweets (session_date, tweet_type, tweet_text, tweet_id, posted, error)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (session_date, tweet_type, tweet_text, tweet_id, posted, error))
+        return cur.fetchone()["id"]
+
+
+def get_tweets_for_date(session_date) -> list:
+    """Get all tweets for a given session date."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM tweets WHERE session_date = %s ORDER BY created_at",
+            (session_date,),
+        )
+        return cur.fetchall()
