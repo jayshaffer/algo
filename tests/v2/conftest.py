@@ -31,6 +31,7 @@ def mock_db(mock_cursor):
          patch("v2.database.trading_db.get_cursor", _get_cursor), \
          patch("v2.database.dashboard_db.get_cursor", _get_cursor), \
          patch("v2.twitter.get_cursor", _get_cursor), \
+         patch("v2.entertainment.get_cursor", _get_cursor), \
          patch("v2.database.connection.get_connection") as mock_conn:
         mock_conn.return_value = MagicMock()
         yield mock_cursor
