@@ -144,7 +144,7 @@ Rules:
 - Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
 
 
-def generate_tweets(context: str, model: str = "claude-opus-4-6") -> list[dict]:
+def generate_tweets(context: str, model: str = "claude-haiku-4-5-20251001") -> list[dict]:
     """Generate tweets from session context using Claude."""
     try:
         client = get_claude_client()

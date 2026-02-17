@@ -78,7 +78,7 @@ Rules:
 - Pick the single most interesting thing in the data and craft the best tweet you can"""
 
 
-def generate_entertainment_tweet(context: str, model: str = "claude-opus-4-6") -> dict | None:
+def generate_entertainment_tweet(context: str, model: str = "claude-haiku-4-5-20251001") -> dict | None:
     """Generate a single entertainment tweet from market context using Claude."""
     try:
         client = get_claude_client()
@@ -122,7 +122,7 @@ class EntertainmentResult:
 def run_entertainment_pipeline(
     news_hours: int = 24,
     news_limit: int = 20,
-    model: str = "claude-opus-4-6",
+    model: str = "claude-haiku-4-5-20251001",
 ) -> EntertainmentResult:
     """Run the full entertainment tweet pipeline: context -> generate -> post -> log."""
     result = EntertainmentResult()
@@ -196,7 +196,7 @@ def main():
 
     import argparse
     parser = argparse.ArgumentParser(description="Generate and post entertainment tweets")
-    parser.add_argument("--model", default="claude-opus-4-6")
+    parser.add_argument("--model", default="claude-haiku-4-5-20251001")
     parser.add_argument("--news-hours", type=int, default=24)
     parser.add_argument("--news-limit", type=int, default=20)
     args = parser.parse_args()

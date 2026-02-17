@@ -181,7 +181,7 @@ class TestGenerateTweets:
         assert result[0]["type"] == "recap"
         assert result[1]["type"] == "trade"
         call_kwargs = mock_retry.call_args
-        assert call_kwargs.kwargs.get("model") == "claude-opus-4-6"
+        assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5-20251001"
         assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
 
     @patch("v2.twitter._call_with_retry")

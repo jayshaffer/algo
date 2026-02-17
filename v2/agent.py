@@ -134,11 +134,15 @@ def get_trading_decisions(
     }
     input_json = json.dumps(input_data, default=str)
 
+    cached_system = [
+        {"type": "text", "text": TRADING_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+    ]
+
     response = _call_with_retry(
         client,
         model=model,
         max_tokens=4096,
-        system=TRADING_SYSTEM_PROMPT,
+        system=cached_system,
         messages=[
             {
                 "role": "user",
