@@ -145,6 +145,9 @@ class TestEntertainmentResult:
         assert r.skipped is False
         assert r.tweet_id is None
         assert r.error is None
+        assert r.bluesky_posted is False
+        assert r.bluesky_post_id is None
+        assert r.bluesky_error is None
 
 
 class TestRunEntertainmentPipeline:
@@ -228,3 +231,84 @@ class TestRunEntertainmentPipeline:
         mock_insert.side_effect = Exception("DB write failed")
         result = run_entertainment_pipeline()
         assert result.posted is True
+
+
+class TestEntertainmentBluesky:
+    """Verify Bluesky integration in entertainment pipeline."""
+
+    @patch("v2.entertainment.insert_tweet")
+    @patch("v2.entertainment.post_to_bluesky")
+    @patch("v2.entertainment.generate_bluesky_entertainment_post")
+    @patch("v2.entertainment.get_bluesky_client")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
+    @patch("v2.entertainment.gather_market_context")
+    @patch("v2.entertainment.get_twitter_client")
+    def test_posts_to_both_platforms(self, mock_tw_client, mock_context, mock_tw_gen,
+                                     mock_tw_post, mock_bs_client, mock_bs_gen,
+                                     mock_bs_post, mock_insert):
+        mock_tw_client.return_value = MagicMock()
+        mock_bs_client.return_value = MagicMock()
+        mock_context.return_value = "NEWS: NVDA up 5%"
+        mock_tw_gen.return_value = {"text": "Twitter tweet!", "type": "entertainment"}
+        mock_tw_post.return_value = {
+            "text": "Twitter tweet!", "type": "entertainment",
+            "posted": True, "tweet_id": "tw-111", "error": None,
+        }
+        mock_bs_gen.return_value = {"text": "Bluesky post!", "type": "entertainment"}
+        mock_bs_post.return_value = {
+            "text": "Bluesky post!", "type": "entertainment",
+            "posted": True, "post_id": "at://abc/123", "error": None,
+        }
+        result = run_entertainment_pipeline()
+        assert result.posted is True
+        assert result.bluesky_posted is True
+        assert result.bluesky_post_id == "at://abc/123"
+        assert mock_insert.call_count == 2  # one for Twitter, one for Bluesky
+
+    @patch("v2.entertainment.insert_tweet")
+    @patch("v2.entertainment.get_bluesky_client")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
+    @patch("v2.entertainment.gather_market_context")
+    @patch("v2.entertainment.get_twitter_client")
+    def test_bluesky_skipped_without_credentials(self, mock_tw_client, mock_context,
+                                                   mock_tw_gen, mock_tw_post,
+                                                   mock_bs_client, mock_insert):
+        mock_tw_client.return_value = MagicMock()
+        mock_bs_client.return_value = None
+        mock_context.return_value = "NEWS"
+        mock_tw_gen.return_value = {"text": "Tweet", "type": "entertainment"}
+        mock_tw_post.return_value = {
+            "text": "Tweet", "type": "entertainment",
+            "posted": True, "tweet_id": "111", "error": None,
+        }
+        result = run_entertainment_pipeline()
+        assert result.posted is True
+        assert result.bluesky_posted is False
+
+    @patch("v2.entertainment.insert_tweet")
+    @patch("v2.entertainment.post_to_bluesky")
+    @patch("v2.entertainment.generate_bluesky_entertainment_post")
+    @patch("v2.entertainment.get_bluesky_client")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
+    @patch("v2.entertainment.gather_market_context")
+    @patch("v2.entertainment.get_twitter_client")
+    def test_bluesky_failure_does_not_block_twitter(self, mock_tw_client, mock_context,
+                                                      mock_tw_gen, mock_tw_post,
+                                                      mock_bs_client, mock_bs_gen,
+                                                      mock_bs_post, mock_insert):
+        mock_tw_client.return_value = MagicMock()
+        mock_bs_client.return_value = MagicMock()
+        mock_context.return_value = "NEWS"
+        mock_tw_gen.return_value = {"text": "Tweet", "type": "entertainment"}
+        mock_tw_post.return_value = {
+            "text": "Tweet", "type": "entertainment",
+            "posted": True, "tweet_id": "111", "error": None,
+        }
+        mock_bs_gen.side_effect = Exception("Claude down")
+        result = run_entertainment_pipeline()
+        assert result.posted is True
+        assert result.bluesky_posted is False
+        assert "Bluesky generation failed" in result.bluesky_error

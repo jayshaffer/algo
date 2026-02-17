@@ -507,14 +507,14 @@ def get_recent_strategy_memos(n=5) -> list:
 
 # --- Tweets ---
 
-def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=False, error=None) -> int:
+def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=False, error=None, platform="twitter") -> int:
     """Insert a tweet record and return its id."""
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO tweets (session_date, tweet_type, tweet_text, tweet_id, posted, error)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO tweets (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (session_date, tweet_type, tweet_text, tweet_id, posted, error))
+        """, (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform))
         return cur.fetchone()["id"]
 
 

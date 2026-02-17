@@ -13,6 +13,7 @@ from .claude_client import get_claude_client, _call_with_retry
 from .news import fetch_broad_news
 from .market_data import get_market_snapshot, format_market_snapshot
 from .twitter import get_twitter_client, post_tweet
+from .bluesky import get_bluesky_client, post_to_bluesky, generate_bluesky_entertainment_post
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 
@@ -117,6 +118,9 @@ class EntertainmentResult:
     skipped: bool = False
     tweet_id: str | None = None
     error: str | None = None
+    bluesky_posted: bool = False
+    bluesky_post_id: str | None = None
+    bluesky_error: str | None = None
 
 
 def run_entertainment_pipeline(
@@ -180,6 +184,43 @@ def run_entertainment_pipeline(
         )
     except Exception as e:
         logger.error("Failed to log tweet to DB: %s", e)
+
+    # --- Bluesky ---
+    bluesky_client = get_bluesky_client()
+    if bluesky_client is not None:
+        try:
+            bs_post = generate_bluesky_entertainment_post(context, model=model)
+        except Exception as e:
+            result.bluesky_error = f"Bluesky generation failed: {e}"
+            logger.error("Failed to generate Bluesky entertainment post: %s", e)
+            bs_post = None
+
+        if bs_post is not None:
+            try:
+                bs_result = post_to_bluesky(bs_post, client=bluesky_client)
+            except Exception as e:
+                result.bluesky_error = f"Bluesky posting failed: {e}"
+                logger.error("Failed to post to Bluesky: %s", e)
+                bs_result = None
+
+            if bs_result:
+                result.bluesky_posted = bs_result["posted"]
+                result.bluesky_post_id = bs_result.get("post_id")
+                if bs_result.get("error"):
+                    result.bluesky_error = bs_result["error"]
+
+                try:
+                    insert_tweet(
+                        session_date=today,
+                        tweet_type="entertainment",
+                        tweet_text=bs_result["text"],
+                        tweet_id=bs_result.get("post_id"),
+                        posted=bs_result["posted"],
+                        error=bs_result.get("error"),
+                        platform="bluesky",
+                    )
+                except Exception as e:
+                    logger.error("Failed to log Bluesky post to DB: %s", e)
 
     logger.info(
         "Entertainment pipeline complete: posted=%s, tweet_id=%s",

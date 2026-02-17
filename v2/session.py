@@ -28,6 +28,7 @@ from .agent import DEFAULT_EXECUTOR_MODEL
 from .trader import TradingSessionResult, run_trading_session
 from .strategy import StrategyReflectionResult, run_strategy_reflection
 from .twitter import TwitterStageResult, run_twitter_stage
+from .bluesky import BlueskyStageResult, run_bluesky_stage
 
 logger = logging.getLogger("session")
 
@@ -39,6 +40,7 @@ class SessionResult:
     trading_result: Optional[TradingSessionResult] = None
     strategy_result: Optional[StrategyReflectionResult] = None
     twitter_result: Optional[TwitterStageResult] = None
+    bluesky_result: Optional[BlueskyStageResult] = None
 
     learning_error: Optional[str] = None     # V3: Stage 0
     pipeline_error: Optional[str] = None
@@ -46,19 +48,22 @@ class SessionResult:
     trading_error: Optional[str] = None
     strategy_error: Optional[str] = None
     twitter_error: Optional[str] = None
+    bluesky_error: Optional[str] = None
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False
     skipped_executor: bool = False
     skipped_strategy: bool = False
     skipped_twitter: bool = False
+    skipped_bluesky: bool = False
     duration_seconds: float = 0.0
 
     @property
     def has_errors(self) -> bool:
         return any([self.learning_error, self.pipeline_error,
                     self.strategist_error, self.trading_error,
-                    self.strategy_error, self.twitter_error])
+                    self.strategy_error, self.twitter_error,
+                    self.bluesky_error])
 
 
 def run_session(
@@ -71,11 +76,12 @@ def run_session(
     skip_executor: bool = False,
     skip_strategy: bool = False,
     skip_twitter: bool = False,
+    skip_bluesky: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
 ) -> SessionResult:
     start = time.monotonic()
-    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter)
+    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter, skipped_bluesky=skip_bluesky)
 
     # Stage 0: Refresh learning data
     attribution_constraints = ""
@@ -150,13 +156,25 @@ def run_session(
             result.twitter_error = str(e)
             logger.error("Twitter stage failed: %s", e)
 
+    # Stage 5b: Bluesky posting
+    if skip_bluesky:
+        logger.info("[Stage 5b] Bluesky posting — SKIPPED")
+        result.skipped_bluesky = True
+    else:
+        logger.info("[Stage 5b] Running Bluesky posting")
+        try:
+            result.bluesky_result = run_bluesky_stage()
+        except Exception as e:
+            result.bluesky_error = str(e)
+            logger.error("Bluesky stage failed: %s", e)
+
     result.duration_seconds = time.monotonic() - start
 
     # Summary
     logger.info("=" * 60)
     logger.info("Session complete in %.1fs", result.duration_seconds)
     if result.has_errors:
-        for field_name in ["learning_error", "pipeline_error", "strategist_error", "trading_error", "strategy_error", "twitter_error"]:
+        for field_name in ["learning_error", "pipeline_error", "strategist_error", "trading_error", "strategy_error", "twitter_error", "bluesky_error"]:
             err = getattr(result, field_name)
             if err:
                 logger.error("  %s: %s", field_name, err)
@@ -181,6 +199,7 @@ def main():
     parser.add_argument("--skip-executor", action="store_true")
     parser.add_argument("--skip-strategy", action="store_true")
     parser.add_argument("--skip-twitter", action="store_true")
+    parser.add_argument("--skip-bluesky", action="store_true")
     parser.add_argument("--pipeline-hours", type=int, default=24)
 
     args = parser.parse_args()
@@ -189,7 +208,8 @@ def main():
         max_turns=args.max_turns, skip_pipeline=args.skip_pipeline,
         skip_ideation=args.skip_ideation, skip_executor=args.skip_executor,
         skip_strategy=args.skip_strategy,
-        skip_twitter=args.skip_twitter, pipeline_hours=args.pipeline_hours,
+        skip_twitter=args.skip_twitter, skip_bluesky=args.skip_bluesky,
+        pipeline_hours=args.pipeline_hours,
     )
     if result.has_errors:
         sys.exit(1)

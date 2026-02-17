@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from v2.session import run_session, SessionResult
 from v2.strategy import StrategyReflectionResult
 from v2.twitter import TwitterStageResult
+from v2.bluesky import BlueskyStageResult
 
 
 class TestRunSession:
@@ -126,6 +127,9 @@ class TestSessionResult:
         assert result.skipped_pipeline is False
         assert result.skipped_ideation is False
         assert result.skipped_strategy is False
+        assert result.bluesky_result is None
+        assert result.bluesky_error is None
+        assert result.skipped_bluesky is False
         assert result.duration_seconds == 0.0
 
 
@@ -280,3 +284,84 @@ class TestStage5Twitter:
 
         mock_twitter.assert_not_called()
         assert result.skipped_twitter is True
+
+
+class TestStage5Bluesky:
+    def test_bluesky_runs_after_twitter(self):
+        """Bluesky should run after Twitter posting."""
+        call_order = []
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage") as mock_twitter, \
+             patch("v2.session.run_bluesky_stage") as mock_bluesky:
+
+            mock_twitter.side_effect = lambda: call_order.append("twitter")
+            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+
+            run_session(dry_run=True)
+
+        assert call_order.index("twitter") < call_order.index("bluesky")
+
+    def test_bluesky_result_captured(self):
+        """Bluesky result should be in SessionResult."""
+        mock_bluesky_result = BlueskyStageResult(post_posted=True)
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage", return_value=mock_bluesky_result):
+
+            result = run_session(dry_run=True)
+
+        assert result.bluesky_result is not None
+        assert result.bluesky_result.post_posted is True
+
+    def test_bluesky_failure_does_not_block(self):
+        """Bluesky failure should be captured but not crash."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage", side_effect=Exception("atproto down")):
+
+            result = run_session(dry_run=True)
+
+        assert result.bluesky_error == "atproto down"
+        assert result.bluesky_result is None
+
+    def test_bluesky_error_in_has_errors(self):
+        """Bluesky error should be included in has_errors check."""
+        result = SessionResult(bluesky_error="test")
+        assert result.has_errors is True
+
+    def test_skip_bluesky_flag(self):
+        """Bluesky should be skippable."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage") as mock_bluesky:
+
+            result = run_session(dry_run=True, skip_bluesky=True)
+
+        mock_bluesky.assert_not_called()
+        assert result.skipped_bluesky is True

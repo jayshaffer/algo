@@ -34,7 +34,7 @@ class TestInsertTweet:
         assert "INSERT INTO tweets" in sql
         assert "RETURNING id" in sql
         params = mock_db.execute.call_args[0][1]
-        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None)
+        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None, "twitter")
 
     def test_insert_tweet_with_all_fields(self, mock_db):
         mock_db.fetchone.return_value = {"id": 1}
@@ -61,6 +61,18 @@ class TestInsertTweet:
         )
         params = mock_db.execute.call_args[0][1]
         assert params[5] == "Rate limit exceeded"
+
+    def test_insert_tweet_with_platform(self, mock_db):
+        mock_db.fetchone.return_value = {"id": 1}
+        result = insert_tweet(
+            session_date=date(2026, 2, 15),
+            tweet_type="recap",
+            tweet_text="Ahoy!",
+            platform="bluesky",
+        )
+        assert result == 1
+        params = mock_db.execute.call_args[0][1]
+        assert "bluesky" in params
 
 
 class TestGetTweetsForDate:
