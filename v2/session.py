@@ -7,6 +7,8 @@ Runs the full daily pipeline in a single invocation:
   Stage 3: Trading executor (decisions + order execution)
   Stage 4: Strategy reflection (rules, identity, memos)
   Stage 5: Twitter posting (Mr. Krabs voice tweets)
+  Stage 5b: Bluesky posting
+  Stage 6: Public dashboard publish (GitHub Pages)
 
 Each stage is independent — failures are captured and do not prevent
 subsequent stages from running.
@@ -29,6 +31,7 @@ from .trader import TradingSessionResult, run_trading_session
 from .strategy import StrategyReflectionResult, run_strategy_reflection
 from .twitter import TwitterStageResult, run_twitter_stage
 from .bluesky import BlueskyStageResult, run_bluesky_stage
+from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 
 logger = logging.getLogger("session")
 
@@ -41,6 +44,7 @@ class SessionResult:
     strategy_result: Optional[StrategyReflectionResult] = None
     twitter_result: Optional[TwitterStageResult] = None
     bluesky_result: Optional[BlueskyStageResult] = None
+    dashboard_result: Optional[DashboardStageResult] = None
 
     learning_error: Optional[str] = None     # V3: Stage 0
     pipeline_error: Optional[str] = None
@@ -49,6 +53,7 @@ class SessionResult:
     strategy_error: Optional[str] = None
     twitter_error: Optional[str] = None
     bluesky_error: Optional[str] = None
+    dashboard_error: Optional[str] = None
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False
@@ -56,6 +61,7 @@ class SessionResult:
     skipped_strategy: bool = False
     skipped_twitter: bool = False
     skipped_bluesky: bool = False
+    skipped_dashboard: bool = False
     duration_seconds: float = 0.0
 
     @property
@@ -63,7 +69,7 @@ class SessionResult:
         return any([self.learning_error, self.pipeline_error,
                     self.strategist_error, self.trading_error,
                     self.strategy_error, self.twitter_error,
-                    self.bluesky_error])
+                    self.bluesky_error, self.dashboard_error])
 
 
 def run_session(
@@ -77,11 +83,12 @@ def run_session(
     skip_strategy: bool = False,
     skip_twitter: bool = False,
     skip_bluesky: bool = False,
+    skip_dashboard: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
 ) -> SessionResult:
     start = time.monotonic()
-    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter, skipped_bluesky=skip_bluesky)
+    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter, skipped_bluesky=skip_bluesky, skipped_dashboard=skip_dashboard)
 
     # Stage 0: Refresh learning data
     attribution_constraints = ""
@@ -168,13 +175,25 @@ def run_session(
             result.bluesky_error = str(e)
             logger.error("Bluesky stage failed: %s", e)
 
+    # Stage 6: Dashboard publish
+    if skip_dashboard:
+        logger.info("[Stage 6] Dashboard publish — SKIPPED")
+        result.skipped_dashboard = True
+    else:
+        logger.info("[Stage 6] Publishing public dashboard")
+        try:
+            result.dashboard_result = run_dashboard_stage()
+        except Exception as e:
+            result.dashboard_error = str(e)
+            logger.error("Dashboard publish failed: %s", e)
+
     result.duration_seconds = time.monotonic() - start
 
     # Summary
     logger.info("=" * 60)
     logger.info("Session complete in %.1fs", result.duration_seconds)
     if result.has_errors:
-        for field_name in ["learning_error", "pipeline_error", "strategist_error", "trading_error", "strategy_error", "twitter_error", "bluesky_error"]:
+        for field_name in ["learning_error", "pipeline_error", "strategist_error", "trading_error", "strategy_error", "twitter_error", "bluesky_error", "dashboard_error"]:
             err = getattr(result, field_name)
             if err:
                 logger.error("  %s: %s", field_name, err)
@@ -200,6 +219,7 @@ def main():
     parser.add_argument("--skip-strategy", action="store_true")
     parser.add_argument("--skip-twitter", action="store_true")
     parser.add_argument("--skip-bluesky", action="store_true")
+    parser.add_argument("--skip-dashboard", action="store_true")
     parser.add_argument("--pipeline-hours", type=int, default=24)
 
     args = parser.parse_args()
@@ -209,6 +229,7 @@ def main():
         skip_ideation=args.skip_ideation, skip_executor=args.skip_executor,
         skip_strategy=args.skip_strategy,
         skip_twitter=args.skip_twitter, skip_bluesky=args.skip_bluesky,
+        skip_dashboard=args.skip_dashboard,
         pipeline_hours=args.pipeline_hours,
     )
     if result.has_errors:

@@ -7,8 +7,10 @@ import json
 import logging
 import os
 import subprocess
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Optional
 
 from .database.connection import get_cursor
 
@@ -231,3 +233,53 @@ def push_to_github(repo_path: str) -> bool:
         raise RuntimeError(push_result.stderr)
 
     return True
+
+
+@dataclass
+class DashboardStageResult:
+    """Result of the dashboard publishing stage."""
+    published: bool = False
+    skipped: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageResult:
+    """Run the full dashboard publish pipeline: gather -> write -> push."""
+    if session_date is None:
+        session_date = date.today()
+
+    result = DashboardStageResult()
+
+    repo_path = os.environ.get("DASHBOARD_REPO_PATH")
+    if not repo_path:
+        result.skipped = True
+        logger.info("Dashboard stage skipped — DASHBOARD_REPO_PATH not set")
+        return result
+
+    # Gather data
+    try:
+        data = gather_dashboard_data(session_date)
+    except Exception as e:
+        result.errors.append(f"Data gathering failed: {e}")
+        logger.error("Failed to gather dashboard data: %s", e)
+        return result
+
+    # Write JSON files
+    try:
+        write_json_files(data, repo_path)
+    except Exception as e:
+        result.errors.append(f"JSON writing failed: {e}")
+        logger.error("Failed to write JSON files: %s", e)
+        return result
+
+    # Push to GitHub
+    try:
+        pushed = push_to_github(repo_path)
+    except Exception as e:
+        result.errors.append(f"Git push failed: {e}")
+        logger.error("Failed to push to GitHub: %s", e)
+        return result
+
+    result.published = pushed
+    logger.info("Dashboard publish complete (published=%s)", pushed)
+    return result

@@ -9,9 +9,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from v2.dashboard_publish import (
+    DashboardStageResult,
     _DecimalEncoder,
     gather_dashboard_data,
     push_to_github,
+    run_dashboard_stage,
     write_json_files,
 )
 
@@ -310,3 +312,64 @@ class TestPushToGithub:
 
         with pytest.raises(RuntimeError, match="fatal: remote error"):
             push_to_github("/fake/repo")
+
+
+class TestRunDashboardStage:
+    @patch("v2.dashboard_publish.push_to_github", return_value=True)
+    @patch("v2.dashboard_publish.write_json_files", return_value=["/fake/data/summary.json"])
+    @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
+    def test_happy_path(self, mock_gather, mock_write, mock_push):
+        """Full pipeline runs and returns published=True."""
+        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+            result = run_dashboard_stage(session_date=date(2025, 6, 15))
+
+        assert result.published is True
+        assert result.skipped is False
+        assert result.errors == []
+        mock_gather.assert_called_once_with(date(2025, 6, 15))
+        mock_write.assert_called_once_with({"summary": {}}, "/fake/repo")
+        mock_push.assert_called_once_with("/fake/repo")
+
+    def test_skipped_when_no_repo_path(self):
+        """Returns skipped=True when DASHBOARD_REPO_PATH not set."""
+        with patch.dict(os.environ, {}, clear=True):
+            # Ensure DASHBOARD_REPO_PATH is not set
+            os.environ.pop("DASHBOARD_REPO_PATH", None)
+            result = run_dashboard_stage()
+
+        assert result.skipped is True
+        assert result.published is False
+        assert result.errors == []
+
+    @patch("v2.dashboard_publish.gather_dashboard_data", side_effect=Exception("DB down"))
+    def test_handles_gather_error(self, mock_gather):
+        """Error in gather step is captured."""
+        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+            result = run_dashboard_stage()
+
+        assert result.published is False
+        assert len(result.errors) == 1
+        assert "Data gathering failed" in result.errors[0]
+
+    @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
+    @patch("v2.dashboard_publish.write_json_files", side_effect=Exception("Disk full"))
+    def test_handles_write_error(self, mock_write, mock_gather):
+        """Error in write step is captured."""
+        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+            result = run_dashboard_stage()
+
+        assert result.published is False
+        assert len(result.errors) == 1
+        assert "JSON writing failed" in result.errors[0]
+
+    @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
+    @patch("v2.dashboard_publish.write_json_files", return_value=[])
+    @patch("v2.dashboard_publish.push_to_github", side_effect=RuntimeError("git push failed"))
+    def test_handles_push_error(self, mock_push, mock_write, mock_gather):
+        """Error in push step is captured."""
+        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+            result = run_dashboard_stage()
+
+        assert result.published is False
+        assert len(result.errors) == 1
+        assert "Git push failed" in result.errors[0]
