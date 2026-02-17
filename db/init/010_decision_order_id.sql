@@ -1,0 +1,1 @@
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS order_id VARCHAR(50);

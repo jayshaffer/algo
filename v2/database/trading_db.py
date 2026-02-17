@@ -121,20 +121,21 @@ def get_account_snapshots(days=30) -> list:
 
 # --- Decisions ---
 
-def insert_decision(decision_date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id=None, is_off_playbook=False) -> int:
+def insert_decision(decision_date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id=None, is_off_playbook=False, order_id=None) -> int:
     """
     Insert a trading decision.
 
     V3 additions:
     - playbook_action_id: Links decision to a specific playbook action
     - is_off_playbook: Marks decisions made outside the playbook
+    - order_id: Alpaca order ID for trade verification
     """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO decisions (date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id, is_off_playbook)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO decisions (date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id, is_off_playbook, order_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (decision_date, ticker, action, quantity, price, reasoning, Json(signals_used), account_equity, buying_power, playbook_action_id, is_off_playbook))
+        """, (decision_date, ticker, action, quantity, price, reasoning, Json(signals_used), account_equity, buying_power, playbook_action_id, is_off_playbook, order_id))
         return cur.fetchone()["id"]
 
 

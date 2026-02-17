@@ -175,7 +175,8 @@ def run_trading_session(
     total_buy_value = Decimal(0)
     total_sell_value = Decimal(0)
 
-    for decision in response.decisions:
+    order_ids = {}
+    for i, decision in enumerate(response.decisions):
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             continue
@@ -211,6 +212,7 @@ def run_trading_session(
 
         if result.success:
             trades_executed += 1
+            order_ids[i] = result.order_id
             trade_value = price * Decimal(str(decision.quantity))
 
             if decision.action == "buy":
@@ -257,7 +259,7 @@ def run_trading_session(
     logger.info("[Step 6] Logging decisions")
     signals_used = format_decisions_for_logging(response)
 
-    for decision in response.decisions:
+    for i, decision in enumerate(response.decisions):
         try:
             price = get_latest_price(decision.ticker)
             decision_id = insert_decision(
@@ -272,6 +274,7 @@ def run_trading_session(
                 buying_power=account_info["buying_power"],
                 playbook_action_id=decision.playbook_action_id,
                 is_off_playbook=decision.is_off_playbook,
+                order_id=order_ids.get(i),
             )
         except Exception as e:
             errors.append(f"Failed to log decision for {decision.ticker}: {e}")
