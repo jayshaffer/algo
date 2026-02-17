@@ -112,3 +112,91 @@ def generate_entertainment_tweets(context: str, model: str = "claude-opus-4-6") 
         cleaned.append({"text": t["text"], "type": tweet_type})
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Entertainment pipeline orchestrator
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EntertainmentResult:
+    """Result of the entertainment tweet pipeline."""
+    tweets_generated: int = 0
+    tweets_posted: int = 0
+    tweets_failed: int = 0
+    skipped: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+def run_entertainment_pipeline(
+    news_hours: int = 24,
+    news_limit: int = 20,
+    model: str = "claude-opus-4-6",
+) -> EntertainmentResult:
+    """Run the full entertainment tweet pipeline: context -> generate -> post -> log."""
+    result = EntertainmentResult()
+    today = date.today()
+
+    # Check credentials early
+    client = get_twitter_client()
+    if client is None:
+        result.skipped = True
+        logger.info("Entertainment pipeline skipped — no credentials")
+        return result
+
+    # Gather market context
+    try:
+        context = gather_market_context(news_hours=news_hours, news_limit=news_limit)
+    except Exception as e:
+        result.errors.append(f"Context gathering failed: {e}")
+        logger.error("Failed to gather market context: %s", e)
+        return result
+
+    # Generate tweets
+    try:
+        tweets = generate_entertainment_tweets(context, model=model)
+    except Exception as e:
+        result.errors.append(f"Tweet generation failed: {e}")
+        logger.error("Failed to generate entertainment tweets: %s", e)
+        return result
+
+    result.tweets_generated = len(tweets)
+
+    if not tweets:
+        logger.info("No entertainment tweets generated")
+        return result
+
+    # Post tweets
+    try:
+        post_results = post_tweets(tweets, client=client)
+    except Exception as e:
+        result.errors.append(f"Tweet posting failed: {e}")
+        logger.error("Failed to post tweets: %s", e)
+        return result
+
+    # Log results to DB
+    for pr in post_results:
+        try:
+            insert_tweet(
+                session_date=today,
+                tweet_type=pr.get("type", "entertainment"),
+                tweet_text=pr["text"],
+                tweet_id=pr.get("tweet_id"),
+                posted=pr["posted"],
+                error=pr.get("error"),
+            )
+        except Exception as e:
+            result.errors.append(f"Failed to log tweet: {e}")
+            logger.error("Failed to log tweet to DB: %s", e)
+
+        if pr["posted"]:
+            result.tweets_posted += 1
+        else:
+            result.tweets_failed += 1
+
+    logger.info(
+        "Entertainment pipeline complete: generated=%d, posted=%d, failed=%d",
+        result.tweets_generated, result.tweets_posted, result.tweets_failed,
+    )
+
+    return result
