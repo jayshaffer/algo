@@ -5,8 +5,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+import re
+
 from .ollama import chat, chat_json
 from .filter import FilteredNewsItem
+
+
+def _sanitize_headline(headline: str) -> str:
+    """Sanitize a headline before inserting into an LLM prompt.
+
+    Strips control characters, collapses whitespace, truncates to 300 chars,
+    and removes characters commonly used in prompt injection attempts.
+    """
+    headline = re.sub(r'[\x00-\x1f\x7f]', ' ', headline)
+    headline = re.sub(r'\s+', ' ', headline).strip()
+    headline = headline[:300]
+    return headline
 
 
 @dataclass
@@ -163,7 +177,7 @@ def classify_news(headline: str, published_at: datetime) -> ClassificationResult
     Returns:
         ClassificationResult with type and extracted signals
     """
-    prompt = CLASSIFICATION_PROMPT.format(headline=headline)
+    prompt = CLASSIFICATION_PROMPT.format(headline=_sanitize_headline(headline))
 
     try:
         result = chat_json(prompt, model="qwen2.5:14b")
@@ -223,7 +237,7 @@ def _classify_batch(
 ) -> list[ClassificationResult]:
     """Classify a single batch of headlines in one LLM call."""
     headlines_block = "\n".join(
-        f'{i + 1}. "{h}"' for i, h in enumerate(headlines)
+        f'{i + 1}. "{_sanitize_headline(h)}"' for i, h in enumerate(headlines)
     )
     prompt = BATCH_CLASSIFICATION_PROMPT.format(
         headlines_block=headlines_block,
@@ -275,7 +289,7 @@ def classify_ticker_news(ticker: str, headline: str, published_at: datetime) -> 
     Returns:
         TickerSignal with classification
     """
-    prompt = TICKER_CLASSIFICATION_PROMPT.format(ticker=ticker, headline=headline)
+    prompt = TICKER_CLASSIFICATION_PROMPT.format(ticker=ticker, headline=_sanitize_headline(headline))
 
     try:
         result = chat_json(prompt, model="qwen2.5:14b")

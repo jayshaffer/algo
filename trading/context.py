@@ -1,9 +1,17 @@
 """Context builder for trading agent - aggregates signals into compressed format."""
 
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
+
+
+def _sanitize_text(text: str, max_len: int = 200) -> str:
+    """Sanitize text from DB before inserting into LLM prompts."""
+    text = re.sub(r'[\x00-\x1f\x7f]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:max_len]
 
 from .db import (
     get_positions,
@@ -112,7 +120,8 @@ def get_macro_context(days: int = 7) -> str:
         # Get most recent signal for summary
         latest = cat_signals[0]
         sentiment = latest["sentiment"]
-        headline = latest["headline"][:60] + "..." if len(latest["headline"]) > 60 else latest["headline"]
+        raw_headline = _sanitize_text(latest["headline"], max_len=60)
+        headline = raw_headline + "..." if len(latest["headline"]) > 60 else raw_headline
 
         # Count sentiment distribution
         sentiments = [s["sentiment"] for s in cat_signals]

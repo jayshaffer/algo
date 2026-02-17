@@ -1,11 +1,23 @@
 """News classification using Claude Haiku with batch support."""
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from .claude_client import get_claude_client
+
+
+def _sanitize_headline(headline: str) -> str:
+    """Sanitize a headline before inserting into an LLM prompt.
+
+    Strips control characters, collapses whitespace, and truncates to 300 chars.
+    """
+    headline = re.sub(r'[\x00-\x1f\x7f]', ' ', headline)
+    headline = re.sub(r'\s+', ' ', headline).strip()
+    headline = headline[:300]
+    return headline
 
 
 CLASSIFICATION_MODEL = "claude-haiku-4-5-20251001"
@@ -191,7 +203,7 @@ def classify_news(
             model=CLASSIFICATION_MODEL,
             max_tokens=256,
             system=_CACHED_CLASSIFICATION_SYSTEM,
-            messages=[{"role": "user", "content": headline}]
+            messages=[{"role": "user", "content": _sanitize_headline(headline)}]
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)
@@ -251,7 +263,7 @@ def _classify_batch(
 ) -> list[ClassificationResult]:
     """Classify a single batch of headlines in one Claude Haiku call."""
     headlines_block = "\n".join(
-        f'{i + 1}. "{h}"' for i, h in enumerate(headlines)
+        f'{i + 1}. "{_sanitize_headline(h)}"' for i, h in enumerate(headlines)
     )
 
     client = get_claude_client()
@@ -308,7 +320,7 @@ def classify_ticker_news(
             model=CLASSIFICATION_MODEL,
             max_tokens=256,
             system=_CACHED_TICKER_CLASSIFICATION_SYSTEM,
-            messages=[{"role": "user", "content": f"Ticker: {ticker}\nHeadline: {headline}"}]
+            messages=[{"role": "user", "content": f"Ticker: {ticker}\nHeadline: {_sanitize_headline(headline)}"}]
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)

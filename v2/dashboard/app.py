@@ -137,8 +137,8 @@ def api_close_thesis(thesis_id):
             return jsonify({"success": True})
         else:
             return jsonify({"error": "Thesis not found or already closed."}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route("/health")
@@ -172,4 +172,4 @@ def api_signals():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000, debug=True)
+    app.run(host="0.0.0.0", port=3000, debug=False)

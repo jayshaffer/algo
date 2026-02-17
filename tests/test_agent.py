@@ -524,3 +524,53 @@ class TestValidateDecision:
         )
         assert is_valid is False
         assert "Unknown action" in reason
+
+    # --- position size cap ---
+    def test_buy_exceeds_position_size_cap(self):
+        """Buy that exceeds 10% of portfolio value should be rejected."""
+        decision = make_trading_decision(action="buy", ticker="AAPL", quantity=100)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("150"),  # 100 * 150 = 15000 = 15% of 100k
+            positions={},
+            portfolio_value=Decimal("100000"),
+        )
+        assert is_valid is False
+        assert "Position size" in reason
+        assert "max 10%" in reason
+
+    def test_buy_within_position_size_cap(self):
+        """Buy that is within 10% of portfolio value should pass."""
+        decision = make_trading_decision(action="buy", ticker="AAPL", quantity=5)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("150"),  # 5 * 150 = 750 = 0.75% of 100k
+            positions={},
+            portfolio_value=Decimal("100000"),
+        )
+        assert is_valid is True
+
+    def test_buy_at_exact_position_size_cap(self):
+        """Buy at exactly 10% of portfolio should pass."""
+        decision = make_trading_decision(action="buy", ticker="AAPL", quantity=10)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("100"),  # 10 * 100 = 1000 = 10% of 10000
+            positions={},
+            portfolio_value=Decimal("10000"),
+        )
+        assert is_valid is True
+
+    def test_buy_no_portfolio_value_skips_cap(self):
+        """When portfolio_value is not provided, position cap is skipped."""
+        decision = make_trading_decision(action="buy", ticker="AAPL", quantity=100)
+        is_valid, reason = validate_decision(
+            decision,
+            buying_power=Decimal("50000"),
+            current_price=Decimal("150"),
+            positions={},
+        )
+        assert is_valid is True
