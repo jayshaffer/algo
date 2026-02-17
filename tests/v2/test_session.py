@@ -228,7 +228,7 @@ class TestStage5Twitter:
 
     def test_stage_5_result_captured(self):
         """Twitter result should be in SessionResult."""
-        mock_twitter_result = TwitterStageResult(tweets_generated=2, tweets_posted=2)
+        mock_twitter_result = TwitterStageResult(tweet_posted=True)
 
         with patch("v2.session.run_backfill"), \
              patch("v2.session.compute_signal_attribution", return_value=[]), \
@@ -242,7 +242,7 @@ class TestStage5Twitter:
             result = run_session(dry_run=True)
 
         assert result.twitter_result is not None
-        assert result.twitter_result.tweets_posted == 2
+        assert result.twitter_result.tweet_posted is True
 
     def test_stage_5_failure_does_not_block(self):
         """Twitter failure should be captured but not crash."""

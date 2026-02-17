@@ -132,26 +132,26 @@ Your personality:
 - Dramatically emotional about P&L — ecstatic about gains, devastated about losses.  Avoid talking about total portfolio gain, as it doesn't reflect the cash position correctly.
 - Paranoid that competitors are trying to steal your secret trading formula
 
-Generate tweets based on the trading session context provided. Each tweet must be a standalone post suitable for Twitter/X.
+Generate ONE tweet that summarizes today's trading session. Condense all trades, P&L, and portfolio status into a single punchy recap.
 
 Respond with JSON in this exact format:
-{"tweets": [{"text": "tweet text here", "type": "recap|trade|thesis|commentary"}]}
+{"text": "tweet text here"}
 
 Rules:
-- Make them entertaining but grounded in the actual trading data
+- Make it entertaining but grounded in the actual trading data
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
-- Vary the tweet types: session recaps, individual trade callouts, thesis commentary, market color
-- Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
+- Summarize the full session: trades made, P&L result, and overall portfolio vibe
+- If it was a quiet day with no trades, comment on holding steady"""
 
 
-def generate_tweets(context: str, model: str = "claude-haiku-4-5-20251001") -> list[dict]:
-    """Generate tweets from session context using Claude."""
+def generate_tweet(context: str, model: str = "claude-haiku-4-5-20251001") -> dict | None:
+    """Generate a single summary tweet from session context using Claude."""
     try:
         client = get_claude_client()
         response = _call_with_retry(
             client,
             model=model,
-            max_tokens=1024,
+            max_tokens=512,
             system=MR_KRABS_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": context}],
         )
@@ -163,22 +163,15 @@ def generate_tweets(context: str, model: str = "claude-haiku-4-5-20251001") -> l
             text = text.rsplit("```", 1)[0].strip()
         result = json.loads(text)
     except Exception as e:
-        logger.error("Failed to generate tweets: %s", e)
-        return []
+        logger.error("Failed to generate tweet: %s", e)
+        return None
 
-    tweets = result.get("tweets")
-    if not tweets or not isinstance(tweets, list):
-        logger.warning("LLM returned no tweets or malformed response: %s", result)
-        return []
+    tweet_text = result.get("text")
+    if not tweet_text or not isinstance(tweet_text, str):
+        logger.warning("LLM returned no tweet or malformed response: %s", result)
+        return None
 
-    cleaned = []
-    for t in tweets:
-        if not isinstance(t, dict) or "text" not in t:
-            continue
-        tweet_type = t.get("type", "commentary")
-        cleaned.append({"text": t["text"], "type": tweet_type})
-
-    return cleaned
+    return {"text": tweet_text, "type": "recap"}
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +221,6 @@ def post_tweet(tweet: dict, client=None) -> dict:
         return {"text": tweet["text"], "type": tweet_type, "posted": False, "tweet_id": None, "error": str(e)}
 
 
-def post_tweets(tweets: list[dict], client=None) -> list[dict]:
-    """Post a list of tweets via the Twitter API."""
-    if client is None:
-        client = get_twitter_client()
-    return [post_tweet(t, client=client) for t in tweets]
-
-
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -242,9 +228,7 @@ def post_tweets(tweets: list[dict], client=None) -> list[dict]:
 @dataclass
 class TwitterStageResult:
     """Result of the Twitter posting stage."""
-    tweets_generated: int = 0
-    tweets_posted: int = 0
-    tweets_failed: int = 0
+    tweet_posted: bool = False
     skipped: bool = False
     errors: list[str] = field(default_factory=list)
 
@@ -271,51 +255,45 @@ def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult
         logger.error("Failed to gather tweet context: %s", e)
         return result
 
-    # Generate tweets
+    # Generate tweet
     try:
-        tweets = generate_tweets(context)
+        tweet = generate_tweet(context)
     except Exception as e:
         result.errors.append(f"Tweet generation failed: {e}")
-        logger.error("Failed to generate tweets: %s", e)
+        logger.error("Failed to generate tweet: %s", e)
         return result
 
-    result.tweets_generated = len(tweets)
-
-    if not tweets:
-        logger.info("No tweets generated")
+    if not tweet:
+        logger.info("No tweet generated")
         return result
 
-    # Post tweets
+    # Post tweet
     try:
-        post_results = post_tweets(tweets, client=client)
+        post_result = post_tweet(tweet, client=client)
     except Exception as e:
         result.errors.append(f"Tweet posting failed: {e}")
-        logger.error("Failed to post tweets: %s", e)
+        logger.error("Failed to post tweet: %s", e)
         return result
 
-    # Log results to DB
-    for pr in post_results:
-        try:
-            insert_tweet(
-                session_date=session_date,
-                tweet_type=pr.get("type", "commentary"),
-                tweet_text=pr["text"],
-                tweet_id=pr.get("tweet_id"),
-                posted=pr["posted"],
-                error=pr.get("error"),
-            )
-        except Exception as e:
-            result.errors.append(f"Failed to log tweet: {e}")
-            logger.error("Failed to log tweet to DB: %s", e)
+    # Log result to DB
+    try:
+        insert_tweet(
+            session_date=session_date,
+            tweet_type=post_result.get("type", "recap"),
+            tweet_text=post_result["text"],
+            tweet_id=post_result.get("tweet_id"),
+            posted=post_result["posted"],
+            error=post_result.get("error"),
+        )
+    except Exception as e:
+        result.errors.append(f"Failed to log tweet: {e}")
+        logger.error("Failed to log tweet to DB: %s", e)
 
-        if pr["posted"]:
-            result.tweets_posted += 1
-        else:
-            result.tweets_failed += 1
+    result.tweet_posted = post_result["posted"]
 
     logger.info(
-        "Twitter stage complete: generated=%d, posted=%d, failed=%d",
-        result.tweets_generated, result.tweets_posted, result.tweets_failed,
+        "Twitter stage complete: posted=%s",
+        result.tweet_posted,
     )
 
     return result

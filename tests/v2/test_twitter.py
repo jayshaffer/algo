@@ -9,9 +9,9 @@ import pytest
 from v2.database.trading_db import insert_tweet, get_tweets_for_date
 from v2.twitter import (
     gather_tweet_context,
-    generate_tweets,
+    generate_tweet,
     get_twitter_client,
-    post_tweets,
+    post_tweet,
     MR_KRABS_SYSTEM_PROMPT,
     run_twitter_stage,
     TwitterStageResult,
@@ -161,25 +161,21 @@ def _make_claude_response(json_data):
     return mock_resp
 
 
-class TestGenerateTweets:
-    """Verify generate_tweets calls Claude and processes response."""
+class TestGenerateTweet:
+    """Verify generate_tweet calls Claude and processes response."""
 
     @patch("v2.twitter._call_with_retry")
     @patch("v2.twitter.get_claude_client")
-    def test_generates_tweets(self, mock_get_client, mock_retry):
+    def test_generates_tweet(self, mock_get_client, mock_retry):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         mock_retry.return_value = _make_claude_response({
-            "tweets": [
-                {"text": "Ahoy! Great day for me treasure! $AAPL up big!", "type": "recap"},
-                {"text": "Bought more $NVDA. AI is the future, me boy!", "type": "trade"},
-            ]
+            "text": "Ahoy! Great day for me treasure! $AAPL up big!",
         })
-        result = generate_tweets("test context")
-        assert len(result) == 2
-        assert result[0]["text"] == "Ahoy! Great day for me treasure! $AAPL up big!"
-        assert result[0]["type"] == "recap"
-        assert result[1]["type"] == "trade"
+        result = generate_tweet("test context")
+        assert result is not None
+        assert result["text"] == "Ahoy! Great day for me treasure! $AAPL up big!"
+        assert result["type"] == "recap"
         call_kwargs = mock_retry.call_args
         assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5-20251001"
         assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
@@ -188,8 +184,8 @@ class TestGenerateTweets:
     @patch("v2.twitter.get_claude_client")
     def test_custom_model(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({"tweets": [{"text": "Test", "type": "recap"}]})
-        generate_tweets("context", model="claude-sonnet-4-5-20250929")
+        mock_retry.return_value = _make_claude_response({"text": "Test"})
+        generate_tweet("context", model="claude-sonnet-4-5-20250929")
         call_kwargs = mock_retry.call_args
         assert call_kwargs.kwargs.get("model") == "claude-sonnet-4-5-20250929"
 
@@ -198,67 +194,44 @@ class TestGenerateTweets:
     def test_preserves_long_tweets(self, mock_get_client, mock_retry):
         long_text = "A" * 300
         mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({"tweets": [{"text": long_text, "type": "recap"}]})
-        result = generate_tweets("context")
-        assert len(result) == 1
-        assert result[0]["text"] == long_text
+        mock_retry.return_value = _make_claude_response({"text": long_text})
+        result = generate_tweet("context")
+        assert result is not None
+        assert result["text"] == long_text
 
     @patch("v2.twitter._call_with_retry")
     @patch("v2.twitter.get_claude_client")
     def test_handles_empty_response(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
         mock_retry.return_value = _make_claude_response({})
-        result = generate_tweets("context")
-        assert result == []
+        result = generate_tweet("context")
+        assert result is None
 
     @patch("v2.twitter._call_with_retry")
     @patch("v2.twitter.get_claude_client")
-    def test_handles_malformed_tweets(self, mock_get_client, mock_retry):
+    def test_handles_non_string_text(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({
-            "tweets": [
-                {"text": "Good tweet", "type": "recap"},
-                {"no_text_key": "bad"},
-                "not a dict",
-            ]
-        })
-        result = generate_tweets("context")
-        assert len(result) == 1
-        assert result[0]["text"] == "Good tweet"
+        mock_retry.return_value = _make_claude_response({"text": 123})
+        result = generate_tweet("context")
+        assert result is None
 
     @patch("v2.twitter.get_claude_client")
     def test_handles_api_exception(self, mock_get_client):
         mock_get_client.side_effect = ValueError("No API key")
-        result = generate_tweets("context")
-        assert result == []
-
-    @patch("v2.twitter._call_with_retry")
-    @patch("v2.twitter.get_claude_client")
-    def test_default_type_is_commentary(self, mock_get_client, mock_retry):
-        mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({"tweets": [{"text": "Just a thought about the market"}]})
-        result = generate_tweets("context")
-        assert result[0]["type"] == "commentary"
-
-    @patch("v2.twitter._call_with_retry")
-    @patch("v2.twitter.get_claude_client")
-    def test_tweets_not_a_list(self, mock_get_client, mock_retry):
-        mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({"tweets": "not a list"})
-        result = generate_tweets("context")
-        assert result == []
+        result = generate_tweet("context")
+        assert result is None
 
     @patch("v2.twitter._call_with_retry")
     @patch("v2.twitter.get_claude_client")
     def test_handles_markdown_fenced_json(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
-        fenced = '```json\n{"tweets": [{"text": "Ahoy!", "type": "recap"}]}\n```'
+        fenced = '```json\n{"text": "Ahoy!"}\n```'
         mock_resp = MagicMock()
         mock_resp.content = [MagicMock(text=fenced)]
         mock_retry.return_value = mock_resp
-        result = generate_tweets("context")
-        assert len(result) == 1
-        assert result[0]["text"] == "Ahoy!"
+        result = generate_tweet("context")
+        assert result is not None
+        assert result["text"] == "Ahoy!"
 
 
 class TestGetTwitterClient:
@@ -297,8 +270,8 @@ class TestGetTwitterClient:
         assert client is None
 
 
-class TestPostTweets:
-    """Verify post_tweets calls tweepy and handles errors."""
+class TestPostTweet:
+    """Verify post_tweet calls tweepy and handles errors."""
 
     @patch("v2.twitter.get_twitter_client")
     def test_posts_successfully(self, mock_get_client):
@@ -307,117 +280,84 @@ class TestPostTweets:
         mock_response.data = {"id": "12345"}
         mock_client.create_tweet.return_value = mock_response
         mock_get_client.return_value = mock_client
-        tweets = [{"text": "Hello from Bikini Bottom!", "type": "recap"}]
-        results = post_tweets(tweets)
-        assert len(results) == 1
-        assert results[0]["posted"] is True
-        assert results[0]["tweet_id"] == "12345"
-        assert results[0]["error"] is None
-        assert results[0]["type"] == "recap"
+        tweet = {"text": "Hello from Bikini Bottom!", "type": "recap"}
+        result = post_tweet(tweet)
+        assert result["posted"] is True
+        assert result["tweet_id"] == "12345"
+        assert result["error"] is None
+        assert result["type"] == "recap"
 
     @patch("v2.twitter.get_twitter_client")
     def test_handles_api_error(self, mock_get_client):
         mock_client = MagicMock()
         mock_client.create_tweet.side_effect = Exception("Rate limit")
         mock_get_client.return_value = mock_client
-        tweets = [{"text": "Tweet 1", "type": "recap"}]
-        results = post_tweets(tweets)
-        assert len(results) == 1
-        assert results[0]["posted"] is False
-        assert "Rate limit" in results[0]["error"]
-
-    @patch("v2.twitter.get_twitter_client")
-    def test_continues_after_failure(self, mock_get_client):
-        mock_client = MagicMock()
-        error_response = Exception("Rate limit")
-        success_response = MagicMock()
-        success_response.data = {"id": "99999"}
-        mock_client.create_tweet.side_effect = [error_response, success_response]
-        mock_get_client.return_value = mock_client
-        tweets = [
-            {"text": "Tweet 1", "type": "recap"},
-            {"text": "Tweet 2", "type": "trade"},
-        ]
-        results = post_tweets(tweets)
-        assert len(results) == 2
-        assert results[0]["posted"] is False
-        assert results[1]["posted"] is True
+        tweet = {"text": "Tweet 1", "type": "recap"}
+        result = post_tweet(tweet)
+        assert result["posted"] is False
+        assert "Rate limit" in result["error"]
 
     @patch("v2.twitter.get_twitter_client")
     def test_no_credentials(self, mock_get_client):
         mock_get_client.return_value = None
-        tweets = [{"text": "Tweet", "type": "recap"}]
-        results = post_tweets(tweets)
-        assert len(results) == 1
-        assert results[0]["posted"] is False
-        assert "No Twitter credentials" in results[0]["error"]
+        tweet = {"text": "Tweet", "type": "recap"}
+        result = post_tweet(tweet)
+        assert result["posted"] is False
+        assert "No Twitter credentials" in result["error"]
 
 
 class TestRunTwitterStage:
     """Verify run_twitter_stage orchestration."""
 
     @patch("v2.twitter.insert_tweet")
-    @patch("v2.twitter.post_tweets")
-    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
     def test_happy_path(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "Today we bought AAPL"
-        mock_generate.return_value = [
-            {"text": "Ahoy! Bought $AAPL!", "type": "trade"},
-            {"text": "Portfolio is looking good!", "type": "recap"},
-        ]
-        mock_post.return_value = [
-            {"text": "Ahoy! Bought $AAPL!", "type": "trade", "posted": True, "tweet_id": "111", "error": None},
-            {"text": "Portfolio is looking good!", "type": "recap", "posted": True, "tweet_id": "222", "error": None},
-        ]
+        mock_generate.return_value = {"text": "Ahoy! Bought $AAPL!", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Ahoy! Bought $AAPL!", "type": "recap", "posted": True, "tweet_id": "111", "error": None,
+        }
         result = run_twitter_stage(date(2026, 2, 15))
-        assert result.tweets_generated == 2
-        assert result.tweets_posted == 2
-        assert result.tweets_failed == 0
+        assert result.tweet_posted is True
         assert result.skipped is False
         assert result.errors == []
-        assert mock_insert.call_count == 2
+        mock_insert.assert_called_once()
 
     @patch("v2.twitter.get_twitter_client")
     def test_skips_without_credentials(self, mock_client):
         mock_client.return_value = None
         result = run_twitter_stage(date(2026, 2, 15))
         assert result.skipped is True
-        assert result.tweets_generated == 0
+        assert result.tweet_posted is False
 
     @patch("v2.twitter.insert_tweet")
-    @patch("v2.twitter.post_tweets")
-    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
-    def test_post_failures_counted(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+    def test_post_failure(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
-        mock_generate.return_value = [
-            {"text": "Tweet 1", "type": "recap"},
-            {"text": "Tweet 2", "type": "trade"},
-        ]
-        mock_post.return_value = [
-            {"text": "Tweet 1", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
-            {"text": "Tweet 2", "type": "trade", "posted": False, "tweet_id": None, "error": "Rate limit"},
-        ]
+        mock_generate.return_value = {"text": "Tweet 1", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Tweet 1", "type": "recap", "posted": False, "tweet_id": None, "error": "Rate limit",
+        }
         result = run_twitter_stage(date(2026, 2, 15))
-        assert result.tweets_generated == 2
-        assert result.tweets_posted == 1
-        assert result.tweets_failed == 1
+        assert result.tweet_posted is False
 
-    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.generate_tweet")
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
-    def test_no_tweets_generated(self, mock_client, mock_context, mock_generate):
+    def test_no_tweet_generated(self, mock_client, mock_context, mock_generate):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "No trading activity today."
-        mock_generate.return_value = []
+        mock_generate.return_value = None
         result = run_twitter_stage(date(2026, 2, 15))
-        assert result.tweets_generated == 0
-        assert result.tweets_posted == 0
+        assert result.tweet_posted is False
 
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
@@ -429,20 +369,20 @@ class TestRunTwitterStage:
         assert "Context gathering failed" in result.errors[0]
 
     @patch("v2.twitter.insert_tweet")
-    @patch("v2.twitter.post_tweets")
-    @patch("v2.twitter.generate_tweets")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
     def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
-        mock_generate.return_value = [{"text": "Tweet", "type": "recap"}]
-        mock_post.return_value = [
-            {"text": "Tweet", "type": "recap", "posted": True, "tweet_id": "111", "error": None},
-        ]
+        mock_generate.return_value = {"text": "Tweet", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Tweet", "type": "recap", "posted": True, "tweet_id": "111", "error": None,
+        }
         mock_insert.side_effect = Exception("DB write failed")
         result = run_twitter_stage(date(2026, 2, 15))
-        assert result.tweets_posted == 1
+        assert result.tweet_posted is True
         assert len(result.errors) == 1
         assert "Failed to log tweet" in result.errors[0]
 
@@ -452,9 +392,7 @@ class TestTwitterStageResult:
 
     def test_defaults(self):
         r = TwitterStageResult()
-        assert r.tweets_generated == 0
-        assert r.tweets_posted == 0
-        assert r.tweets_failed == 0
+        assert r.tweet_posted is False
         assert r.skipped is False
         assert r.errors == []
 
