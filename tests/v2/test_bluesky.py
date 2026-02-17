@@ -1,5 +1,6 @@
 """Tests for the Bluesky integration (Bikini Bottom Capital) on v2 pipeline."""
 
+import os
 from datetime import date
 from unittest.mock import MagicMock, patch, call
 
@@ -155,6 +156,26 @@ class TestGenerateBlueskyPost:
         result = generate_bluesky_post("context")
         assert result is not None
         assert result["text"] == "Ahoy!"
+
+    @patch("v2.bluesky._call_with_retry")
+    @patch("v2.bluesky.get_claude_client")
+    def test_generate_bluesky_post_appends_dashboard_url(self, mock_get_client, mock_retry):
+        mock_get_client.return_value = MagicMock()
+        mock_retry.return_value = _make_claude_response({"text": "Ahoy! Great day!"})
+        with patch.dict(os.environ, {"DASHBOARD_URL": "https://example.github.io"}):
+            result = generate_bluesky_post("context")
+        assert result is not None
+        assert result["text"] == "Ahoy! Great day!\nhttps://example.github.io"
+
+    @patch("v2.bluesky._call_with_retry")
+    @patch("v2.bluesky.get_claude_client")
+    def test_generate_bluesky_post_no_url_when_not_set(self, mock_get_client, mock_retry):
+        mock_get_client.return_value = MagicMock()
+        mock_retry.return_value = _make_claude_response({"text": "Ahoy! Great day!"})
+        os.environ.pop("DASHBOARD_URL", None)
+        result = generate_bluesky_post("context")
+        assert result is not None
+        assert result["text"] == "Ahoy! Great day!"
 
 
 class TestBlueskyStageResult:
