@@ -1,10 +1,19 @@
 """Tests for dashboard data gathering module."""
 
 import json
+import os
 from datetime import date, datetime
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
-from v2.dashboard_publish import _DecimalEncoder, gather_dashboard_data
+import pytest
+
+from v2.dashboard_publish import (
+    _DecimalEncoder,
+    gather_dashboard_data,
+    push_to_github,
+    write_json_files,
+)
 
 
 class TestDecimalEncoder:
@@ -203,3 +212,101 @@ class TestGatherDashboardData:
         gather_dashboard_data(session_date)
 
         assert mock_db.execute.call_count == 7
+
+
+class TestWriteJsonFiles:
+    def _sample_data(self):
+        return {
+            "summary": {"portfolio_value": 100000, "cash": 50000},
+            "snapshots": [{"date": "2025-06-15", "value": 100000}],
+            "positions": [{"ticker": "AAPL", "shares": 10}],
+            "decisions": [{"action": "buy", "ticker": "AAPL"}],
+            "theses": [{"ticker": "AAPL", "direction": "long"}],
+        }
+
+    def test_writes_all_files(self, tmp_path):
+        """All 5 JSON files are written with correct content."""
+        data = self._sample_data()
+        result = write_json_files(data, str(tmp_path))
+
+        assert len(result) == 5
+        for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+            file_path = tmp_path / "data" / f"{key}.json"
+            assert file_path.exists()
+            with open(file_path) as f:
+                content = json.load(f)
+            assert content == data[key]
+
+    def test_creates_data_dir_if_missing(self, tmp_path):
+        """data/ directory is created automatically."""
+        data = self._sample_data()
+        data_dir = tmp_path / "data"
+        assert not data_dir.exists()
+
+        write_json_files(data, str(tmp_path))
+
+        assert data_dir.exists()
+        assert data_dir.is_dir()
+
+    def test_uses_decimal_encoder(self, tmp_path):
+        """Decimal values are serialized as floats."""
+        data = {
+            "summary": {"portfolio_value": Decimal("100000.50")},
+            "snapshots": [],
+            "positions": [],
+            "decisions": [],
+            "theses": [],
+        }
+
+        write_json_files(data, str(tmp_path))
+
+        with open(tmp_path / "data" / "summary.json") as f:
+            content = json.load(f)
+        assert content["portfolio_value"] == 100000.50
+        assert isinstance(content["portfolio_value"], float)
+
+
+class TestPushToGithub:
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_commits_and_pushes(self, mock_run):
+        """Verifies 3 git calls: add, commit, push."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = push_to_github("/fake/repo")
+
+        assert result is True
+        assert mock_run.call_count == 3
+
+        # Verify the three calls
+        calls = mock_run.call_args_list
+        assert calls[0][0][0] == ["git", "add", "data/"]
+        assert calls[0][1]["cwd"] == "/fake/repo"
+
+        assert calls[1][0][0][0:2] == ["git", "commit"]
+        assert calls[1][1]["cwd"] == "/fake/repo"
+
+        assert calls[2][0][0] == ["git", "push"]
+        assert calls[2][1]["cwd"] == "/fake/repo"
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_skips_push_if_nothing_to_commit(self, mock_run):
+        """When commit returns non-zero, push is NOT called."""
+        add_result = MagicMock(returncode=0)
+        commit_result = MagicMock(returncode=1, stdout="nothing to commit")
+        mock_run.side_effect = [add_result, commit_result]
+
+        result = push_to_github("/fake/repo")
+
+        assert result is False
+        assert mock_run.call_count == 2  # add + commit, no push
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_raises_on_push_failure(self, mock_run):
+        """RuntimeError raised when push fails."""
+        add_result = MagicMock(returncode=0)
+        commit_result = MagicMock(returncode=0)
+        push_result = MagicMock(returncode=1, stderr="fatal: remote error")
+        mock_run.side_effect = [add_result, commit_result, push_result]
+
+        with pytest.raises(RuntimeError, match="fatal: remote error"):
+            push_to_github("/fake/repo")

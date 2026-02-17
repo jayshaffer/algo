@@ -5,6 +5,8 @@ Queries the DB and structures data for JSON export.
 
 import json
 import logging
+import os
+import subprocess
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -168,3 +170,64 @@ def _build_summary(latest, first, previous, positions_count, session_date):
         "total_pnl_pct": total_pnl_pct,
         "inception_date": inception_date,
     }
+
+
+def write_json_files(data: dict, repo_path: str) -> list[str]:
+    """Write dashboard data as separate JSON files for GitHub Pages.
+
+    Creates a data/ subdirectory under repo_path and writes each key
+    from the data dict as a separate JSON file.
+
+    Returns list of file paths written.
+    """
+    data_dir = os.path.join(repo_path, "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    files_written = []
+    for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+        file_path = os.path.join(data_dir, f"{key}.json")
+        with open(file_path, "w") as f:
+            json.dump(data[key], f, cls=_DecimalEncoder, indent=2)
+        logger.info("Wrote %s", file_path)
+        files_written.append(file_path)
+
+    return files_written
+
+
+def push_to_github(repo_path: str) -> bool:
+    """Stage, commit, and push dashboard data to GitHub.
+
+    Returns True if pushed successfully, False if nothing to commit.
+    Raises RuntimeError if git push fails.
+    """
+    add_result = subprocess.run(
+        ["git", "add", "data/"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    if add_result.returncode != 0:
+        raise RuntimeError(f"git add failed: {add_result.stderr.strip()}")
+
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", f"Update dashboard data {date.today().isoformat()}"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+
+    if commit_result.returncode != 0:
+        logger.info("Nothing to commit: %s", commit_result.stdout.strip())
+        return False
+
+    push_result = subprocess.run(
+        ["git", "push"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+
+    if push_result.returncode != 0:
+        raise RuntimeError(push_result.stderr)
+
+    return True
