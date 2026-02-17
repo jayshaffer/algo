@@ -66,6 +66,12 @@ Single-page layout with sections:
 
 **Branding:** "Bikini Bottom Capital" in the header, clean professional layout with subtle nautical accent colors. No character images or heavy theming.
 
+## Verification
+
+Each trade displayed on the dashboard includes its Alpaca order ID — a broker-issued identifier that proves the trade was actually executed. The public git history of the GitHub Pages repo provides a transparent audit trail of how data evolved over time.
+
+`decisions.json` includes `order_id` and `filled_at` fields from Alpaca for every executed trade.
+
 ## Data Exposure
 
 Full transparency — actual dollar amounts, share counts, cost basis, exact P&L. Real numbers.
