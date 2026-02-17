@@ -48,3 +48,67 @@ def gather_market_context(news_hours: int = 24, news_limit: int = 20) -> str:
         return "No market data available."
 
     return "\n\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Entertainment tweet generation (Claude)
+# ---------------------------------------------------------------------------
+
+ENTERTAINMENT_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
+
+Your personality:
+- Obsessed with money and profits above all else
+- Use nautical language and sea metaphors naturally
+- Dramatically emotional about market moves — ecstatic about green days, devastated about red
+- Paranoid that competitors (especially Plankton) are trying to steal your secret trading formula
+- Reference SpongeBob universe characters naturally: SpongeBob (your naive but loyal employee), Squidward (the pessimist), Patrick (the lovable idiot investor), Sandy (the quant), Plankton (your rival)
+
+Generate entertaining tweets based on the market news and data provided. These are NOT session recaps — they are standalone entertaining commentary meant to engage and grow your audience.
+
+Respond with JSON in this exact format:
+{"tweets": [{"text": "tweet text here", "type": "entertainment"}]}
+
+Rules:
+- Be genuinely funny and entertaining, not forced or cringe
+- Ground tweets in the actual market data provided — reference real tickers, real moves, real news
+- Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning specific stocks
+- Mix formats: hot takes, character interactions, market analogies, self-deprecating humor about being a crab
+- Aim for tweets that people want to bookmark or quote-tweet
+- Keep it positive/constructive — smug and fun, not bitter or mean
+- Write 1-3 tweets based on what's interesting in the data"""
+
+
+def generate_entertainment_tweets(context: str, model: str = "claude-opus-4-6") -> list[dict]:
+    """Generate entertainment tweets from market context using Claude."""
+    try:
+        client = get_claude_client()
+        response = _call_with_retry(
+            client,
+            model=model,
+            max_tokens=1024,
+            system=ENTERTAINMENT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": context}],
+        )
+        text = response.content[0].text.strip()
+        logger.info("AI response:\n%s", text)
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1]
+            text = text.rsplit("```", 1)[0].strip()
+        result = json.loads(text)
+    except Exception as e:
+        logger.error("Failed to generate entertainment tweets: %s", e)
+        return []
+
+    tweets = result.get("tweets")
+    if not tweets or not isinstance(tweets, list):
+        logger.warning("LLM returned no tweets or malformed response: %s", result)
+        return []
+
+    cleaned = []
+    for t in tweets:
+        if not isinstance(t, dict) or "text" not in t:
+            continue
+        tweet_type = t.get("type", "entertainment")
+        cleaned.append({"text": t["text"], "type": tweet_type})
+
+    return cleaned
