@@ -200,3 +200,33 @@ def run_entertainment_pipeline(
     )
 
     return result
+
+
+def main():
+    """CLI entry point for entertainment tweet pipeline."""
+    from .log_config import setup_logging
+    setup_logging()
+
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate and post entertainment tweets")
+    parser.add_argument("--model", default="claude-opus-4-6")
+    parser.add_argument("--news-hours", type=int, default=24)
+    parser.add_argument("--news-limit", type=int, default=20)
+    args = parser.parse_args()
+
+    result = run_entertainment_pipeline(
+        news_hours=args.news_hours,
+        news_limit=args.news_limit,
+        model=args.model,
+    )
+
+    if result.skipped:
+        print("Skipped — no Twitter credentials configured")
+    elif result.errors:
+        print(f"Completed with errors: {result.errors}")
+    else:
+        print(f"Done: {result.tweets_posted} posted, {result.tweets_failed} failed")
+
+
+if __name__ == "__main__":
+    main()
