@@ -10,6 +10,7 @@ from trading.session import SessionResult, run_session
 from trading.pipeline import PipelineStats
 from trading.ideation_claude import ClaudeIdeationResult
 from trading.trader import TradingSessionResult
+from trading.twitter import TwitterStageResult
 
 
 # ---------------------------------------------------------------------------
@@ -123,18 +124,21 @@ def mock_session_deps():
     with patch("trading.session.check_dependencies") as mock_deps, \
          patch("trading.session.run_pipeline") as mock_pipeline, \
          patch("trading.session.run_strategist_loop") as mock_strategist, \
-         patch("trading.session.run_trading_session") as mock_trading:
+         patch("trading.session.run_trading_session") as mock_trading, \
+         patch("trading.session.run_twitter_stage") as mock_twitter:
 
         mock_deps.return_value = True
         mock_pipeline.return_value = _make_pipeline_stats()
         mock_strategist.return_value = _make_ideation_result()
         mock_trading.return_value = _make_trading_result()
+        mock_twitter.return_value = TwitterStageResult()
 
         yield {
             "check_dependencies": mock_deps,
             "run_pipeline": mock_pipeline,
             "run_strategist_loop": mock_strategist,
             "run_trading_session": mock_trading,
+            "run_twitter_stage": mock_twitter,
         }
 
 
@@ -306,3 +310,42 @@ class TestRunSessionResilience:
         mock_session_deps["run_pipeline"].assert_called_once()
         mock_session_deps["run_strategist_loop"].assert_called_once()
         mock_session_deps["run_trading_session"].assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# run_session — Twitter stage (Stage 4)
+# ---------------------------------------------------------------------------
+
+class TestRunSessionTwitterStage:
+
+    def test_twitter_runs_after_trading(self, mock_session_deps):
+        """Twitter stage should be called during a normal session."""
+        run_session()
+        mock_session_deps["run_twitter_stage"].assert_called_once()
+
+    def test_skip_twitter(self, mock_session_deps):
+        """skip_twitter flag should prevent the Twitter stage from running."""
+        result = run_session(skip_twitter=True)
+        mock_session_deps["run_twitter_stage"].assert_not_called()
+        assert result.skipped_twitter is True
+
+    def test_twitter_failure_nonfatal(self, mock_session_deps):
+        """Twitter failure should be captured but NOT affect has_errors."""
+        mock_session_deps["run_twitter_stage"].side_effect = Exception("tweepy boom")
+        result = run_session()
+
+        assert result.twitter_error == "tweepy boom"
+        assert result.twitter_result is None
+        assert result.has_errors is False
+
+    def test_twitter_result_stored(self, mock_session_deps):
+        """Twitter result should be stored on the SessionResult."""
+        mock_session_deps["run_twitter_stage"].return_value = TwitterStageResult(
+            tweets_generated=3, tweets_posted=2, tweets_failed=1,
+        )
+        result = run_session()
+
+        assert result.twitter_result is not None
+        assert result.twitter_result.tweets_generated == 3
+        assert result.twitter_result.tweets_posted == 2
+        assert result.twitter_result.tweets_failed == 1

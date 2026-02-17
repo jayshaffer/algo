@@ -40,41 +40,39 @@ class ClassificationResult:
     macro_signal: Optional[MacroSignal]
 
 
-CLASSIFICATION_PROMPT = """Classify this news headline for stock trading relevance.
+CLASSIFICATION_SYSTEM = """Classify news headlines for stock trading relevance. Respond with JSON only.
 
-Headline: "{headline}"
-
-Determine the type and extract relevant information.
-
-Respond with JSON only:
-{{
+JSON schema:
+{
     "type": "ticker_specific" | "macro_political" | "sector" | "noise",
-    "tickers": ["AAPL", "MSFT"],  // if ticker_specific, list mentioned tickers
+    "tickers": ["AAPL", "MSFT"],
     "category": "earnings" | "guidance" | "analyst" | "product" | "legal" | "fed" | "trade" | "regulation" | "geopolitical" | "fiscal" | "election" | "noise",
     "sentiment": "bullish" | "bearish" | "neutral",
     "confidence": "high" | "medium" | "low",
-    "affected_sectors": ["tech", "finance"]  // if macro_political, list affected sectors
-}}
+    "affected_sectors": ["tech", "finance"]
+}
 
 Rules:
 - ticker_specific: News about specific companies (earnings, guidance, analyst ratings, products, legal)
 - macro_political: Fed policy, trade/tariffs, regulations, geopolitical events, fiscal policy, elections
 - sector: General sector news without specific tickers
 - noise: Irrelevant to trading (celebrity news, sports, etc.)
+- tickers: Stock ticker symbols mentioned (empty list if not ticker_specific)
+- affected_sectors can include: tech, finance, energy, healthcare, defense, consumer, industrial, all"""
 
-For macro news, affected_sectors can include: tech, finance, energy, healthcare, defense, consumer, industrial, all"""
+_CACHED_CLASSIFICATION_SYSTEM = [
+    {"type": "text", "text": CLASSIFICATION_SYSTEM, "cache_control": {"type": "ephemeral"}}
+]
 
 
-TICKER_CLASSIFICATION_PROMPT = """Classify this news for the stock ticker {ticker}.
+TICKER_CLASSIFICATION_SYSTEM = """Classify news for a specific stock ticker. Respond with JSON only.
 
-Headline: "{headline}"
-
-Respond with JSON only:
-{{
+JSON schema:
+{
     "category": "earnings" | "guidance" | "analyst" | "product" | "legal" | "noise",
     "sentiment": "bullish" | "bearish" | "neutral",
     "confidence": "high" | "medium" | "low"
-}}
+}
 
 Category meanings:
 - earnings: Quarterly/annual results, revenue, profit
@@ -84,21 +82,23 @@ Category meanings:
 - legal: Lawsuits, regulatory actions, investigations
 - noise: Not directly relevant to stock price"""
 
+_CACHED_TICKER_CLASSIFICATION_SYSTEM = [
+    {"type": "text", "text": TICKER_CLASSIFICATION_SYSTEM, "cache_control": {"type": "ephemeral"}}
+]
 
-BATCH_CLASSIFICATION_PROMPT = """Classify each news headline for stock trading relevance.
 
-{headlines_block}
+BATCH_CLASSIFICATION_SYSTEM = """Classify each news headline for stock trading relevance.
 
 For each headline, respond with a JSON array containing one object per headline (in the same order):
 [
-  {{
+  {
     "type": "ticker_specific" | "macro_political" | "sector" | "noise",
     "tickers": ["AAPL"],
     "category": "earnings" | "guidance" | "analyst" | "product" | "legal" | "fed" | "trade" | "regulation" | "geopolitical" | "fiscal" | "election" | "noise",
     "sentiment": "bullish" | "bearish" | "neutral",
     "confidence": "high" | "medium" | "low",
     "affected_sectors": ["tech"]
-  }}
+  }
 ]
 
 Rules:
@@ -108,7 +108,11 @@ Rules:
 - noise: Irrelevant to trading
 - tickers: Stock ticker symbols mentioned (empty list if not ticker_specific)
 - affected_sectors: tech, finance, energy, healthcare, defense, consumer, industrial, all
-- You MUST return exactly {count} objects in the array, one per headline, in the same order"""
+- Return exactly one object per headline, in the same order"""
+
+_CACHED_BATCH_CLASSIFICATION_SYSTEM = [
+    {"type": "text", "text": BATCH_CLASSIFICATION_SYSTEM, "cache_control": {"type": "ephemeral"}}
+]
 
 
 def _strip_code_fences(text: str) -> str:
@@ -166,25 +170,28 @@ def _build_classification_result(
     )
 
 
-def classify_news(headline: str, published_at: datetime) -> ClassificationResult:
+def classify_news(
+    headline: str, published_at: datetime, client=None
+) -> ClassificationResult:
     """
     Classify a single news headline using Claude Haiku.
 
     Args:
         headline: News headline text
         published_at: When the news was published
+        client: Optional Anthropic client (reused across calls)
 
     Returns:
         ClassificationResult with type and extracted signals
     """
-    prompt = CLASSIFICATION_PROMPT.format(headline=headline)
-
     try:
-        client = get_claude_client()
+        if client is None:
+            client = get_claude_client()
         response = client.messages.create(
             model=CLASSIFICATION_MODEL,
             max_tokens=256,
-            messages=[{"role": "user", "content": prompt}]
+            system=_CACHED_CLASSIFICATION_SYSTEM,
+            messages=[{"role": "user", "content": headline}]
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)
@@ -246,16 +253,13 @@ def _classify_batch(
     headlines_block = "\n".join(
         f'{i + 1}. "{h}"' for i, h in enumerate(headlines)
     )
-    prompt = BATCH_CLASSIFICATION_PROMPT.format(
-        headlines_block=headlines_block,
-        count=len(headlines)
-    )
 
     client = get_claude_client()
     response = client.messages.create(
         model=CLASSIFICATION_MODEL,
         max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
+        system=_CACHED_BATCH_CLASSIFICATION_SYSTEM,
+        messages=[{"role": "user", "content": headlines_block}]
     )
 
     # Parse JSON array from response
@@ -282,7 +286,9 @@ def _classify_batch(
     return results
 
 
-def classify_ticker_news(ticker: str, headline: str, published_at: datetime) -> TickerSignal:
+def classify_ticker_news(
+    ticker: str, headline: str, published_at: datetime, client=None
+) -> TickerSignal:
     """
     Classify news for a specific ticker (when ticker is already known).
 
@@ -290,18 +296,19 @@ def classify_ticker_news(ticker: str, headline: str, published_at: datetime) -> 
         ticker: Stock ticker symbol
         headline: News headline
         published_at: Publication time
+        client: Optional Anthropic client (reused across calls)
 
     Returns:
         TickerSignal with classification
     """
-    prompt = TICKER_CLASSIFICATION_PROMPT.format(ticker=ticker, headline=headline)
-
     try:
-        client = get_claude_client()
+        if client is None:
+            client = get_claude_client()
         response = client.messages.create(
             model=CLASSIFICATION_MODEL,
             max_tokens=256,
-            messages=[{"role": "user", "content": prompt}]
+            system=_CACHED_TICKER_CLASSIFICATION_SYSTEM,
+            messages=[{"role": "user", "content": f"Ticker: {ticker}\nHeadline: {headline}"}]
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)
