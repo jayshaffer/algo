@@ -164,6 +164,20 @@ docker compose exec trading python -m trading.learn
 docker compose exec trading python -m trading.learn --patterns-only
 ```
 
+### Entertainment Tweets
+
+Fire off entertaining Mr. Krabs tweets based on live market news and trends, independent of the daily session:
+
+```bash
+# Generate and post entertainment tweets
+docker compose exec trading python -m v2.entertainment
+
+# Custom options
+docker compose exec trading python -m v2.entertainment --news-hours 12 --news-limit 10
+```
+
+This pulls current market headlines and movers, then generates tweets in the Bikini Bottom Capital voice — referencing real tickers, real moves, and SpongeBob universe characters. Tweets are posted automatically and logged to the DB with `tweet_type="entertainment"`.
+
 ### Dashboard
 
 Access at http://localhost:3000
@@ -196,6 +210,12 @@ POSTGRES_DB=trading
 
 # Ollama
 OLLAMA_URL=http://ollama:11434
+
+# Twitter/X (optional — for Bikini Bottom Capital tweets)
+TWITTER_API_KEY=your_key
+TWITTER_API_SECRET=your_secret
+TWITTER_ACCESS_TOKEN=your_token
+TWITTER_ACCESS_TOKEN_SECRET=your_token_secret
 ```
 
 ### Model Options
@@ -299,6 +319,19 @@ python3 -m pytest tests/test_model_integration.py -m integration -v
 ```
 
 Integration tests send real prompts to Ollama and validate that qwen3:14b returns correctly structured JSON for every prompt template (classification, trading decisions, ideation). They are skipped by default in normal test runs.
+
+### Running Integration Tests in Docker
+
+```bash
+# Model integration tests (requires Ollama with qwen3:14b)
+docker compose exec trading python3 -m pytest tests/test_model_integration.py -m integration -v
+
+# Twitter integration tests (requires Ollama + Twitter API credentials in .env)
+docker compose exec trading python3 -m pytest tests/test_twitter_integration.py -m integration -v
+
+# All integration tests
+docker compose exec trading python3 -m pytest tests/ -m integration -v
+```
 
 ## Development
 

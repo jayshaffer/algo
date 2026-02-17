@@ -49,6 +49,7 @@ class SessionResult:
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False
+    skipped_executor: bool = False
     skipped_strategy: bool = False
     skipped_twitter: bool = False
     duration_seconds: float = 0.0
@@ -67,13 +68,14 @@ def run_session(
     max_turns: int = 25,
     skip_pipeline: bool = False,
     skip_ideation: bool = False,
+    skip_executor: bool = False,
     skip_strategy: bool = False,
     skip_twitter: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
 ) -> SessionResult:
     start = time.monotonic()
-    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter)
+    result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter)
 
     # Stage 0: Refresh learning data
     attribution_constraints = ""
@@ -114,12 +116,15 @@ def run_session(
             logger.error("Strategist failed: %s — continuing with existing playbook", e)
 
     # Stage 3: Trading session
-    logger.info("[Stage 3] Running trading session")
-    try:
-        result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
-    except Exception as e:
-        result.trading_error = str(e)
-        logger.error("Trading session failed: %s", e)
+    if skip_executor:
+        logger.info("[Stage 3] Trading executor — SKIPPED")
+    else:
+        logger.info("[Stage 3] Running trading session")
+        try:
+            result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
+        except Exception as e:
+            result.trading_error = str(e)
+            logger.error("Trading session failed: %s", e)
 
     # Stage 4: Strategy reflection
     if skip_strategy:
@@ -173,6 +178,7 @@ def main():
     parser.add_argument("--max-turns", type=int, default=25)
     parser.add_argument("--skip-pipeline", action="store_true")
     parser.add_argument("--skip-ideation", action="store_true")
+    parser.add_argument("--skip-executor", action="store_true")
     parser.add_argument("--skip-strategy", action="store_true")
     parser.add_argument("--skip-twitter", action="store_true")
     parser.add_argument("--pipeline-hours", type=int, default=24)
@@ -181,7 +187,8 @@ def main():
     result = run_session(
         dry_run=args.dry_run, model=args.model, executor_model=args.executor_model,
         max_turns=args.max_turns, skip_pipeline=args.skip_pipeline,
-        skip_ideation=args.skip_ideation, skip_strategy=args.skip_strategy,
+        skip_ideation=args.skip_ideation, skip_executor=args.skip_executor,
+        skip_strategy=args.skip_strategy,
         skip_twitter=args.skip_twitter, pipeline_hours=args.pipeline_hours,
     )
     if result.has_errors:

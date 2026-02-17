@@ -12,7 +12,7 @@ from datetime import date
 from .claude_client import get_claude_client, _call_with_retry
 from .news import fetch_broad_news
 from .market_data import get_market_snapshot, format_market_snapshot
-from .twitter import get_twitter_client, post_tweets
+from .twitter import get_twitter_client, post_tweet
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 
@@ -63,29 +63,29 @@ Your personality:
 - Paranoid that competitors (especially Plankton) are trying to steal your secret trading formula
 - Reference SpongeBob universe characters naturally: SpongeBob (your naive but loyal employee), Squidward (the pessimist), Patrick (the lovable idiot investor), Sandy (the quant), Plankton (your rival)
 
-Generate entertaining tweets based on the market news and data provided. These are NOT session recaps — they are standalone entertaining commentary meant to engage and grow your audience.
+Generate ONE entertaining tweet based on the market news and data provided. This is NOT a session recap — it is standalone entertaining commentary meant to engage and grow your audience.
 
 Respond with JSON in this exact format:
-{"tweets": [{"text": "tweet text here", "type": "entertainment"}]}
+{"text": "tweet text here"}
 
 Rules:
 - Be genuinely funny and entertaining, not forced or cringe
-- Ground tweets in the actual market data provided — reference real tickers, real moves, real news
+- Ground the tweet in the actual market data provided — reference real tickers, real moves, real news
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning specific stocks
 - Mix formats: hot takes, character interactions, market analogies, self-deprecating humor about being a crab
-- Aim for tweets that people want to bookmark or quote-tweet
+- Aim for a tweet that people want to bookmark or quote-tweet
 - Keep it positive/constructive — smug and fun, not bitter or mean
-- Write 1-3 tweets based on what's interesting in the data"""
+- Pick the single most interesting thing in the data and craft the best tweet you can"""
 
 
-def generate_entertainment_tweets(context: str, model: str = "claude-opus-4-6") -> list[dict]:
-    """Generate entertainment tweets from market context using Claude."""
+def generate_entertainment_tweet(context: str, model: str = "claude-opus-4-6") -> dict | None:
+    """Generate a single entertainment tweet from market context using Claude."""
     try:
         client = get_claude_client()
         response = _call_with_retry(
             client,
             model=model,
-            max_tokens=1024,
+            max_tokens=512,
             system=ENTERTAINMENT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": context}],
         )
@@ -96,22 +96,14 @@ def generate_entertainment_tweets(context: str, model: str = "claude-opus-4-6") 
             text = text.rsplit("```", 1)[0].strip()
         result = json.loads(text)
     except Exception as e:
-        logger.error("Failed to generate entertainment tweets: %s", e)
-        return []
+        logger.error("Failed to generate entertainment tweet: %s", e)
+        return None
 
-    tweets = result.get("tweets")
-    if not tweets or not isinstance(tweets, list):
-        logger.warning("LLM returned no tweets or malformed response: %s", result)
-        return []
+    if not isinstance(result, dict) or "text" not in result:
+        logger.warning("LLM returned malformed response: %s", result)
+        return None
 
-    cleaned = []
-    for t in tweets:
-        if not isinstance(t, dict) or "text" not in t:
-            continue
-        tweet_type = t.get("type", "entertainment")
-        cleaned.append({"text": t["text"], "type": tweet_type})
-
-    return cleaned
+    return {"text": result["text"], "type": "entertainment"}
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +113,10 @@ def generate_entertainment_tweets(context: str, model: str = "claude-opus-4-6") 
 @dataclass
 class EntertainmentResult:
     """Result of the entertainment tweet pipeline."""
-    tweets_generated: int = 0
-    tweets_posted: int = 0
-    tweets_failed: int = 0
+    posted: bool = False
     skipped: bool = False
-    errors: list[str] = field(default_factory=list)
+    tweet_id: str | None = None
+    error: str | None = None
 
 
 def run_entertainment_pipeline(
@@ -148,55 +139,51 @@ def run_entertainment_pipeline(
     try:
         context = gather_market_context(news_hours=news_hours, news_limit=news_limit)
     except Exception as e:
-        result.errors.append(f"Context gathering failed: {e}")
+        result.error = f"Context gathering failed: {e}"
         logger.error("Failed to gather market context: %s", e)
         return result
 
-    # Generate tweets
+    # Generate tweet
     try:
-        tweets = generate_entertainment_tweets(context, model=model)
+        tweet = generate_entertainment_tweet(context, model=model)
     except Exception as e:
-        result.errors.append(f"Tweet generation failed: {e}")
-        logger.error("Failed to generate entertainment tweets: %s", e)
+        result.error = f"Tweet generation failed: {e}"
+        logger.error("Failed to generate entertainment tweet: %s", e)
         return result
 
-    result.tweets_generated = len(tweets)
-
-    if not tweets:
-        logger.info("No entertainment tweets generated")
+    if tweet is None:
+        logger.info("No entertainment tweet generated")
         return result
 
-    # Post tweets
+    # Post tweet
     try:
-        post_results = post_tweets(tweets, client=client)
+        post_result = post_tweet(tweet, client=client)
     except Exception as e:
-        result.errors.append(f"Tweet posting failed: {e}")
-        logger.error("Failed to post tweets: %s", e)
+        result.error = f"Tweet posting failed: {e}"
+        logger.error("Failed to post tweet: %s", e)
         return result
 
-    # Log results to DB
-    for pr in post_results:
-        try:
-            insert_tweet(
-                session_date=today,
-                tweet_type=pr.get("type", "entertainment"),
-                tweet_text=pr["text"],
-                tweet_id=pr.get("tweet_id"),
-                posted=pr["posted"],
-                error=pr.get("error"),
-            )
-        except Exception as e:
-            result.errors.append(f"Failed to log tweet: {e}")
-            logger.error("Failed to log tweet to DB: %s", e)
+    result.posted = post_result["posted"]
+    result.tweet_id = post_result.get("tweet_id")
+    if post_result.get("error"):
+        result.error = post_result["error"]
 
-        if pr["posted"]:
-            result.tweets_posted += 1
-        else:
-            result.tweets_failed += 1
+    # Log to DB
+    try:
+        insert_tweet(
+            session_date=today,
+            tweet_type="entertainment",
+            tweet_text=post_result["text"],
+            tweet_id=post_result.get("tweet_id"),
+            posted=post_result["posted"],
+            error=post_result.get("error"),
+        )
+    except Exception as e:
+        logger.error("Failed to log tweet to DB: %s", e)
 
     logger.info(
-        "Entertainment pipeline complete: generated=%d, posted=%d, failed=%d",
-        result.tweets_generated, result.tweets_posted, result.tweets_failed,
+        "Entertainment pipeline complete: posted=%s, tweet_id=%s",
+        result.posted, result.tweet_id,
     )
 
     return result
@@ -222,10 +209,12 @@ def main():
 
     if result.skipped:
         print("Skipped — no Twitter credentials configured")
-    elif result.errors:
-        print(f"Completed with errors: {result.errors}")
+    elif result.error and not result.posted:
+        print(f"Failed: {result.error}")
+    elif result.posted:
+        print(f"Posted tweet {result.tweet_id}")
     else:
-        print(f"Done: {result.tweets_posted} posted, {result.tweets_failed} failed")
+        print("No tweet generated")
 
 
 if __name__ == "__main__":

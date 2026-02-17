@@ -1,17 +1,17 @@
 """Twitter integration -- Bikini Bottom Capital (v2 pipeline).
 
-Generates and posts tweets about trading activity using Ollama
+Generates and posts tweets about trading activity using Claude (Opus)
 in the voice of Mr. Krabs.
 """
 
+import json
 import logging
 import os
 from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional
 
-from trading.ollama import chat_json
-
+from .claude_client import get_claude_client, _call_with_retry
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 
@@ -70,16 +70,41 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
                 lines.append(f"  {t['ticker']} ({t['direction']}, {t['confidence']}): {t['thesis']}")
             sections.append("\n".join(lines))
 
-        # Latest snapshot
+        # Book status: current snapshot + P&L from history
         cur.execute(
-            "SELECT portfolio_value, cash, buying_power FROM account_snapshots ORDER BY date DESC LIMIT 1"
+            "SELECT date, portfolio_value, cash, buying_power, long_market_value "
+            "FROM account_snapshots ORDER BY date DESC LIMIT 2"
         )
-        snapshot = cur.fetchone()
-        if snapshot:
-            sections.append(
-                f"ACCOUNT: portfolio=${snapshot['portfolio_value']}, "
-                f"cash=${snapshot['cash']}, buying_power=${snapshot['buying_power']}"
+        snapshots = cur.fetchall()
+        if snapshots:
+            today = snapshots[0]
+            portfolio = today['portfolio_value']
+            cash = today['cash']
+            invested = today['long_market_value'] or (portfolio - cash)
+            lines = [
+                "BOOK STATUS:",
+                f"  Portfolio value: ${portfolio:,.2f}",
+                f"  Invested: ${invested:,.2f}",
+                f"  Cash: ${cash:,.2f}",
+                f"  Positions: {len(positions) if positions else 0}",
+            ]
+            if len(snapshots) == 2:
+                prev = snapshots[1]['portfolio_value']
+                day_pnl = portfolio - prev
+                day_pct = (day_pnl / prev * 100) if prev else 0
+                sign = "+" if day_pnl >= 0 else ""
+                lines.append(f"  Today's P&L: {sign}${day_pnl:,.2f} ({sign}{day_pct:.2f}%)")
+            # Overall return from first snapshot
+            cur.execute(
+                "SELECT portfolio_value, date FROM account_snapshots ORDER BY date ASC LIMIT 1"
             )
+            first = cur.fetchone()
+            if first and first['portfolio_value'] and first['date'] != today['date']:
+                total_pnl = portfolio - first['portfolio_value']
+                total_pct = (total_pnl / first['portfolio_value'] * 100)
+                sign = "+" if total_pnl >= 0 else ""
+                lines.append(f"  Total return: {sign}${total_pnl:,.2f} ({sign}{total_pct:.2f}%) since {first['date']}")
+            sections.append("\n".join(lines))
 
         # Latest strategy memo
         cur.execute(
@@ -104,7 +129,7 @@ MR_KRABS_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, runnin
 Your personality:
 - Obsessed with money and profits above all else
 - Use nautical language and sea metaphors naturally
-- Dramatically emotional about P&L — ecstatic about gains, devastated about losses
+- Dramatically emotional about P&L — ecstatic about gains, devastated about losses.  Avoid talking about total portfolio gain, as it doesn't reflect the cash position correctly.
 - Paranoid that competitors are trying to steal your secret trading formula
 
 Generate tweets based on the trading session context provided. Each tweet must be a standalone post suitable for Twitter/X.
@@ -113,21 +138,30 @@ Respond with JSON in this exact format:
 {"tweets": [{"text": "tweet text here", "type": "recap|trade|thesis|commentary"}]}
 
 Rules:
-- Keep each tweet under 280 characters
 - Make them entertaining but grounded in the actual trading data
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
 - Vary the tweet types: session recaps, individual trade callouts, thesis commentary, market color
 - Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
 
 
-def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:
-    """Generate tweets from session context using Ollama."""
+def generate_tweets(context: str, model: str = "claude-opus-4-6") -> list[dict]:
+    """Generate tweets from session context using Claude."""
     try:
-        result = chat_json(
-            prompt=context,
-            system=MR_KRABS_SYSTEM_PROMPT,
+        client = get_claude_client()
+        response = _call_with_retry(
+            client,
             model=model,
+            max_tokens=1024,
+            system=MR_KRABS_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": context}],
         )
+        text = response.content[0].text.strip()
+        logger.info("AI response:\n%s", text)
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1]
+            text = text.rsplit("```", 1)[0].strip()
+        result = json.loads(text)
     except Exception as e:
         logger.error("Failed to generate tweets: %s", e)
         return []
@@ -141,11 +175,8 @@ def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:
     for t in tweets:
         if not isinstance(t, dict) or "text" not in t:
             continue
-        text = t["text"]
-        if len(text) > 280:
-            text = text[:277] + "..."
         tweet_type = t.get("type", "commentary")
-        cleaned.append({"text": text, "type": tweet_type})
+        cleaned.append({"text": t["text"], "type": tweet_type})
 
     return cleaned
 
@@ -179,41 +210,29 @@ def get_twitter_client():
     )
 
 
+def post_tweet(tweet: dict, client=None) -> dict:
+    """Post a single tweet via the Twitter API."""
+    if client is None:
+        client = get_twitter_client()
+    if client is None:
+        return {"text": tweet["text"], "type": tweet.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
+
+    tweet_type = tweet.get("type", "commentary")
+    try:
+        response = client.create_tweet(text=tweet["text"])
+        tweet_id = str(response.data["id"])
+        logger.info("Posted tweet %s: %s...", tweet_id, tweet["text"][:50])
+        return {"text": tweet["text"], "type": tweet_type, "posted": True, "tweet_id": tweet_id, "error": None}
+    except Exception as e:
+        logger.error("Failed to post tweet: %s", e)
+        return {"text": tweet["text"], "type": tweet_type, "posted": False, "tweet_id": None, "error": str(e)}
+
+
 def post_tweets(tweets: list[dict], client=None) -> list[dict]:
     """Post a list of tweets via the Twitter API."""
     if client is None:
         client = get_twitter_client()
-    if client is None:
-        return [
-            {"text": t["text"], "type": t.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
-            for t in tweets
-        ]
-
-    results = []
-    for tweet in tweets:
-        tweet_type = tweet.get("type", "commentary")
-        try:
-            response = client.create_tweet(text=tweet["text"])
-            tweet_id = str(response.data["id"])
-            results.append({
-                "text": tweet["text"],
-                "type": tweet_type,
-                "posted": True,
-                "tweet_id": tweet_id,
-                "error": None,
-            })
-            logger.info("Posted tweet %s: %s...", tweet_id, tweet["text"][:50])
-        except Exception as e:
-            logger.error("Failed to post tweet: %s", e)
-            results.append({
-                "text": tweet["text"],
-                "type": tweet_type,
-                "posted": False,
-                "tweet_id": None,
-                "error": str(e),
-            })
-
-    return results
+    return [post_tweet(t, client=client) for t in tweets]
 
 
 # ---------------------------------------------------------------------------

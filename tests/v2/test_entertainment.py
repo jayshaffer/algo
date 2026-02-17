@@ -8,7 +8,7 @@ import pytest
 
 from v2.entertainment import (
     gather_market_context,
-    generate_entertainment_tweets,
+    generate_entertainment_tweet,
     EntertainmentResult,
     run_entertainment_pipeline,
     ENTERTAINMENT_SYSTEM_PROMPT,
@@ -83,58 +83,57 @@ def _make_claude_response(json_data):
     return mock_resp
 
 
-class TestGenerateEntertainmentTweets:
+class TestGenerateEntertainmentTweet:
     """Verify entertainment tweet generation via Claude."""
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")
-    def test_generates_tweets(self, mock_get_client, mock_retry):
+    def test_generates_tweet(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
         mock_retry.return_value = _make_claude_response({
-            "tweets": [
-                {"text": "Squidward says the market is overvalued. Squidward also eats his cereal dry.", "type": "entertainment"},
-            ]
+            "text": "Squidward says the market is overvalued. Squidward also eats his cereal dry.",
         })
-        result = generate_entertainment_tweets("some market context")
-        assert len(result) == 1
-        assert result[0]["type"] == "entertainment"
+        result = generate_entertainment_tweet("some market context")
+        assert result is not None
+        assert result["type"] == "entertainment"
+        assert "Squidward" in result["text"]
         call_kwargs = mock_retry.call_args
         assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
-        assert "entertainment" in call_kwargs.kwargs.get("system", "").lower()
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")
     def test_handles_empty_response(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
         mock_retry.return_value = _make_claude_response({})
-        result = generate_entertainment_tweets("context")
-        assert result == []
+        result = generate_entertainment_tweet("context")
+        assert result is None
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")
     def test_handles_api_exception(self, mock_get_client, mock_retry):
         mock_get_client.side_effect = ValueError("No API key")
-        result = generate_entertainment_tweets("context")
-        assert result == []
+        result = generate_entertainment_tweet("context")
+        assert result is None
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")
     def test_handles_markdown_fenced_json(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
-        fenced = '```json\n{"tweets": [{"text": "Ahoy!", "type": "entertainment"}]}\n```'
+        fenced = '```json\n{"text": "Ahoy!"}\n```'
         mock_resp = MagicMock()
         mock_resp.content = [MagicMock(text=fenced)]
         mock_retry.return_value = mock_resp
-        result = generate_entertainment_tweets("context")
-        assert len(result) == 1
+        result = generate_entertainment_tweet("context")
+        assert result is not None
+        assert result["text"] == "Ahoy!"
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")
-    def test_default_type_is_entertainment(self, mock_get_client, mock_retry):
+    def test_type_is_always_entertainment(self, mock_get_client, mock_retry):
         mock_get_client.return_value = MagicMock()
-        mock_retry.return_value = _make_claude_response({"tweets": [{"text": "Just vibes"}]})
-        result = generate_entertainment_tweets("context")
-        assert result[0]["type"] == "entertainment"
+        mock_retry.return_value = _make_claude_response({"text": "Just vibes"})
+        result = generate_entertainment_tweet("context")
+        assert result["type"] == "entertainment"
 
 
 class TestEntertainmentResult:
@@ -142,41 +141,32 @@ class TestEntertainmentResult:
 
     def test_defaults(self):
         r = EntertainmentResult()
-        assert r.tweets_generated == 0
-        assert r.tweets_posted == 0
-        assert r.tweets_failed == 0
+        assert r.posted is False
         assert r.skipped is False
-        assert r.errors == []
-
-    def test_mutable_default(self):
-        r1 = EntertainmentResult()
-        r2 = EntertainmentResult()
-        r1.errors.append("test")
-        assert r2.errors == []
+        assert r.tweet_id is None
+        assert r.error is None
 
 
 class TestRunEntertainmentPipeline:
     """Verify end-to-end orchestration."""
 
     @patch("v2.entertainment.insert_tweet")
-    @patch("v2.entertainment.post_tweets")
-    @patch("v2.entertainment.generate_entertainment_tweets")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
     def test_happy_path(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "NEWS: NVDA up 5%"
-        mock_generate.return_value = [
-            {"text": "Arg! $NVDA making me money!", "type": "entertainment"},
-        ]
-        mock_post.return_value = [
-            {"text": "Arg! $NVDA making me money!", "type": "entertainment", "posted": True, "tweet_id": "111", "error": None},
-        ]
+        mock_generate.return_value = {"text": "Arg! $NVDA making me money!", "type": "entertainment"}
+        mock_post.return_value = {
+            "text": "Arg! $NVDA making me money!", "type": "entertainment",
+            "posted": True, "tweet_id": "111", "error": None,
+        }
         result = run_entertainment_pipeline()
-        assert result.tweets_generated == 1
-        assert result.tweets_posted == 1
-        assert result.tweets_failed == 0
-        assert result.errors == []
+        assert result.posted is True
+        assert result.tweet_id == "111"
+        assert result.error is None
         mock_insert.assert_called_once()
 
     @patch("v2.entertainment.get_twitter_client")
@@ -184,38 +174,35 @@ class TestRunEntertainmentPipeline:
         mock_client.return_value = None
         result = run_entertainment_pipeline()
         assert result.skipped is True
-        assert result.tweets_generated == 0
+        assert result.posted is False
 
     @patch("v2.entertainment.insert_tweet")
-    @patch("v2.entertainment.post_tweets")
-    @patch("v2.entertainment.generate_entertainment_tweets")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_post_failures_counted(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+    def test_post_failure(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
-        mock_generate.return_value = [
-            {"text": "Tweet 1", "type": "entertainment"},
-            {"text": "Tweet 2", "type": "entertainment"},
-        ]
-        mock_post.return_value = [
-            {"text": "Tweet 1", "type": "entertainment", "posted": True, "tweet_id": "111", "error": None},
-            {"text": "Tweet 2", "type": "entertainment", "posted": False, "tweet_id": None, "error": "Rate limit"},
-        ]
+        mock_generate.return_value = {"text": "Tweet", "type": "entertainment"}
+        mock_post.return_value = {
+            "text": "Tweet", "type": "entertainment",
+            "posted": False, "tweet_id": None, "error": "Rate limit",
+        }
         result = run_entertainment_pipeline()
-        assert result.tweets_posted == 1
-        assert result.tweets_failed == 1
+        assert result.posted is False
+        assert result.error == "Rate limit"
 
-    @patch("v2.entertainment.generate_entertainment_tweets")
+    @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_no_tweets_generated(self, mock_client, mock_context, mock_generate):
+    def test_no_tweet_generated(self, mock_client, mock_context, mock_generate):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "No market data available."
-        mock_generate.return_value = []
+        mock_generate.return_value = None
         result = run_entertainment_pipeline()
-        assert result.tweets_generated == 0
-        assert result.tweets_posted == 0
+        assert result.posted is False
+        assert result.error is None
 
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
@@ -223,23 +210,21 @@ class TestRunEntertainmentPipeline:
         mock_client.return_value = MagicMock()
         mock_context.side_effect = Exception("Total failure")
         result = run_entertainment_pipeline()
-        assert len(result.errors) == 1
-        assert "Context gathering failed" in result.errors[0]
+        assert "Context gathering failed" in result.error
 
     @patch("v2.entertainment.insert_tweet")
-    @patch("v2.entertainment.post_tweets")
-    @patch("v2.entertainment.generate_entertainment_tweets")
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
     def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
-        mock_generate.return_value = [{"text": "Tweet", "type": "entertainment"}]
-        mock_post.return_value = [
-            {"text": "Tweet", "type": "entertainment", "posted": True, "tweet_id": "111", "error": None},
-        ]
+        mock_generate.return_value = {"text": "Tweet", "type": "entertainment"}
+        mock_post.return_value = {
+            "text": "Tweet", "type": "entertainment",
+            "posted": True, "tweet_id": "111", "error": None,
+        }
         mock_insert.side_effect = Exception("DB write failed")
         result = run_entertainment_pipeline()
-        assert result.tweets_posted == 1
-        assert len(result.errors) == 1
-        assert "Failed to log tweet" in result.errors[0]
+        assert result.posted is True
