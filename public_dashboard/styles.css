@@ -1,0 +1,309 @@
+/* === Reset & Base === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-deep: #0a1628;
+  --bg-card: #132240;
+  --bg-card-hover: #1a2d52;
+  --accent: #00d4aa;
+  --accent-dim: rgba(0, 212, 170, 0.15);
+  --text: #e2e8f0;
+  --text-dim: #8892a4;
+  --gain: #00d4aa;
+  --loss: #ff6b6b;
+  --border: #1e3a5f;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+/* === Header === */
+header {
+  border-bottom: 2px solid var(--border);
+  padding: 2rem 0 1.5rem;
+  background: linear-gradient(180deg, #0d1f38 0%, var(--bg-deep) 100%);
+}
+
+header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+}
+
+header .subtitle {
+  color: var(--text-dim);
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+/* === Summary Cards === */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.card-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* === Panels === */
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  overflow: hidden;
+}
+
+.panel h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.chart-wrap {
+  padding: 1.25rem;
+}
+
+/* === Tables === */
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+thead th {
+  text-align: left;
+  padding: 0.75rem 1.25rem;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+thead th.num {
+  text-align: right;
+}
+
+tbody td {
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid rgba(30, 58, 95, 0.5);
+  vertical-align: top;
+}
+
+tbody td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+tbody tr:hover {
+  background: var(--bg-card-hover);
+}
+
+/* === Action Badges === */
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-buy {
+  background: rgba(0, 212, 170, 0.15);
+  color: var(--gain);
+}
+
+.badge-sell {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--loss);
+}
+
+.badge-hold {
+  background: rgba(136, 146, 164, 0.15);
+  color: var(--text-dim);
+}
+
+/* === Thesis Cards === */
+.thesis-card {
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(30, 58, 95, 0.5);
+}
+
+.thesis-card:last-child {
+  border-bottom: none;
+}
+
+.thesis-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.thesis-ticker {
+  font-weight: 700;
+  font-size: 1rem;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.thesis-direction {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.thesis-direction.long {
+  color: var(--gain);
+}
+
+.thesis-direction.short {
+  color: var(--loss);
+}
+
+.thesis-confidence {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.thesis-body {
+  color: var(--text-dim);
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.thesis-triggers {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* === P&L Coloring === */
+.gain {
+  color: var(--gain);
+}
+
+.loss {
+  color: var(--loss);
+}
+
+/* === Empty States === */
+.empty-state {
+  padding: 2rem 1.25rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.875rem;
+}
+
+/* === Footer === */
+footer {
+  border-top: 2px solid var(--border);
+  padding: 2rem 0;
+  margin-top: 2rem;
+  text-align: center;
+}
+
+footer p {
+  color: var(--text-dim);
+  font-size: 0.875rem;
+}
+
+footer .attribution {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+}
+
+footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+/* === Reasoning tooltip === */
+.reasoning-cell {
+  max-width: 250px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
+/* === Order ID === */
+.order-id {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* === Responsive === */
+@media (max-width: 640px) {
+  .card-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .card-value {
+    font-size: 1.2rem;
+  }
+
+  header h1 {
+    font-size: 1.35rem;
+  }
+}

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bikini Bottom Capital</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>&#9875; Bikini Bottom Capital</h1>
+            <p class="subtitle" id="last-updated">Loading...</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Summary Cards -->
+        <section id="summary" class="card-grid">
+            <div class="card">
+                <span class="card-label">Portfolio Value</span>
+                <span class="card-value" id="portfolio-value">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label">Daily P&L</span>
+                <span class="card-value" id="daily-pnl">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label">Total Return</span>
+                <span class="card-value" id="total-return">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label">Positions</span>
+                <span class="card-value" id="positions-count">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label">Cash</span>
+                <span class="card-value" id="cash-value">—</span>
+            </div>
+        </section>
+
+        <!-- Equity Curve -->
+        <section class="panel">
+            <h2>Equity Curve (90 days)</h2>
+            <div class="chart-wrap">
+                <canvas id="equity-chart"></canvas>
+            </div>
+            <p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>
+        </section>
+
+        <!-- Current Holdings -->
+        <section class="panel">
+            <h2>Current Holdings</h2>
+            <div class="table-wrap">
+                <table id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th class="num">Shares</th>
+                            <th class="num">Avg Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <p class="empty-state" id="positions-empty" style="display:none;">No open positions</p>
+        </section>
+
+        <!-- Recent Decisions -->
+        <section class="panel">
+            <h2>Recent Decisions</h2>
+            <div class="table-wrap">
+                <table id="decisions-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Ticker</th>
+                            <th>Action</th>
+                            <th class="num">Qty</th>
+                            <th>Reasoning</th>
+                            <th class="num">Order ID</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <p class="empty-state" id="decisions-empty" style="display:none;">No recent decisions</p>
+        </section>
+
+        <!-- Active Theses -->
+        <section class="panel">
+            <h2>Active Theses</h2>
+            <div id="theses-list"></div>
+            <p class="empty-state" id="theses-empty" style="display:none;">No active theses</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Trading from the depths &#127754;</p>
+            <p class="attribution">Data from <a href="https://alpaca.markets" target="_blank" rel="noopener">Alpaca</a></p>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
