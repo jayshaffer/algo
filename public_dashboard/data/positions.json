@@ -1,0 +1,26 @@
+[
+  {
+    "ticker": "AAPL",
+    "shares": 25,
+    "avg_cost": 189.50,
+    "updated_at": "2026-02-17T10:30:00"
+  },
+  {
+    "ticker": "GOOGL",
+    "shares": 10,
+    "avg_cost": 175.20,
+    "updated_at": "2026-02-16T14:00:00"
+  },
+  {
+    "ticker": "MSFT",
+    "shares": 15,
+    "avg_cost": 420.75,
+    "updated_at": "2026-02-15T11:00:00"
+  },
+  {
+    "ticker": "NVDA",
+    "shares": 8,
+    "avg_cost": 890.30,
+    "updated_at": "2026-02-14T09:30:00"
+  }
+]
