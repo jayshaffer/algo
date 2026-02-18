@@ -2,6 +2,12 @@
 
 // === Helpers ===
 
+function escapeHtml(s) {
+  if (!s) return "";
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function formatCurrency(n) {
   if (n == null) return "—";
   return "$" + Number(n).toLocaleString("en-US", {
@@ -151,7 +157,7 @@ function renderPositions(positions) {
   positions.forEach(function (p) {
     var tr = document.createElement("tr");
     tr.innerHTML =
-      "<td><strong>" + p.ticker + "</strong></td>" +
+      "<td><strong>" + escapeHtml(p.ticker) + "</strong></td>" +
       '<td class="num">' + p.shares + "</td>" +
       '<td class="num">' + formatCurrency(p.avg_cost) + "</td>";
     tbody.appendChild(tr);
@@ -169,15 +175,15 @@ function renderDecisions(decisions) {
   }
 
   decisions.forEach(function (d) {
-    var badgeClass = "badge badge-" + (d.action || "hold");
+    var badgeClass = "badge badge-" + escapeHtml(d.action || "hold");
     var tr = document.createElement("tr");
     tr.innerHTML =
-      "<td>" + (d.date || "—") + "</td>" +
-      "<td><strong>" + (d.ticker || "—") + "</strong></td>" +
-      '<td><span class="' + badgeClass + '">' + (d.action || "—") + "</span></td>" +
+      "<td>" + escapeHtml(d.date || "—") + "</td>" +
+      "<td><strong>" + escapeHtml(d.ticker || "—") + "</strong></td>" +
+      '<td><span class="' + badgeClass + '">' + escapeHtml(d.action || "—") + "</span></td>" +
       '<td class="num">' + (d.quantity || "—") + "</td>" +
-      '<td class="reasoning-cell" title="' + (d.reasoning || "").replace(/"/g, "&quot;") + '">' + truncate(d.reasoning, 60) + "</td>" +
-      '<td class="num"><span class="order-id">' + shortOrderId(d.order_id) + "</span></td>";
+      '<td class="reasoning-cell" title="' + escapeHtml(d.reasoning || "") + '">' + escapeHtml(truncate(d.reasoning, 60)) + "</td>" +
+      '<td class="num"><span class="order-id">' + escapeHtml(shortOrderId(d.order_id)) + "</span></td>";
     tbody.appendChild(tr);
   });
 }
@@ -196,13 +202,13 @@ function renderTheses(theses) {
     card.className = "thesis-card";
     card.innerHTML =
       '<div class="thesis-header">' +
-        '<span class="thesis-ticker">' + t.ticker + "</span>" +
-        '<span class="thesis-direction ' + (t.direction || "") + '">' + (t.direction || "") + "</span>" +
-        '<span class="thesis-confidence">' + (t.confidence || "") + "</span>" +
+        '<span class="thesis-ticker">' + escapeHtml(t.ticker) + "</span>" +
+        '<span class="thesis-direction ' + escapeHtml(t.direction || "") + '">' + escapeHtml(t.direction || "") + "</span>" +
+        '<span class="thesis-confidence">' + escapeHtml(t.confidence || "") + "</span>" +
       "</div>" +
-      '<p class="thesis-body">' + (t.thesis || "") + "</p>" +
+      '<p class="thesis-body">' + escapeHtml(t.thesis || "") + "</p>" +
       '<div class="thesis-triggers">' +
-        "Entry: " + (t.entry_trigger || "—") + " &nbsp;|&nbsp; Exit: " + (t.exit_trigger || "—") +
+        "Entry: " + escapeHtml(t.entry_trigger || "—") + " &nbsp;|&nbsp; Exit: " + escapeHtml(t.exit_trigger || "—") +
       "</div>";
     container.appendChild(card);
   });
