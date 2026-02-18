@@ -193,6 +193,21 @@ class TestDecisions:
         )
         assert result == 1
 
+    def test_insert_decision_with_order_id(self, mock_db, mock_cursor):
+        """insert_decision should accept and persist order_id."""
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_decision
+        result = insert_decision(
+            date.today(), "AAPL", "buy", Decimal("5"), Decimal("150"),
+            "Test", {}, Decimal("100000"), Decimal("50000"),
+            order_id="abc-123-def"
+        )
+        assert result == 1
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "order_id" in sql
+        params = mock_cursor.execute.call_args[0][1]
+        assert "abc-123-def" in params
+
     def test_get_recent_decisions(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = []
         from v2.database.trading_db import get_recent_decisions

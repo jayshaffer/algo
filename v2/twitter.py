@@ -171,6 +171,11 @@ def generate_tweet(context: str, model: str = "claude-haiku-4-5-20251001") -> di
         logger.warning("LLM returned no tweet or malformed response: %s", result)
         return None
 
+    # Append dashboard URL if configured
+    dashboard_url = os.environ.get("DASHBOARD_URL")
+    if dashboard_url:
+        tweet_text = f"{tweet_text}\n{dashboard_url}"
+
     return {"text": tweet_text, "type": "recap"}
 
 

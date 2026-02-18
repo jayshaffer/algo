@@ -5,6 +5,7 @@ from v2.session import run_session, SessionResult
 from v2.strategy import StrategyReflectionResult
 from v2.twitter import TwitterStageResult
 from v2.bluesky import BlueskyStageResult
+from v2.dashboard_publish import DashboardStageResult
 
 
 class TestRunSession:
@@ -130,6 +131,9 @@ class TestSessionResult:
         assert result.bluesky_result is None
         assert result.bluesky_error is None
         assert result.skipped_bluesky is False
+        assert result.dashboard_result is None
+        assert result.dashboard_error is None
+        assert result.skipped_dashboard is False
         assert result.duration_seconds == 0.0
 
 
@@ -365,3 +369,88 @@ class TestStage5Bluesky:
 
         mock_bluesky.assert_not_called()
         assert result.skipped_bluesky is True
+
+
+class TestStage6Dashboard:
+    def test_dashboard_runs_after_bluesky(self):
+        """Dashboard should run after Bluesky posting."""
+        call_order = []
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage") as mock_bluesky, \
+             patch("v2.session.run_dashboard_stage") as mock_dashboard:
+
+            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+            mock_dashboard.side_effect = lambda: call_order.append("dashboard")
+
+            run_session(dry_run=True)
+
+        assert call_order.index("bluesky") < call_order.index("dashboard")
+
+    def test_dashboard_result_captured(self):
+        """Dashboard result should be in SessionResult."""
+        mock_dashboard_result = DashboardStageResult(published=True)
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage", return_value=mock_dashboard_result):
+
+            result = run_session(dry_run=True)
+
+        assert result.dashboard_result is not None
+        assert result.dashboard_result.published is True
+
+    def test_dashboard_failure_does_not_block(self):
+        """Dashboard failure should be captured but not crash."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage", side_effect=Exception("gh-pages down")):
+
+            result = run_session(dry_run=True)
+
+        assert result.dashboard_error == "gh-pages down"
+        assert result.dashboard_result is None
+
+    def test_dashboard_error_in_has_errors(self):
+        """Dashboard error should be included in has_errors check."""
+        result = SessionResult(dashboard_error="test")
+        assert result.has_errors is True
+
+    def test_skip_dashboard_flag(self):
+        """Dashboard should be skippable."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage") as mock_dashboard:
+
+            result = run_session(dry_run=True, skip_dashboard=True)
+
+        mock_dashboard.assert_not_called()
+        assert result.skipped_dashboard is True
