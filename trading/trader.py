@@ -159,16 +159,22 @@ def run_trading_session(
     logger.info("[Step 5] Executing trades")
     positions = {p["ticker"]: p["shares"] for p in get_positions()}
     buying_power = account_info["buying_power"]
+    portfolio_value = account_info["portfolio_value"]
 
     trades_executed = 0
     trades_failed = 0
     total_buy_value = Decimal(0)
     total_sell_value = Decimal(0)
+    max_trades_per_session = 10
 
     for decision in response.decisions:
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             continue
+
+        if trades_executed >= max_trades_per_session:
+            logger.warning("Trade limit reached (%d trades). Skipping remaining decisions.", max_trades_per_session)
+            break
 
         # Get current price for validation
         price = get_latest_price(decision.ticker)
@@ -180,7 +186,7 @@ def run_trading_session(
 
         # Validate decision
         is_valid, reason = validate_decision(
-            decision, buying_power, price, positions
+            decision, buying_power, price, positions, portfolio_value
         )
 
         if not is_valid:

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.git/
+.worktrees/
+tests/
+logs/
+__pycache__/
+*.pyc
+.claude/
+docs/
+.venv/
+*.md

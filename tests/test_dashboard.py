@@ -477,7 +477,7 @@ class TestApiCloseThesis:
         )
         assert resp.status_code == 500
         data = resp.get_json()
-        assert "DB connection failed" in data["error"]
+        assert data["error"] == "Internal server error"
 
     def test_close_thesis_empty_reason_becomes_none(self, client):
         mock_queries.close_thesis.return_value = True

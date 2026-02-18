@@ -182,11 +182,15 @@ def format_decisions_for_logging(response: AgentResponse) -> dict:
     }
 
 
+MAX_POSITION_PCT = Decimal("0.10")  # Max 10% of portfolio per trade
+
+
 def validate_decision(
     decision: TradingDecision,
     buying_power: Decimal,
     current_price: Decimal,
-    positions: dict[str, Decimal]
+    positions: dict[str, Decimal],
+    portfolio_value: Decimal = None,
 ) -> tuple[bool, str]:
     """
     Validate a trading decision before execution.
@@ -196,6 +200,7 @@ def validate_decision(
         buying_power: Available buying power
         current_price: Current stock price
         positions: Dict of ticker -> shares held
+        portfolio_value: Total portfolio value (for position-size cap)
 
     Returns:
         Tuple of (is_valid, reason)
@@ -210,6 +215,14 @@ def validate_decision(
         cost = current_price * Decimal(str(decision.quantity))
         if cost > buying_power:
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${buying_power:.2f}"
+
+        if portfolio_value and portfolio_value > 0:
+            pct = cost / portfolio_value
+            if pct > MAX_POSITION_PCT:
+                return False, (
+                    f"Position size ${cost:.2f} is {pct:.1%} of portfolio "
+                    f"(max {MAX_POSITION_PCT:.0%})"
+                )
 
         return True, "Buy order validated"
 
