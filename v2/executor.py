@@ -259,6 +259,35 @@ def get_latest_price(ticker: str) -> Optional[Decimal]:
         return None
 
 
+def get_net_deposits() -> Decimal:
+    """Get total net cash deposited into the account from Alpaca activities.
+
+    Sums all CSD (cash deposit, positive) and CSW (cash withdrawal, negative)
+    activities to determine total capital contributed.
+    """
+    client = get_trading_client()
+    total = Decimal("0")
+    page_token = None
+
+    while True:
+        params = {"activity_types": "CSD,CSW", "page_size": 100, "direction": "asc"}
+        if page_token:
+            params["page_token"] = page_token
+
+        activities = client.get("/account/activities", params)
+        if not activities:
+            break
+
+        for a in activities:
+            total += Decimal(str(a["net_amount"]))
+
+        if len(activities) < 100:
+            break
+        page_token = activities[-1]["id"]
+
+    return total
+
+
 def calculate_position_size(
     buying_power: Decimal,
     price: Decimal,

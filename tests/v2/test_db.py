@@ -538,6 +538,35 @@ class TestDashboardQueries:
         result = get_performance_metrics(days=30)
         assert result is None
 
+    def test_get_performance_metrics_with_net_deposits(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {
+            "start_value": Decimal("100000"),
+            "end_value": Decimal("115000"),
+            "start_date": date.today(),
+            "end_date": date.today()
+        }
+        from v2.database.dashboard_db import get_performance_metrics
+        result = get_performance_metrics(days=30, net_deposits=Decimal("110000"))
+        assert result is not None
+        # 115000 - 110000 = 5000
+        assert abs(result["pnl"] - 5000.0) < 0.001
+        # 5000 / 110000 * 100 ≈ 4.545%
+        assert abs(result["pnl_pct"] - (5000.0 / 110000.0 * 100)) < 0.001
+
+    def test_get_performance_metrics_net_deposits_zero_falls_back(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {
+            "start_value": Decimal("100000"),
+            "end_value": Decimal("105000"),
+            "start_date": date.today(),
+            "end_date": date.today()
+        }
+        from v2.database.dashboard_db import get_performance_metrics
+        result = get_performance_metrics(days=30, net_deposits=Decimal("0"))
+        assert result is not None
+        # Falls back to start_val: 105000 - 100000 = 5000
+        assert result["pnl"] == 5000.0
+        assert abs(result["pnl_pct"] - 5.0) < 0.001
+
     def test_get_today_playbook(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
         from v2.database.dashboard_db import get_today_playbook

@@ -38,9 +38,41 @@ body {
 
 /* === Header === */
 header {
-  border-bottom: 2px solid var(--border);
+  border-bottom: none;
   padding: 2rem 0 1.5rem;
   background: linear-gradient(180deg, #0d1f38 0%, var(--bg-deep) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(0, 180, 220, 0.07) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 60% at 75% 60%, rgba(0, 212, 170, 0.05) 0%, transparent 70%);
+  animation: caustics 8s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+@keyframes caustics {
+  0%   { opacity: 0.6; transform: scale(1) translateX(0); }
+  50%  { opacity: 1;   transform: scale(1.05) translateX(-2%); }
+  100% { opacity: 0.7; transform: scale(0.98) translateX(2%); }
+}
+
+/* === Wave Divider === */
+.wave-divider {
+  background: var(--bg-deep);
+  margin-top: -2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wave-divider svg {
+  display: block;
+  width: 100%;
+  height: 30px;
 }
 
 header h1 {
@@ -48,12 +80,14 @@ header h1 {
   font-weight: 700;
   color: var(--accent);
   letter-spacing: -0.02em;
+  position: relative;
 }
 
 header .subtitle {
   color: var(--text-dim);
   font-size: 0.875rem;
   margin-top: 0.25rem;
+  position: relative;
 }
 
 /* === Summary Cards === */
@@ -79,6 +113,14 @@ header .subtitle {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.card-icon {
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .card-value {
@@ -277,13 +319,11 @@ footer a:hover {
   text-decoration: underline;
 }
 
-/* === Reasoning tooltip === */
+/* === Reasoning cell === */
 .reasoning-cell {
-  max-width: 250px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: help;
+  max-width: 400px;
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 /* === Order ID === */

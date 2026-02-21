@@ -88,7 +88,7 @@ def get_equity_curve(days=90):
         return cur.fetchall()
 
 
-def get_performance_metrics(days=30):
+def get_performance_metrics(days=30, net_deposits=None):
     with get_cursor() as cur:
         cur.execute("""
             WITH period_data AS (
@@ -104,8 +104,13 @@ def get_performance_metrics(days=30):
         if result and result['start_value'] and result['end_value']:
             start_val = float(result['start_value'])
             end_val = float(result['end_value'])
-            pnl = end_val - start_val
-            pnl_pct = ((end_val / start_val) - 1) * 100 if start_val > 0 else 0
+            if net_deposits is not None and net_deposits != 0:
+                nd = float(net_deposits)
+                pnl = end_val - nd
+                pnl_pct = (pnl / nd) * 100
+            else:
+                pnl = end_val - start_val
+                pnl_pct = ((end_val / start_val) - 1) * 100 if start_val > 0 else 0
             return {'start_value': start_val, 'end_value': end_val, 'pnl': pnl, 'pnl_pct': pnl_pct,
                     'start_date': result['start_date'], 'end_date': result['end_date']}
         return None

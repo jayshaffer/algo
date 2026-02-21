@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bikini Bottom Capital</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -15,27 +16,34 @@
         </div>
     </header>
 
+    <div class="wave-divider">
+        <svg viewBox="0 0 1440 60" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,30 C240,55 480,5 720,30 C960,55 1200,5 1440,30 L1440,60 L0,60 Z" fill="rgba(0,212,170,0.06)"/>
+            <path d="M0,38 C240,58 480,18 720,38 C960,58 1200,18 1440,38 L1440,60 L0,60 Z" fill="rgba(0,212,170,0.03)"/>
+        </svg>
+    </div>
+
     <main class="container">
         <!-- Summary Cards -->
         <section id="summary" class="card-grid">
             <div class="card">
-                <span class="card-label">Portfolio Value</span>
+                <span class="card-label"><span class="card-icon">&#127821;</span> Portfolio Value</span>
                 <span class="card-value" id="portfolio-value">—</span>
             </div>
             <div class="card">
-                <span class="card-label">Daily P&L</span>
+                <span class="card-label"><span class="card-icon">&#129408;</span> Daily P&L</span>
                 <span class="card-value" id="daily-pnl">—</span>
             </div>
             <div class="card">
-                <span class="card-label">Total Return</span>
+                <span class="card-label"><span class="card-icon">&#128176;</span> Total Return</span>
                 <span class="card-value" id="total-return">—</span>
             </div>
             <div class="card">
-                <span class="card-label">Positions</span>
+                <span class="card-label"><span class="card-icon">&#128033;</span> Positions</span>
                 <span class="card-value" id="positions-count">—</span>
             </div>
             <div class="card">
-                <span class="card-label">Cash</span>
+                <span class="card-label"><span class="card-icon">&#128181;</span> Cash</span>
                 <span class="card-value" id="cash-value">—</span>
             </div>
         </section>
@@ -69,7 +77,7 @@
 
         <!-- Recent Decisions -->
         <section class="panel">
-            <h2>Recent Decisions</h2>
+            <h2>Captain's Log</h2>
             <div class="table-wrap">
                 <table id="decisions-table">
                     <thead>
@@ -98,7 +106,7 @@
 
     <footer>
         <div class="container">
-            <p>Trading from the depths &#127754;</p>
+            <p>Is mayonnaise a financial instrument?</p>
             <p class="attribution">Data from <a href="https://alpaca.markets" target="_blank" rel="noopener">Alpaca</a></p>
         </div>
     </footer>

@@ -51,7 +51,11 @@ def post_to_bluesky(post: dict, client=None) -> dict:
 
     post_type = post.get("type", "commentary")
     try:
-        response = client.send_post(text=post["text"])
+        facets = None
+        dashboard_url = post.get("dashboard_url")
+        if dashboard_url:
+            facets = _build_link_facets(post["text"], _DASHBOARD_LINK_TEXT, dashboard_url)
+        response = client.send_post(text=post["text"], facets=facets)
         post_id = response.uri
         logger.info("Posted to Bluesky %s: %s...", post_id, post["text"][:50])
         return {"text": post["text"], "type": post_type, "posted": True, "post_id": post_id, "error": None}
@@ -60,7 +64,7 @@ def post_to_bluesky(post: dict, client=None) -> dict:
         return {"text": post["text"], "type": post_type, "posted": False, "post_id": None, "error": str(e)}
 
 
-BLUESKY_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
+_BLUESKY_SYSTEM_PROMPT_TEMPLATE = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
 
 Your personality:
 - Obsessed with money and profits above all else
@@ -71,25 +75,150 @@ Your personality:
 Generate ONE post that summarizes today's trading session. Condense all trades, P&L, and portfolio status into a single punchy recap.
 
 Respond with JSON in this exact format:
-{"text": "post text here"}
+{{"text": "post text here"}}
 
 Rules:
 - Make it entertaining but grounded in the actual trading data
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
 - Summarize the full session: trades made, P&L result, and overall portfolio vibe
 - If it was a quiet day with no trades, comment on holding steady
-- Maximum 300 characters (Bluesky's limit)"""
+- Maximum {limit} characters"""
+
+BLUESKY_GRAPHEME_LIMIT = 300
+# LLMs can't count graphemes reliably; tell them a lower number as buffer
+_PROMPT_BUFFER = 30
+_SHORTEN_MAX_RETRIES = 2
+
+# Keep a static reference for tests/backward compat
+BLUESKY_SYSTEM_PROMPT = _BLUESKY_SYSTEM_PROMPT_TEMPLATE.format(limit=BLUESKY_GRAPHEME_LIMIT - _PROMPT_BUFFER)
+
+
+def _grapheme_length(text: str) -> int:
+    """Return the number of grapheme clusters in *text*."""
+    import grapheme
+    return grapheme.length(text)
+
+
+def _grapheme_truncate(text: str, limit: int) -> str:
+    """Truncate *text* to at most *limit* grapheme clusters."""
+    import grapheme
+    if grapheme.length(text) <= limit:
+        return text
+    return grapheme.slice(text, 0, limit)
+
+
+def _condense_post(client, text: str, limit: int, model: str) -> str | None:
+    """Ask the LLM to shorten a post that exceeded the grapheme limit.
+
+    Returns the shortened text, or None if condensing fails.
+    """
+    try:
+        response = _call_with_retry(
+            client,
+            model=model,
+            max_tokens=512,
+            system=(
+                "You are a copy editor. Shorten the given Bluesky post to fit within "
+                f"{limit} characters. Keep the same voice, tone, and key information. "
+                "Cut filler, not substance. Respond with JSON: {\"text\": \"shortened post\"}"
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"This post is too long ({_grapheme_length(text)} characters). "
+                    f"Shorten it to {limit} characters max:\n\n{text}"
+                ),
+            }],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            raw = raw.rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
+        shortened = result.get("text")
+        if shortened and isinstance(shortened, str):
+            return shortened
+    except Exception as e:
+        logger.warning("Failed to condense post: %s", e)
+    return None
+
+
+def _enforce_limit(client, text: str, limit: int, model: str) -> str:
+    """Try to get the text under *limit* graphemes via LLM condensing, then truncate."""
+    for attempt in range(_SHORTEN_MAX_RETRIES):
+        if _grapheme_length(text) <= limit:
+            return text
+        logger.warning(
+            "Post exceeds %d graphemes (%d), asking LLM to shorten (attempt %d/%d)",
+            limit, _grapheme_length(text), attempt + 1, _SHORTEN_MAX_RETRIES,
+        )
+        shortened = _condense_post(client, text, limit, model)
+        if shortened:
+            text = shortened
+        else:
+            break
+
+    # Last resort: hard truncate
+    if _grapheme_length(text) > limit:
+        logger.warning("Post still over limit after retries, truncating")
+        text = _grapheme_truncate(text, limit)
+    return text
+
+
+_DASHBOARD_LINK_TEXT = "Dashboard"
+
+
+def _dashboard_url_suffix() -> str:
+    """Return the suffix that will be appended for the dashboard link, or empty."""
+    dashboard_url = os.environ.get("DASHBOARD_URL")
+    if dashboard_url:
+        return f"\n{_DASHBOARD_LINK_TEXT}"
+    return ""
+
+
+def _build_link_facets(text: str, link_text: str, url: str) -> list | None:
+    """Build AT Protocol facets to make *link_text* a clickable link in *text*.
+
+    Returns a list of facet objects for ``client.send_post(facets=...)``,
+    or *None* if the link text isn't found or atproto isn't installed.
+    """
+    try:
+        from atproto import models
+    except ImportError:
+        return None
+
+    text_bytes = text.encode("utf-8")
+    link_bytes = link_text.encode("utf-8")
+    byte_start = text_bytes.rfind(link_bytes)
+    if byte_start == -1:
+        return None
+    byte_end = byte_start + len(link_bytes)
+
+    return [
+        models.AppBskyRichtextFacet.Main(
+            index=models.AppBskyRichtextFacet.ByteSlice(
+                byte_start=byte_start,
+                byte_end=byte_end,
+            ),
+            features=[models.AppBskyRichtextFacet.Link(uri=url)],
+        )
+    ]
 
 
 def generate_bluesky_post(context: str, model: str = "claude-haiku-4-5-20251001") -> dict | None:
     """Generate a single Bluesky post from session context using Claude."""
+    # Reduce the LLM's stated budget: leave room for dashboard URL + prompt buffer
+    suffix = _dashboard_url_suffix()
+    text_limit = BLUESKY_GRAPHEME_LIMIT - _grapheme_length(suffix) - _PROMPT_BUFFER
+    system_prompt = _BLUESKY_SYSTEM_PROMPT_TEMPLATE.format(limit=text_limit)
+
     try:
         client = get_claude_client()
         response = _call_with_retry(
             client,
             model=model,
             max_tokens=512,
-            system=BLUESKY_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": context}],
         )
         text = response.content[0].text.strip()
@@ -107,10 +236,15 @@ def generate_bluesky_post(context: str, model: str = "claude-haiku-4-5-20251001"
         logger.warning("LLM returned no post or malformed response: %s", result)
         return None
 
-    # Append dashboard URL if configured
+    # Enforce limit on the post body *before* appending the dashboard URL
+    body_limit = BLUESKY_GRAPHEME_LIMIT - _grapheme_length(suffix)
+    post_text = _enforce_limit(client, post_text, body_limit, model)
+
+    # Append dashboard link text if configured
     dashboard_url = os.environ.get("DASHBOARD_URL")
     if dashboard_url:
-        post_text = f"{post_text}\n{dashboard_url}"
+        post_text = f"{post_text}\n{_DASHBOARD_LINK_TEXT}"
+        return {"text": post_text, "type": "recap", "dashboard_url": dashboard_url}
 
     return {"text": post_text, "type": "recap"}
 
@@ -137,7 +271,7 @@ Rules:
 - Aim for a post that people want to repost or quote
 - Keep it positive/constructive — smug and fun, not bitter or mean
 - Pick the single most interesting thing in the data and craft the best post you can
-- Maximum 300 characters (Bluesky's limit)"""
+- Maximum 270 characters"""
 
 
 def generate_bluesky_entertainment_post(context: str, model: str = "claude-haiku-4-5-20251001") -> dict | None:
@@ -165,7 +299,12 @@ def generate_bluesky_entertainment_post(context: str, model: str = "claude-haiku
         logger.warning("LLM returned malformed response: %s", result)
         return None
 
-    return {"text": result["text"], "type": "entertainment"}
+    post_text = result["text"]
+
+    # Enforce Bluesky's grapheme limit (condense via LLM, then truncate as last resort)
+    post_text = _enforce_limit(client, post_text, BLUESKY_GRAPHEME_LIMIT, model)
+
+    return {"text": post_text, "type": "entertainment"}
 
 
 from .twitter import gather_tweet_context

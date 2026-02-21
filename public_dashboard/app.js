@@ -182,7 +182,7 @@ function renderDecisions(decisions) {
       "<td><strong>" + escapeHtml(d.ticker || "—") + "</strong></td>" +
       '<td><span class="' + badgeClass + '">' + escapeHtml(d.action || "—") + "</span></td>" +
       '<td class="num">' + (d.quantity || "—") + "</td>" +
-      '<td class="reasoning-cell" title="' + escapeHtml(d.reasoning || "") + '">' + escapeHtml(truncate(d.reasoning, 60)) + "</td>" +
+      '<td class="reasoning-cell">' + escapeHtml(d.reasoning || "—") + "</td>" +
       '<td class="num"><span class="order-id">' + escapeHtml(shortOrderId(d.order_id)) + "</span></td>";
     tbody.appendChild(tr);
   });
