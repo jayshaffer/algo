@@ -15,7 +15,6 @@ from v2.dashboard_publish import (
     assemble_deploy_dir,
     deploy_to_cloudflare,
     gather_dashboard_data,
-    push_to_github,
     run_dashboard_stage,
     write_json_files,
 )
@@ -341,60 +340,14 @@ class TestWriteJsonFiles:
         assert isinstance(content["portfolio_value"], float)
 
 
-class TestPushToGithub:
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_commits_and_pushes(self, mock_run):
-        """Verifies 3 git calls: add, commit, push."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        result = push_to_github("/fake/repo")
-
-        assert result is True
-        assert mock_run.call_count == 3
-
-        # Verify the three calls
-        calls = mock_run.call_args_list
-        assert calls[0][0][0] == ["git", "add", "data/"]
-        assert calls[0][1]["cwd"] == "/fake/repo"
-
-        assert calls[1][0][0][0:2] == ["git", "commit"]
-        assert calls[1][1]["cwd"] == "/fake/repo"
-
-        assert calls[2][0][0] == ["git", "push"]
-        assert calls[2][1]["cwd"] == "/fake/repo"
-
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_skips_push_if_nothing_to_commit(self, mock_run):
-        """When commit returns non-zero, push is NOT called."""
-        add_result = MagicMock(returncode=0)
-        commit_result = MagicMock(returncode=1, stdout="nothing to commit")
-        mock_run.side_effect = [add_result, commit_result]
-
-        result = push_to_github("/fake/repo")
-
-        assert result is False
-        assert mock_run.call_count == 2  # add + commit, no push
-
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_raises_on_push_failure(self, mock_run):
-        """RuntimeError raised when push fails."""
-        add_result = MagicMock(returncode=0)
-        commit_result = MagicMock(returncode=0)
-        push_result = MagicMock(returncode=1, stderr="fatal: remote error")
-        mock_run.side_effect = [add_result, commit_result, push_result]
-
-        with pytest.raises(RuntimeError, match="fatal: remote error"):
-            push_to_github("/fake/repo")
-
-
 class TestRunDashboardStage:
-    @patch("v2.dashboard_publish.push_to_github", return_value=True)
-    @patch("v2.dashboard_publish.write_json_files", return_value=["/fake/data/summary.json"])
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_happy_path(self, mock_deposits, mock_gather, mock_write, mock_push):
+    def test_happy_path(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
         """Full pipeline runs and returns published=True."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage(session_date=date(2025, 6, 15))
 
         assert result.published is True
@@ -402,14 +355,13 @@ class TestRunDashboardStage:
         assert result.errors == []
         mock_deposits.assert_called_once()
         mock_gather.assert_called_once_with(date(2025, 6, 15), net_deposits=Decimal("100000"))
-        mock_write.assert_called_once_with({"summary": {}}, "/fake/repo")
-        mock_push.assert_called_once_with("/fake/repo")
+        mock_assemble.assert_called_once()
+        mock_deploy.assert_called_once()
 
-    def test_skipped_when_no_repo_path(self):
-        """Returns skipped=True when DASHBOARD_REPO_PATH not set."""
+    def test_skipped_when_no_project_set(self):
+        """Returns skipped=True when CLOUDFLARE_PAGES_PROJECT not set."""
         with patch.dict(os.environ, {}, clear=True):
-            # Ensure DASHBOARD_REPO_PATH is not set
-            os.environ.pop("DASHBOARD_REPO_PATH", None)
+            os.environ.pop("CLOUDFLARE_PAGES_PROJECT", None)
             result = run_dashboard_stage()
 
         assert result.skipped is True
@@ -420,7 +372,7 @@ class TestRunDashboardStage:
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
     def test_handles_gather_error(self, mock_deposits, mock_gather):
         """Error in gather step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
@@ -428,37 +380,37 @@ class TestRunDashboardStage:
         assert "Data gathering failed" in result.errors[0]
 
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
-    @patch("v2.dashboard_publish.write_json_files", side_effect=Exception("Disk full"))
+    @patch("v2.dashboard_publish.assemble_deploy_dir", side_effect=Exception("Disk full"))
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_handles_write_error(self, mock_deposits, mock_write, mock_gather):
-        """Error in write step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+    def test_handles_assemble_error(self, mock_deposits, mock_assemble, mock_gather):
+        """Error in assemble step is captured."""
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
         assert len(result.errors) == 1
-        assert "JSON writing failed" in result.errors[0]
+        assert "Deploy assembly failed" in result.errors[0]
 
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
-    @patch("v2.dashboard_publish.write_json_files", return_value=[])
-    @patch("v2.dashboard_publish.push_to_github", side_effect=RuntimeError("git push failed"))
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", side_effect=RuntimeError("Auth failed"))
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_handles_push_error(self, mock_deposits, mock_push, mock_write, mock_gather):
-        """Error in push step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+    def test_handles_deploy_error(self, mock_deposits, mock_deploy, mock_assemble, mock_gather):
+        """Error in deploy step is captured."""
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
         assert len(result.errors) == 1
-        assert "Git push failed" in result.errors[0]
+        assert "Cloudflare deploy failed" in result.errors[0]
 
-    @patch("v2.dashboard_publish.push_to_github", return_value=True)
-    @patch("v2.dashboard_publish.write_json_files", return_value=[])
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
     @patch("v2.dashboard_publish.get_net_deposits", side_effect=Exception("Alpaca down"))
-    def test_continues_when_net_deposits_fails(self, mock_deposits, mock_gather, mock_write, mock_push):
+    def test_continues_when_net_deposits_fails(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
         """Pipeline continues with net_deposits=None if Alpaca call fails."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage(session_date=date(2025, 6, 15))
 
         assert result.published is True

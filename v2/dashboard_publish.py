@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,6 +18,9 @@ from .database.connection import get_cursor
 from .executor import get_net_deposits
 
 logger = logging.getLogger("dashboard_publish")
+
+# Path to static assets directory (relative to project root)
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public_dashboard")
 
 
 class _DecimalEncoder(json.JSONEncoder):
@@ -236,45 +240,6 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str) -> str:
     return deploy_dir
 
 
-def push_to_github(repo_path: str) -> bool:
-    """Stage, commit, and push dashboard data to GitHub.
-
-    Returns True if pushed successfully, False if nothing to commit.
-    Raises RuntimeError if git push fails.
-    """
-    add_result = subprocess.run(
-        ["git", "add", "data/"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-    if add_result.returncode != 0:
-        raise RuntimeError(f"git add failed: {add_result.stderr.strip()}")
-
-    commit_result = subprocess.run(
-        ["git", "commit", "-m", f"Update dashboard data {date.today().isoformat()}"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-
-    if commit_result.returncode != 0:
-        logger.info("Nothing to commit: %s", commit_result.stdout.strip())
-        return False
-
-    push_result = subprocess.run(
-        ["git", "push"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-
-    if push_result.returncode != 0:
-        raise RuntimeError(push_result.stderr)
-
-    return True
-
-
 def deploy_to_cloudflare(deploy_dir: str) -> bool:
     """Deploy dashboard directory to Cloudflare Pages via wrangler.
 
@@ -310,16 +275,16 @@ class DashboardStageResult:
 
 
 def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageResult:
-    """Run the full dashboard publish pipeline: gather -> write -> push."""
+    """Run the full dashboard publish pipeline: gather -> assemble -> deploy."""
     if session_date is None:
         session_date = date.today()
 
     result = DashboardStageResult()
 
-    repo_path = os.environ.get("DASHBOARD_REPO_PATH")
-    if not repo_path:
+    project = os.environ.get("CLOUDFLARE_PAGES_PROJECT")
+    if not project:
         result.skipped = True
-        logger.info("Dashboard stage skipped — DASHBOARD_REPO_PATH not set")
+        logger.info("Dashboard stage skipped — CLOUDFLARE_PAGES_PROJECT not set")
         return result
 
     # Fetch net deposits from Alpaca for accurate return calculation
@@ -337,22 +302,25 @@ def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageRe
         logger.error("Failed to gather dashboard data: %s", e)
         return result
 
-    # Write JSON files
+    # Assemble deploy directory
+    deploy_dir = tempfile.mkdtemp(prefix="dashboard_deploy_")
     try:
-        write_json_files(data, repo_path)
+        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR)
     except Exception as e:
-        result.errors.append(f"JSON writing failed: {e}")
-        logger.error("Failed to write JSON files: %s", e)
+        result.errors.append(f"Deploy assembly failed: {e}")
+        logger.error("Failed to assemble deploy directory: %s", e)
         return result
 
-    # Push to GitHub
+    # Deploy to Cloudflare
     try:
-        pushed = push_to_github(repo_path)
+        deploy_to_cloudflare(deploy_dir)
     except Exception as e:
-        result.errors.append(f"Git push failed: {e}")
-        logger.error("Failed to push to GitHub: %s", e)
+        result.errors.append(f"Cloudflare deploy failed: {e}")
+        logger.error("Failed to deploy to Cloudflare: %s", e)
         return result
+    finally:
+        shutil.rmtree(deploy_dir, ignore_errors=True)
 
-    result.published = pushed
-    logger.info("Dashboard publish complete (published=%s)", pushed)
+    result.published = True
+    logger.info("Dashboard publish complete (published=%s)", result.published)
     return result
