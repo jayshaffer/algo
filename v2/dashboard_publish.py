@@ -6,15 +6,21 @@ Queries the DB and structures data for JSON export.
 import json
 import logging
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
 from .database.connection import get_cursor
+from .executor import get_net_deposits
 
 logger = logging.getLogger("dashboard_publish")
+
+# Path to static assets directory (relative to project root)
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public_dashboard")
 
 
 class _DecimalEncoder(json.JSONEncoder):
@@ -28,8 +34,13 @@ class _DecimalEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-def gather_dashboard_data(session_date: date) -> dict:
+def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = None) -> dict:
     """Gather all dashboard data in a single DB connection.
+
+    Args:
+        session_date: The trading session date.
+        net_deposits: Total net cash deposited (from Alpaca activities).
+            Used for accurate total return calculation excluding cash infusions.
 
     Returns dict with keys: summary, snapshots, positions, decisions, theses.
     Handles empty DB gracefully.
@@ -109,7 +120,7 @@ def gather_dashboard_data(session_date: date) -> dict:
         previous = cur.fetchone()
 
     # Build summary
-    summary = _build_summary(latest, first, previous, len(positions), session_date)
+    summary = _build_summary(latest, first, previous, len(positions), session_date, net_deposits)
 
     return {
         "summary": summary,
@@ -120,7 +131,7 @@ def gather_dashboard_data(session_date: date) -> dict:
     }
 
 
-def _build_summary(latest, first, previous, positions_count, session_date):
+def _build_summary(latest, first, previous, positions_count, session_date, net_deposits=None):
     """Build summary dict from query results."""
     if not latest:
         return {
@@ -149,13 +160,18 @@ def _build_summary(latest, first, previous, positions_count, session_date):
         if prev_value != 0:
             daily_pnl_pct = (daily_pnl / prev_value) * 100
 
-    # Total P&L
+    # Total P&L: investment return only (excludes cash infusions)
     total_pnl = Decimal("0")
     total_pnl_pct = Decimal("0")
     inception_date = None
-    if first and first["portfolio_value"]:
-        first_value = first["portfolio_value"]
+    if first:
         inception_date = first["date"]
+    if net_deposits is not None and net_deposits != 0:
+        total_pnl = portfolio_value - net_deposits
+        total_pnl_pct = (total_pnl / net_deposits) * 100
+    elif first and first["portfolio_value"]:
+        # Fallback if net_deposits not available
+        first_value = first["portfolio_value"]
         total_pnl = portfolio_value - first_value
         if first_value != 0:
             total_pnl_pct = (total_pnl / first_value) * 100
@@ -196,42 +212,57 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     return files_written
 
 
-def push_to_github(repo_path: str) -> bool:
-    """Stage, commit, and push dashboard data to GitHub.
+# Static asset filenames to copy from public_dashboard/
+_STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
-    Returns True if pushed successfully, False if nothing to commit.
-    Raises RuntimeError if git push fails.
+
+def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str) -> str:
+    """Assemble a complete deploy directory with static assets and JSON data.
+
+    Args:
+        data: Dashboard data dict (from gather_dashboard_data).
+        deploy_dir: Path to create/populate the deploy directory.
+        assets_dir: Path to public_dashboard/ directory containing static assets.
+
+    Returns the deploy_dir path.
     """
-    add_result = subprocess.run(
-        ["git", "add", "data/"],
-        cwd=repo_path,
+    os.makedirs(deploy_dir, exist_ok=True)
+
+    # Copy static assets
+    for filename in _STATIC_ASSETS:
+        src = os.path.join(assets_dir, filename)
+        dst = os.path.join(deploy_dir, filename)
+        shutil.copy2(src, dst)
+
+    # Write JSON data files
+    write_json_files(data, deploy_dir)
+
+    return deploy_dir
+
+
+def deploy_to_cloudflare(deploy_dir: str) -> bool:
+    """Deploy dashboard directory to Cloudflare Pages via wrangler.
+
+    Requires CLOUDFLARE_PAGES_PROJECT env var.
+    Wrangler authenticates via CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars.
+
+    Returns True if deployed successfully.
+    Raises RuntimeError on failure.
+    """
+    project = os.environ.get("CLOUDFLARE_PAGES_PROJECT")
+    if not project:
+        raise RuntimeError("CLOUDFLARE_PAGES_PROJECT not set")
+
+    result = subprocess.run(
+        ["wrangler", "pages", "deploy", deploy_dir,
+         "--project-name", project, "--branch", "main"],
         capture_output=True,
         text=True,
     )
-    if add_result.returncode != 0:
-        raise RuntimeError(f"git add failed: {add_result.stderr.strip()}")
+    if result.returncode != 0:
+        raise RuntimeError(f"Wrangler deploy failed: {result.stderr.strip()}")
 
-    commit_result = subprocess.run(
-        ["git", "commit", "-m", f"Update dashboard data {date.today().isoformat()}"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-
-    if commit_result.returncode != 0:
-        logger.info("Nothing to commit: %s", commit_result.stdout.strip())
-        return False
-
-    push_result = subprocess.run(
-        ["git", "push"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-
-    if push_result.returncode != 0:
-        raise RuntimeError(push_result.stderr)
-
+    logger.info("Deployed to Cloudflare Pages: %s", result.stdout.strip())
     return True
 
 
@@ -244,42 +275,52 @@ class DashboardStageResult:
 
 
 def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageResult:
-    """Run the full dashboard publish pipeline: gather -> write -> push."""
+    """Run the full dashboard publish pipeline: gather -> assemble -> deploy."""
     if session_date is None:
         session_date = date.today()
 
     result = DashboardStageResult()
 
-    repo_path = os.environ.get("DASHBOARD_REPO_PATH")
-    if not repo_path:
+    project = os.environ.get("CLOUDFLARE_PAGES_PROJECT")
+    if not project:
         result.skipped = True
-        logger.info("Dashboard stage skipped — DASHBOARD_REPO_PATH not set")
+        logger.info("Dashboard stage skipped — CLOUDFLARE_PAGES_PROJECT not set")
         return result
+
+    # Fetch net deposits from Alpaca for accurate return calculation
+    net_deposits = None
+    try:
+        net_deposits = get_net_deposits()
+    except Exception as e:
+        logger.warning("Could not fetch net deposits from Alpaca: %s", e)
 
     # Gather data
     try:
-        data = gather_dashboard_data(session_date)
+        data = gather_dashboard_data(session_date, net_deposits=net_deposits)
     except Exception as e:
         result.errors.append(f"Data gathering failed: {e}")
         logger.error("Failed to gather dashboard data: %s", e)
         return result
 
-    # Write JSON files
+    # Assemble deploy directory
+    deploy_dir = tempfile.mkdtemp(prefix="dashboard_deploy_")
     try:
-        write_json_files(data, repo_path)
+        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR)
     except Exception as e:
-        result.errors.append(f"JSON writing failed: {e}")
-        logger.error("Failed to write JSON files: %s", e)
+        result.errors.append(f"Deploy assembly failed: {e}")
+        logger.error("Failed to assemble deploy directory: %s", e)
         return result
 
-    # Push to GitHub
+    # Deploy to Cloudflare
     try:
-        pushed = push_to_github(repo_path)
+        deploy_to_cloudflare(deploy_dir)
     except Exception as e:
-        result.errors.append(f"Git push failed: {e}")
-        logger.error("Failed to push to GitHub: %s", e)
+        result.errors.append(f"Cloudflare deploy failed: {e}")
+        logger.error("Failed to deploy to Cloudflare: %s", e)
         return result
+    finally:
+        shutil.rmtree(deploy_dir, ignore_errors=True)
 
-    result.published = pushed
-    logger.info("Dashboard publish complete (published=%s)", pushed)
+    result.published = True
+    logger.info("Dashboard publish complete (published=%s)", result.published)
     return result

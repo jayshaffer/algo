@@ -1,0 +1,68 @@
+[
+  {
+    "date": "2026-02-03",
+    "portfolio_value": 100250.00,
+    "cash": 45000.00,
+    "buying_power": 45000.00
+  },
+  {
+    "date": "2026-02-04",
+    "portfolio_value": 100480.35,
+    "cash": 44800.50,
+    "buying_power": 44800.50
+  },
+  {
+    "date": "2026-02-05",
+    "portfolio_value": 99875.20,
+    "cash": 44800.50,
+    "buying_power": 44800.50
+  },
+  {
+    "date": "2026-02-06",
+    "portfolio_value": 100120.88,
+    "cash": 44200.00,
+    "buying_power": 44200.00
+  },
+  {
+    "date": "2026-02-07",
+    "portfolio_value": 101350.45,
+    "cash": 43500.75,
+    "buying_power": 43500.75
+  },
+  {
+    "date": "2026-02-10",
+    "portfolio_value": 101025.60,
+    "cash": 43500.75,
+    "buying_power": 43500.75
+  },
+  {
+    "date": "2026-02-11",
+    "portfolio_value": 102215.30,
+    "cash": 43100.00,
+    "buying_power": 43100.00
+  },
+  {
+    "date": "2026-02-12",
+    "portfolio_value": 101890.15,
+    "cash": 43100.00,
+    "buying_power": 43100.00
+  },
+  {
+    "date": "2026-02-13",
+    "portfolio_value": 103050.72,
+    "cash": 42500.50,
+    "buying_power": 42500.50
+  },
+  {
+    "date": "2026-02-14",
+    "portfolio_value": 103275.64,
+    "cash": 42180.22,
+    "buying_power": 42180.22
+  },
+  {
+    "date": "2026-02-17",
+    "portfolio_value": 104523.47,
+    "cash": 42180.22,
+    "buying_power": 42180.22
+  }
+]

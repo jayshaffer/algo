@@ -1,0 +1,17 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting grapheme
+  Downloading grapheme-0.6.0.tar.gz (207 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: grapheme
+  Building wheel for grapheme (pyproject.toml): started
+  Building wheel for grapheme (pyproject.toml): finished with status 'done'
+  Created wheel for grapheme: filename=grapheme-0.6.0-py3-none-any.whl size=210137 sha256=5ab7f6c24c95b4b8889be2fd506b33b45fd588563929bd196c0760aeaa7e260f
+  Stored in directory: /home/jay/.cache/pip/wheels/01/e1/49/37e6bde9886439057450c494a79b0bef8bbe897a54aebfc757
+Successfully built grapheme
+Installing collected packages: grapheme
+Successfully installed grapheme-0.6.0

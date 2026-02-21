@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bikini Bottom Capital</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>&#9875; Bikini Bottom Capital</h1>
+            <p class="subtitle" id="last-updated">Loading...</p>
+        </div>
+    </header>
+
+    <div class="wave-divider">
+        <svg viewBox="0 0 1440 60" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,30 C240,55 480,5 720,30 C960,55 1200,5 1440,30 L1440,60 L0,60 Z" fill="rgba(0,212,170,0.06)"/>
+            <path d="M0,38 C240,58 480,18 720,38 C960,58 1200,18 1440,38 L1440,60 L0,60 Z" fill="rgba(0,212,170,0.03)"/>
+        </svg>
+    </div>
+
+    <main class="container">
+        <!-- Summary Cards -->
+        <section id="summary" class="card-grid">
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#127821;</span> Portfolio Value</span>
+                <span class="card-value" id="portfolio-value">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#129408;</span> Daily P&L</span>
+                <span class="card-value" id="daily-pnl">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#128176;</span> Total Return</span>
+                <span class="card-value" id="total-return">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#128033;</span> Positions</span>
+                <span class="card-value" id="positions-count">—</span>
+            </div>
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#128181;</span> Cash</span>
+                <span class="card-value" id="cash-value">—</span>
+            </div>
+        </section>
+
+        <!-- Equity Curve -->
+        <section class="panel">
+            <h2>Equity Curve (90 days)</h2>
+            <div class="chart-wrap">
+                <canvas id="equity-chart"></canvas>
+            </div>
+            <p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>
+        </section>
+
+        <!-- Current Holdings -->
+        <section class="panel">
+            <h2>Current Holdings</h2>
+            <div class="table-wrap">
+                <table id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th class="num">Shares</th>
+                            <th class="num">Avg Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <p class="empty-state" id="positions-empty" style="display:none;">No open positions</p>
+        </section>
+
+        <!-- Recent Decisions -->
+        <section class="panel">
+            <h2>Captain's Log</h2>
+            <div class="table-wrap">
+                <table id="decisions-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Ticker</th>
+                            <th>Action</th>
+                            <th class="num">Qty</th>
+                            <th>Reasoning</th>
+                            <th class="num">Order ID</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <p class="empty-state" id="decisions-empty" style="display:none;">No recent decisions</p>
+        </section>
+
+        <!-- Active Theses -->
+        <section class="panel">
+            <h2>Active Theses</h2>
+            <div id="theses-list"></div>
+            <p class="empty-state" id="theses-empty" style="display:none;">No active theses</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Is mayonnaise a financial instrument?</p>
+            <p class="attribution">Data from <a href="https://alpaca.markets" target="_blank" rel="noopener">Alpaca</a></p>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

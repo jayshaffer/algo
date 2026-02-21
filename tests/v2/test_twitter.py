@@ -100,7 +100,8 @@ class TestGetTweetsForDate:
 class TestGatherTweetContext:
     """Verify gather_tweet_context builds context string from DB data."""
 
-    def test_full_context(self, mock_db):
+    @patch("v2.twitter.get_net_deposits", return_value=Decimal("100000"))
+    def test_full_context(self, mock_deposits, mock_db):
         mock_db.fetchall.side_effect = [
             [{"ticker": "AAPL", "action": "buy", "quantity": Decimal("10"), "price": Decimal("185.50"), "reasoning": "Earnings beat"}],
             [{"ticker": "AAPL", "shares": Decimal("50"), "avg_cost": Decimal("150.00")}],
@@ -121,8 +122,43 @@ class TestGatherTweetContext:
         assert "NVDA (long, high): AI demand" in context
         assert "Portfolio value: $150,000.00" in context
         assert "Today's P&L: +$2,000.00 (+1.35%)" in context
+        # Deposit-adjusted: 150000 - 100000 = 50000, 50000/100000 = 50%
         assert "Total return: +$50,000.00 (+50.00%) since 2026-01-01" in context
         assert "Stay bullish on tech" in context
+
+    @patch("v2.twitter.get_net_deposits", return_value=Decimal("120000"))
+    def test_total_return_deposit_adjusted(self, mock_deposits, mock_db):
+        """Total return uses net_deposits instead of first snapshot value."""
+        mock_db.fetchall.side_effect = [
+            [], [], [],
+            [
+                {"date": date(2026, 2, 15), "portfolio_value": Decimal("150000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("50000")},
+            ],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "date": date(2026, 1, 1)},
+            None,
+        ]
+        context = gather_tweet_context(date(2026, 2, 15))
+        # Deposit-adjusted: 150000 - 120000 = 30000, 30000/120000 = 25%
+        assert "Total return: +$30,000.00 (+25.00%) since 2026-01-01" in context
+
+    @patch("v2.twitter.get_net_deposits", side_effect=Exception("API error"))
+    def test_total_return_fallback_when_deposits_fail(self, mock_deposits, mock_db):
+        """Falls back to first snapshot when get_net_deposits raises."""
+        mock_db.fetchall.side_effect = [
+            [], [], [],
+            [
+                {"date": date(2026, 2, 15), "portfolio_value": Decimal("150000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("50000")},
+            ],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "date": date(2026, 1, 1)},
+            None,
+        ]
+        context = gather_tweet_context(date(2026, 2, 15))
+        # Fallback: 150000 - 100000 = 50000, 50000/100000 = 50%
+        assert "Total return: +$50,000.00 (+50.00%) since 2026-01-01" in context
 
     def test_decision_without_price(self, mock_db):
         mock_db.fetchall.side_effect = [

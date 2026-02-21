@@ -14,6 +14,7 @@ from typing import Optional
 from .claude_client import get_claude_client, _call_with_retry
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
+from .executor import get_net_deposits
 
 logger = logging.getLogger("twitter")
 
@@ -94,14 +95,22 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
                 day_pct = (day_pnl / prev * 100) if prev else 0
                 sign = "+" if day_pnl >= 0 else ""
                 lines.append(f"  Today's P&L: {sign}${day_pnl:,.2f} ({sign}{day_pct:.2f}%)")
-            # Overall return from first snapshot
+            # Overall return from first snapshot (deposit-adjusted when possible)
             cur.execute(
                 "SELECT portfolio_value, date FROM account_snapshots ORDER BY date ASC LIMIT 1"
             )
             first = cur.fetchone()
             if first and first['portfolio_value'] and first['date'] != today['date']:
-                total_pnl = portfolio - first['portfolio_value']
-                total_pct = (total_pnl / first['portfolio_value'] * 100)
+                try:
+                    net_deposits = get_net_deposits()
+                except Exception:
+                    net_deposits = None
+                if net_deposits is not None and net_deposits != 0:
+                    total_pnl = portfolio - net_deposits
+                    total_pct = (total_pnl / net_deposits * 100)
+                else:
+                    total_pnl = portfolio - first['portfolio_value']
+                    total_pct = (total_pnl / first['portfolio_value'] * 100)
                 sign = "+" if total_pnl >= 0 else ""
                 lines.append(f"  Total return: {sign}${total_pnl:,.2f} ({sign}{total_pct:.2f}%) since {first['date']}")
             sections.append("\n".join(lines))

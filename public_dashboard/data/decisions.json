@@ -1,0 +1,26 @@
+[
+  {
+    "id": 5,
+    "date": "2026-02-17",
+    "ticker": "AAPL",
+    "action": "buy",
+    "quantity": 5,
+    "price": 192.50,
+    "reasoning": "Strong Q1 earnings beat with iPhone revenue up 12% YoY. Services segment continues to grow.",
+    "outcome_7d": null,
+    "outcome_30d": null,
+    "order_id": "abc-123-def-456"
+  },
+  {
+    "id": 4,
+    "date": "2026-02-14",
+    "ticker": "TSLA",
+    "action": "sell",
+    "quantity": 10,
+    "price": 245.00,
+    "reasoning": "Taking profits after 15% run-up. Thesis target reached.",
+    "outcome_7d": 2.3,
+    "outcome_30d": null,
+    "order_id": "ghi-789-jkl-012"
+  }
+]

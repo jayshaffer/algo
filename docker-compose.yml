@@ -41,6 +41,7 @@ services:
       - ./trading:/app/trading:ro
       - ./v2:/app/v2:ro
       - ./dashboard:/app/dashboard:ro
+      - ./public_dashboard:/app/public_dashboard:ro
       - ./logs:/app/logs
     command: ["sleep", "infinity"]
 

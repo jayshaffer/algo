@@ -190,6 +190,42 @@ Access at http://localhost:3000
 - `/decisions` - Trading decision history with reasoning
 - `/performance` - Equity curve and performance metrics
 
+### Public Dashboard
+
+The system can publish a read-only snapshot of portfolio data to a GitHub Pages site, updated daily as part of the session pipeline.
+
+**What gets published:**
+
+| File | Contents |
+|------|----------|
+| `data/summary.json` | Portfolio value, daily P&L, total return, inception date |
+| `data/snapshots.json` | 90-day equity curve history |
+| `data/positions.json` | Current holdings with cost basis |
+| `data/decisions.json` | Last 30 days of trades with reasoning and outcomes |
+| `data/theses.json` | Active trade theses with entry/exit triggers |
+
+**Setup:**
+
+1. Create a GitHub Pages repository (e.g. `your-org.github.io`) with your static frontend (`index.html`, `app.js`, etc.)
+2. Clone it locally on the machine running the trading stack
+3. Set environment variables in `.env`:
+   ```bash
+   DASHBOARD_REPO_PATH=/path/to/your-org.github.io
+   DASHBOARD_URL=https://your-org.github.io
+   ```
+
+**How it works:**
+
+Publishing runs as Stage 6 of the daily session (`v2/session.py`). It gathers data from the database, writes JSON files to the cloned repo, and pushes to GitHub. If `DASHBOARD_REPO_PATH` is not set, the stage is skipped.
+
+The `DASHBOARD_URL` is appended to social media posts (Twitter and Bluesky) when configured, linking followers to the live dashboard.
+
+**Run manually:**
+
+```bash
+docker compose exec trading python -c "from v2.dashboard_publish import run_dashboard_stage; run_dashboard_stage()"
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -216,6 +252,10 @@ TWITTER_API_KEY=your_key
 TWITTER_API_SECRET=your_secret
 TWITTER_ACCESS_TOKEN=your_token
 TWITTER_ACCESS_TOKEN_SECRET=your_token_secret
+
+# Public Dashboard (optional — publish to GitHub Pages)
+DASHBOARD_REPO_PATH=/path/to/your-org.github.io
+DASHBOARD_URL=https://your-org.github.io
 ```
 
 ### Model Options
@@ -290,6 +330,12 @@ algo/
 │       ├── 001_schema.sql
 │       ├── 002_theses.sql
 │       └── 005_redesign.sql
+├── v2/
+│   ├── session.py          # V2 consolidated session (6 stages)
+│   ├── dashboard_publish.py # Public dashboard publisher (GitHub Pages)
+│   ├── twitter.py          # Twitter posting
+│   ├── bluesky.py          # Bluesky posting
+│   └── entertainment.py    # Entertainment tweet generation
 ├── docker-compose.yml
 ├── .env.example
 └── README.md

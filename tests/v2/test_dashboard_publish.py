@@ -11,11 +11,14 @@ import pytest
 from v2.dashboard_publish import (
     DashboardStageResult,
     _DecimalEncoder,
+    _build_summary,
+    assemble_deploy_dir,
+    deploy_to_cloudflare,
     gather_dashboard_data,
-    push_to_github,
     run_dashboard_stage,
     write_json_files,
 )
+from v2.executor import get_net_deposits
 
 
 class TestDecimalEncoder:
@@ -119,9 +122,47 @@ class TestGatherDashboardData:
         assert summary["daily_pnl"] == Decimal("1000")
         assert float(summary["daily_pnl_pct"]) > 0
 
-        # Total P&L: 100000 - 90000 = 10000
+        # Total P&L: fallback to first snapshot (100000 - 90000 = 10000)
         assert summary["total_pnl"] == Decimal("10000")
         assert float(summary["total_pnl_pct"]) > 0
+
+    def test_total_return_uses_net_deposits(self, mock_db):
+        """When net_deposits provided, total return = portfolio_value - net_deposits."""
+        session_date = date(2025, 6, 15)
+
+        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
+             "long_market_value": Decimal("55000")},
+            {"portfolio_value": Decimal("80000"), "date": date(2025, 1, 1)},
+            {"portfolio_value": Decimal("104000")},
+        ]
+
+        # Deposited 100k total (initial 80k + 20k infusion)
+        result = gather_dashboard_data(session_date, net_deposits=Decimal("100000"))
+        summary = result["summary"]
+
+        # Investment return: 105000 - 100000 = 5000 (not 105000 - 80000 = 25000)
+        assert summary["total_pnl"] == Decimal("5000")
+        assert summary["total_pnl_pct"] == Decimal("5")  # 5000/100000 * 100
+
+    def test_total_return_fallback_without_net_deposits(self, mock_db):
+        """Without net_deposits, falls back to first snapshot comparison."""
+        session_date = date(2025, 6, 15)
+
+        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
+             "long_market_value": Decimal("55000")},
+            {"portfolio_value": Decimal("80000"), "date": date(2025, 1, 1)},
+            {"portfolio_value": Decimal("104000")},
+        ]
+
+        result = gather_dashboard_data(session_date)
+        summary = result["summary"]
+
+        # Fallback: 105000 - 80000 = 25000
+        assert summary["total_pnl"] == Decimal("25000")
 
     def test_empty_database(self, mock_db):
         """Handles empty DB gracefully with empty lists and minimal summary."""
@@ -216,6 +257,37 @@ class TestGatherDashboardData:
         assert mock_db.execute.call_count == 7
 
 
+class TestBuildSummary:
+    def test_net_deposits_used_over_first_snapshot(self):
+        """net_deposits takes precedence over first snapshot for total return."""
+        latest = {"portfolio_value": Decimal("110000"), "cash": Decimal("40000"),
+                  "long_market_value": Decimal("70000")}
+        first = {"portfolio_value": Decimal("50000"), "date": date(2025, 1, 1)}
+        previous = {"portfolio_value": Decimal("109000")}
+
+        summary = _build_summary(latest, first, previous, 3, date(2025, 6, 15),
+                                 net_deposits=Decimal("100000"))
+
+        # Investment return: 110000 - 100000 = 10000 (10%)
+        assert summary["total_pnl"] == Decimal("10000")
+        assert summary["total_pnl_pct"] == Decimal("10")
+        # inception_date still comes from first snapshot
+        assert summary["inception_date"] == date(2025, 1, 1)
+
+    def test_zero_net_deposits_uses_fallback(self):
+        """Zero net_deposits triggers fallback to first snapshot."""
+        latest = {"portfolio_value": Decimal("110000"), "cash": Decimal("40000"),
+                  "long_market_value": Decimal("70000")}
+        first = {"portfolio_value": Decimal("100000"), "date": date(2025, 1, 1)}
+        previous = {"portfolio_value": Decimal("109000")}
+
+        summary = _build_summary(latest, first, previous, 3, date(2025, 6, 15),
+                                 net_deposits=Decimal("0"))
+
+        # Fallback: 110000 - 100000 = 10000
+        assert summary["total_pnl"] == Decimal("10000")
+
+
 class TestWriteJsonFiles:
     def _sample_data(self):
         return {
@@ -268,73 +340,28 @@ class TestWriteJsonFiles:
         assert isinstance(content["portfolio_value"], float)
 
 
-class TestPushToGithub:
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_commits_and_pushes(self, mock_run):
-        """Verifies 3 git calls: add, commit, push."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        result = push_to_github("/fake/repo")
-
-        assert result is True
-        assert mock_run.call_count == 3
-
-        # Verify the three calls
-        calls = mock_run.call_args_list
-        assert calls[0][0][0] == ["git", "add", "data/"]
-        assert calls[0][1]["cwd"] == "/fake/repo"
-
-        assert calls[1][0][0][0:2] == ["git", "commit"]
-        assert calls[1][1]["cwd"] == "/fake/repo"
-
-        assert calls[2][0][0] == ["git", "push"]
-        assert calls[2][1]["cwd"] == "/fake/repo"
-
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_skips_push_if_nothing_to_commit(self, mock_run):
-        """When commit returns non-zero, push is NOT called."""
-        add_result = MagicMock(returncode=0)
-        commit_result = MagicMock(returncode=1, stdout="nothing to commit")
-        mock_run.side_effect = [add_result, commit_result]
-
-        result = push_to_github("/fake/repo")
-
-        assert result is False
-        assert mock_run.call_count == 2  # add + commit, no push
-
-    @patch("v2.dashboard_publish.subprocess.run")
-    def test_raises_on_push_failure(self, mock_run):
-        """RuntimeError raised when push fails."""
-        add_result = MagicMock(returncode=0)
-        commit_result = MagicMock(returncode=0)
-        push_result = MagicMock(returncode=1, stderr="fatal: remote error")
-        mock_run.side_effect = [add_result, commit_result, push_result]
-
-        with pytest.raises(RuntimeError, match="fatal: remote error"):
-            push_to_github("/fake/repo")
-
-
 class TestRunDashboardStage:
-    @patch("v2.dashboard_publish.push_to_github", return_value=True)
-    @patch("v2.dashboard_publish.write_json_files", return_value=["/fake/data/summary.json"])
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
-    def test_happy_path(self, mock_gather, mock_write, mock_push):
+    @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
+    def test_happy_path(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
         """Full pipeline runs and returns published=True."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage(session_date=date(2025, 6, 15))
 
         assert result.published is True
         assert result.skipped is False
         assert result.errors == []
-        mock_gather.assert_called_once_with(date(2025, 6, 15))
-        mock_write.assert_called_once_with({"summary": {}}, "/fake/repo")
-        mock_push.assert_called_once_with("/fake/repo")
+        mock_deposits.assert_called_once()
+        mock_gather.assert_called_once_with(date(2025, 6, 15), net_deposits=Decimal("100000"))
+        mock_assemble.assert_called_once()
+        mock_deploy.assert_called_once()
 
-    def test_skipped_when_no_repo_path(self):
-        """Returns skipped=True when DASHBOARD_REPO_PATH not set."""
+    def test_skipped_when_no_project_set(self):
+        """Returns skipped=True when CLOUDFLARE_PAGES_PROJECT not set."""
         with patch.dict(os.environ, {}, clear=True):
-            # Ensure DASHBOARD_REPO_PATH is not set
-            os.environ.pop("DASHBOARD_REPO_PATH", None)
+            os.environ.pop("CLOUDFLARE_PAGES_PROJECT", None)
             result = run_dashboard_stage()
 
         assert result.skipped is True
@@ -342,9 +369,10 @@ class TestRunDashboardStage:
         assert result.errors == []
 
     @patch("v2.dashboard_publish.gather_dashboard_data", side_effect=Exception("DB down"))
-    def test_handles_gather_error(self, mock_gather):
+    @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
+    def test_handles_gather_error(self, mock_deposits, mock_gather):
         """Error in gather step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
@@ -352,24 +380,198 @@ class TestRunDashboardStage:
         assert "Data gathering failed" in result.errors[0]
 
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
-    @patch("v2.dashboard_publish.write_json_files", side_effect=Exception("Disk full"))
-    def test_handles_write_error(self, mock_write, mock_gather):
-        """Error in write step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+    @patch("v2.dashboard_publish.assemble_deploy_dir", side_effect=Exception("Disk full"))
+    @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
+    def test_handles_assemble_error(self, mock_deposits, mock_assemble, mock_gather):
+        """Error in assemble step is captured."""
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
         assert len(result.errors) == 1
-        assert "JSON writing failed" in result.errors[0]
+        assert "Deploy assembly failed" in result.errors[0]
 
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
-    @patch("v2.dashboard_publish.write_json_files", return_value=[])
-    @patch("v2.dashboard_publish.push_to_github", side_effect=RuntimeError("git push failed"))
-    def test_handles_push_error(self, mock_push, mock_write, mock_gather):
-        """Error in push step is captured."""
-        with patch.dict(os.environ, {"DASHBOARD_REPO_PATH": "/fake/repo"}):
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", side_effect=RuntimeError("Auth failed"))
+    @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
+    def test_handles_deploy_error(self, mock_deposits, mock_deploy, mock_assemble, mock_gather):
+        """Error in deploy step is captured."""
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
 
         assert result.published is False
         assert len(result.errors) == 1
-        assert "Git push failed" in result.errors[0]
+        assert "Cloudflare deploy failed" in result.errors[0]
+
+    @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
+    @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
+    @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
+    @patch("v2.dashboard_publish.get_net_deposits", side_effect=Exception("Alpaca down"))
+    def test_continues_when_net_deposits_fails(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
+        """Pipeline continues with net_deposits=None if Alpaca call fails."""
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
+            result = run_dashboard_stage(session_date=date(2025, 6, 15))
+
+        assert result.published is True
+        assert result.errors == []
+        mock_gather.assert_called_once_with(date(2025, 6, 15), net_deposits=None)
+
+
+class TestGetNetDeposits:
+    @patch("v2.executor.get_trading_client")
+    def test_sums_deposits_and_withdrawals(self, mock_get_client):
+        """Sums CSD (positive) and CSW (negative) activities."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.get.return_value = [
+            {"net_amount": 50000.0, "id": "1"},
+            {"net_amount": 50000.0, "id": "2"},
+            {"net_amount": -5000.0, "id": "3"},
+        ]
+
+        result = get_net_deposits()
+
+        assert result == Decimal("95000")
+        mock_client.get.assert_called_once_with(
+            "/account/activities",
+            {"activity_types": "CSD,CSW", "page_size": 100, "direction": "asc"},
+        )
+
+    @patch("v2.executor.get_trading_client")
+    def test_handles_empty_activities(self, mock_get_client):
+        """Returns zero when no transfer activities exist."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.get.return_value = []
+
+        result = get_net_deposits()
+
+        assert result == Decimal("0")
+
+    @patch("v2.executor.get_trading_client")
+    def test_paginates_when_needed(self, mock_get_client):
+        """Fetches multiple pages when activities exceed page_size."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        # First page: 100 items (triggers pagination)
+        page1 = [{"net_amount": 1000.0, "id": str(i)} for i in range(100)]
+        # Second page: fewer than 100 items (last page)
+        page2 = [{"net_amount": 2000.0, "id": "200"}]
+
+        mock_client.get.side_effect = [page1, page2]
+
+        result = get_net_deposits()
+
+        assert result == Decimal("102000")  # 100 * 1000 + 1 * 2000
+        assert mock_client.get.call_count == 2
+        # Second call should include page_token from last item of first page
+        second_call_params = mock_client.get.call_args_list[1][0][1]
+        assert second_call_params["page_token"] == "99"
+
+    @patch("v2.executor.get_trading_client")
+    def test_handles_none_response(self, mock_get_client):
+        """Returns zero when API returns None."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.get.return_value = None
+
+        result = get_net_deposits()
+
+        assert result == Decimal("0")
+
+
+class TestDeployToCloudflare:
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_deploys_successfully(self, mock_run):
+        """Runs wrangler pages deploy with correct args."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="Published!")
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
+            result = deploy_to_cloudflare("/tmp/deploy")
+
+        assert result is True
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0] == "wrangler"
+        assert call_args[1:3] == ["pages", "deploy"]
+        assert "/tmp/deploy" in call_args
+        assert "--project-name" in call_args
+        assert "my-dashboard" in call_args
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_raises_on_wrangler_failure(self, mock_run):
+        """RuntimeError raised when wrangler exits non-zero."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="Auth failed")
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
+            with pytest.raises(RuntimeError, match="Auth failed"):
+                deploy_to_cloudflare("/tmp/deploy")
+
+    def test_raises_when_project_not_set(self):
+        """RuntimeError raised when CLOUDFLARE_PAGES_PROJECT missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("CLOUDFLARE_PAGES_PROJECT", None)
+            with pytest.raises(RuntimeError, match="CLOUDFLARE_PAGES_PROJECT"):
+                deploy_to_cloudflare("/tmp/deploy")
+
+
+class TestAssembleDeployDir:
+    def _sample_data(self):
+        return {
+            "summary": {"portfolio_value": 100000},
+            "snapshots": [{"date": "2025-06-15"}],
+            "positions": [{"ticker": "AAPL"}],
+            "decisions": [{"action": "buy"}],
+            "theses": [{"direction": "long"}],
+        }
+
+    def test_copies_static_assets(self, tmp_path):
+        """index.html, styles.css, app.js are copied to deploy dir."""
+        # Create fake static assets
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>test</html>")
+        (assets_dir / "styles.css").write_text("body { color: red; }")
+        (assets_dir / "app.js").write_text("console.log('hi');")
+        (assets_dir / "README.md").write_text("Docs")  # Should NOT be copied
+
+        deploy_dir = tmp_path / "deploy"
+        assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
+
+        assert (deploy_dir / "index.html").exists()
+        assert (deploy_dir / "styles.css").exists()
+        assert (deploy_dir / "app.js").exists()
+        assert not (deploy_dir / "README.md").exists()
+
+    def test_writes_json_data_files(self, tmp_path):
+        """data/*.json files are written correctly."""
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>")
+        (assets_dir / "styles.css").write_text("")
+        (assets_dir / "app.js").write_text("")
+
+        deploy_dir = tmp_path / "deploy"
+        data = self._sample_data()
+        assemble_deploy_dir(data, str(deploy_dir), str(assets_dir))
+
+        for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+            json_path = deploy_dir / "data" / f"{key}.json"
+            assert json_path.exists()
+            with open(json_path) as f:
+                assert json.load(f) == data[key]
+
+    def test_creates_deploy_dir_if_missing(self, tmp_path):
+        """Deploy directory is created automatically."""
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>")
+        (assets_dir / "styles.css").write_text("")
+        (assets_dir / "app.js").write_text("")
+
+        deploy_dir = tmp_path / "deploy" / "nested"
+        assert not deploy_dir.exists()
+
+        assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
+
+        assert deploy_dir.exists()

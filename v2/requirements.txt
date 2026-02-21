@@ -8,6 +8,7 @@ pytz>=2025.2
 flask>=3.0.0
 tweepy>=4.14.0
 atproto>=0.0.55
+grapheme>=0.6.0
 
 # Testing
 pytest>=8.0.0

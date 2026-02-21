@@ -45,7 +45,9 @@
       "Bash(git -C /home/jay/dev/algo branch -v)",
       "Bash(git -C /home/jay/dev/algo add docs/plans/2026-02-15-strategy-layer-implementation.md)",
       "Bash(git -C:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "WebFetch(domain:developers.cloudflare.com)"
     ]
   }
 }
