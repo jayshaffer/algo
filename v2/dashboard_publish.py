@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Optional
 
 from .database.connection import get_cursor
+from .executor import get_net_deposits
 
 logger = logging.getLogger("dashboard_publish")
 
@@ -28,8 +29,13 @@ class _DecimalEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-def gather_dashboard_data(session_date: date) -> dict:
+def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = None) -> dict:
     """Gather all dashboard data in a single DB connection.
+
+    Args:
+        session_date: The trading session date.
+        net_deposits: Total net cash deposited (from Alpaca activities).
+            Used for accurate total return calculation excluding cash infusions.
 
     Returns dict with keys: summary, snapshots, positions, decisions, theses.
     Handles empty DB gracefully.
@@ -109,7 +115,7 @@ def gather_dashboard_data(session_date: date) -> dict:
         previous = cur.fetchone()
 
     # Build summary
-    summary = _build_summary(latest, first, previous, len(positions), session_date)
+    summary = _build_summary(latest, first, previous, len(positions), session_date, net_deposits)
 
     return {
         "summary": summary,
@@ -120,7 +126,7 @@ def gather_dashboard_data(session_date: date) -> dict:
     }
 
 
-def _build_summary(latest, first, previous, positions_count, session_date):
+def _build_summary(latest, first, previous, positions_count, session_date, net_deposits=None):
     """Build summary dict from query results."""
     if not latest:
         return {
@@ -149,13 +155,18 @@ def _build_summary(latest, first, previous, positions_count, session_date):
         if prev_value != 0:
             daily_pnl_pct = (daily_pnl / prev_value) * 100
 
-    # Total P&L
+    # Total P&L: investment return only (excludes cash infusions)
     total_pnl = Decimal("0")
     total_pnl_pct = Decimal("0")
     inception_date = None
-    if first and first["portfolio_value"]:
-        first_value = first["portfolio_value"]
+    if first:
         inception_date = first["date"]
+    if net_deposits is not None and net_deposits != 0:
+        total_pnl = portfolio_value - net_deposits
+        total_pnl_pct = (total_pnl / net_deposits) * 100
+    elif first and first["portfolio_value"]:
+        # Fallback if net_deposits not available
+        first_value = first["portfolio_value"]
         total_pnl = portfolio_value - first_value
         if first_value != 0:
             total_pnl_pct = (total_pnl / first_value) * 100
@@ -235,6 +246,32 @@ def push_to_github(repo_path: str) -> bool:
     return True
 
 
+def deploy_to_cloudflare(deploy_dir: str) -> bool:
+    """Deploy dashboard directory to Cloudflare Pages via wrangler.
+
+    Requires CLOUDFLARE_PAGES_PROJECT env var.
+    Wrangler authenticates via CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars.
+
+    Returns True if deployed successfully.
+    Raises RuntimeError on failure.
+    """
+    project = os.environ.get("CLOUDFLARE_PAGES_PROJECT")
+    if not project:
+        raise RuntimeError("CLOUDFLARE_PAGES_PROJECT not set")
+
+    result = subprocess.run(
+        ["wrangler", "pages", "deploy", deploy_dir,
+         "--project-name", project, "--branch", "main"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Wrangler deploy failed: {result.stderr.strip()}")
+
+    logger.info("Deployed to Cloudflare Pages: %s", result.stdout.strip())
+    return True
+
+
 @dataclass
 class DashboardStageResult:
     """Result of the dashboard publishing stage."""
@@ -256,9 +293,16 @@ def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageRe
         logger.info("Dashboard stage skipped — DASHBOARD_REPO_PATH not set")
         return result
 
+    # Fetch net deposits from Alpaca for accurate return calculation
+    net_deposits = None
+    try:
+        net_deposits = get_net_deposits()
+    except Exception as e:
+        logger.warning("Could not fetch net deposits from Alpaca: %s", e)
+
     # Gather data
     try:
-        data = gather_dashboard_data(session_date)
+        data = gather_dashboard_data(session_date, net_deposits=net_deposits)
     except Exception as e:
         result.errors.append(f"Data gathering failed: {e}")
         logger.error("Failed to gather dashboard data: %s", e)
