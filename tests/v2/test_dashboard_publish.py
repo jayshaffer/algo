@@ -12,6 +12,7 @@ from v2.dashboard_publish import (
     DashboardStageResult,
     _DecimalEncoder,
     _build_summary,
+    assemble_deploy_dir,
     deploy_to_cloudflare,
     gather_dashboard_data,
     push_to_github,
@@ -560,3 +561,65 @@ class TestDeployToCloudflare:
             os.environ.pop("CLOUDFLARE_PAGES_PROJECT", None)
             with pytest.raises(RuntimeError, match="CLOUDFLARE_PAGES_PROJECT"):
                 deploy_to_cloudflare("/tmp/deploy")
+
+
+class TestAssembleDeployDir:
+    def _sample_data(self):
+        return {
+            "summary": {"portfolio_value": 100000},
+            "snapshots": [{"date": "2025-06-15"}],
+            "positions": [{"ticker": "AAPL"}],
+            "decisions": [{"action": "buy"}],
+            "theses": [{"direction": "long"}],
+        }
+
+    def test_copies_static_assets(self, tmp_path):
+        """index.html, styles.css, app.js are copied to deploy dir."""
+        # Create fake static assets
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>test</html>")
+        (assets_dir / "styles.css").write_text("body { color: red; }")
+        (assets_dir / "app.js").write_text("console.log('hi');")
+        (assets_dir / "README.md").write_text("Docs")  # Should NOT be copied
+
+        deploy_dir = tmp_path / "deploy"
+        assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
+
+        assert (deploy_dir / "index.html").exists()
+        assert (deploy_dir / "styles.css").exists()
+        assert (deploy_dir / "app.js").exists()
+        assert not (deploy_dir / "README.md").exists()
+
+    def test_writes_json_data_files(self, tmp_path):
+        """data/*.json files are written correctly."""
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>")
+        (assets_dir / "styles.css").write_text("")
+        (assets_dir / "app.js").write_text("")
+
+        deploy_dir = tmp_path / "deploy"
+        data = self._sample_data()
+        assemble_deploy_dir(data, str(deploy_dir), str(assets_dir))
+
+        for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+            json_path = deploy_dir / "data" / f"{key}.json"
+            assert json_path.exists()
+            with open(json_path) as f:
+                assert json.load(f) == data[key]
+
+    def test_creates_deploy_dir_if_missing(self, tmp_path):
+        """Deploy directory is created automatically."""
+        assets_dir = tmp_path / "public_dashboard"
+        assets_dir.mkdir()
+        (assets_dir / "index.html").write_text("<html>")
+        (assets_dir / "styles.css").write_text("")
+        (assets_dir / "app.js").write_text("")
+
+        deploy_dir = tmp_path / "deploy" / "nested"
+        assert not deploy_dir.exists()
+
+        assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
+
+        assert deploy_dir.exists()

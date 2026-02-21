@@ -6,6 +6,7 @@ Queries the DB and structures data for JSON export.
 import json
 import logging
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -205,6 +206,34 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
         files_written.append(file_path)
 
     return files_written
+
+
+# Static asset filenames to copy from public_dashboard/
+_STATIC_ASSETS = ("index.html", "styles.css", "app.js")
+
+
+def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str) -> str:
+    """Assemble a complete deploy directory with static assets and JSON data.
+
+    Args:
+        data: Dashboard data dict (from gather_dashboard_data).
+        deploy_dir: Path to create/populate the deploy directory.
+        assets_dir: Path to public_dashboard/ directory containing static assets.
+
+    Returns the deploy_dir path.
+    """
+    os.makedirs(deploy_dir, exist_ok=True)
+
+    # Copy static assets
+    for filename in _STATIC_ASSETS:
+        src = os.path.join(assets_dir, filename)
+        dst = os.path.join(deploy_dir, filename)
+        shutil.copy2(src, dst)
+
+    # Write JSON data files
+    write_json_files(data, deploy_dir)
+
+    return deploy_dir
 
 
 def push_to_github(repo_path: str) -> bool:
