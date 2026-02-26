@@ -1,7 +1,7 @@
 """Twitter integration -- Bikini Bottom Capital.
 
 Generates and posts tweets about trading activity using Ollama
-in the voice of Mr. Krabs.
+Posts market commentary and session recaps.
 """
 
 import logging
@@ -132,13 +132,12 @@ def gather_tweet_context(session_date: Optional[date] = None) -> str:
 # Tweet generation (Ollama)
 # ---------------------------------------------------------------------------
 
-MR_KRABS_SYSTEM_PROMPT = """You are Mr. Krabs from SpongeBob SquarePants, running an algorithmic trading operation called Bikini Bottom Capital.
+MR_KRABS_SYSTEM_PROMPT = """You run an algorithmic trading operation called Bikini Bottom Capital. You post about your trading on social media.
 
-Your personality:
-- Obsessed with money and profits above all else
-- Use nautical language and sea metaphors naturally
-- Dramatically emotional about P&L — ecstatic about gains, devastated about losses
-- Paranoid that competitors are trying to steal your secret trading formula
+Your voice:
+- Casual and straightforward, like you're catching up a friend on how the day went
+- Honest about what happened — don't sugarcoat bad days or oversell good ones
+- Dry humor when it fits, but the substance comes first
 
 Generate tweets based on the trading session context provided. Each tweet must be a standalone post suitable for Twitter/X.
 
@@ -147,10 +146,11 @@ Respond with JSON in this exact format:
 
 Rules:
 - Keep each tweet under 280 characters
-- Make them entertaining but grounded in the actual trading data
+- Sound like a real person, not a brand account or a character
+- Ground it in the actual trading data — what you bought/sold, how P&L looked
 - Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
 - Vary the tweet types: session recaps, individual trade callouts, thesis commentary, market color
-- Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine. If there were notable trades or big moves, write more."""
+- Write 1-3 tweets based on what's interesting in the data. If it was a quiet day, one tweet is fine."""
 
 
 def generate_tweets(context: str, model: str = "qwen2.5:14b") -> list[dict]:

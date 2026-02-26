@@ -133,7 +133,7 @@ class TestGenerateBlueskyPost:
         assert result["type"] == "recap"
         call_kwargs = mock_retry.call_args
         assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5-20251001"
-        assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
+        assert "Bikini Bottom Capital" in call_kwargs.kwargs.get("system", "")
         expected_limit = BLUESKY_GRAPHEME_LIMIT - _PROMPT_BUFFER
         assert f"{expected_limit} characters" in call_kwargs.kwargs.get("system", "")
 
@@ -202,7 +202,7 @@ class TestGenerateBlueskyPost:
         with patch.dict(os.environ, {"DASHBOARD_URL": "https://example.github.io"}):
             result = generate_bluesky_post("context")
         assert result is not None
-        assert result["text"] == "Ahoy! Great day!\nportfolio"
+        assert result["text"] == "Ahoy! Great day!\nDashboard"
         assert result["dashboard_url"] == "https://example.github.io"
 
     @patch("v2.bluesky._call_with_retry")
@@ -335,7 +335,7 @@ class TestGenerateBlueskyEntertainmentPost:
         assert "Squidward" in result["text"]
         # First call is the generation call
         call_kwargs = mock_retry.call_args_list[0]
-        assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
+        assert "Bikini Bottom Capital" in call_kwargs.kwargs.get("system", "")
         assert "270 characters" in call_kwargs.kwargs.get("system", "")
 
     @patch("v2.bluesky._call_with_retry")

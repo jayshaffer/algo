@@ -98,7 +98,7 @@ class TestGenerateEntertainmentTweet:
         assert result["type"] == "entertainment"
         assert "Squidward" in result["text"]
         call_kwargs = mock_retry.call_args
-        assert "Mr. Krabs" in call_kwargs.kwargs.get("system", "")
+        assert "Bikini Bottom Capital" in call_kwargs.kwargs.get("system", "")
 
     @patch("v2.entertainment._call_with_retry")
     @patch("v2.entertainment.get_claude_client")

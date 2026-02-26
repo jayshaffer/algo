@@ -207,9 +207,9 @@ class TestGenerateTweets:
         assert result[0]["type"] == "recap"
         assert result[1]["type"] == "trade"
 
-        # Verify system prompt mentions Krabs
+        # Verify system prompt mentions Bikini Bottom Capital
         call_kwargs = mock_chat.call_args
-        assert "Mr. Krabs" in call_kwargs.kwargs.get("system", call_kwargs[1].get("system", ""))
+        assert "Bikini Bottom Capital" in call_kwargs.kwargs.get("system", call_kwargs[1].get("system", ""))
 
         # Verify default model is passed
         assert call_kwargs.kwargs.get("model") == "qwen2.5:14b"
