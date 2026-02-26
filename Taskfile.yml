@@ -1,0 +1,109 @@
+version: "3"
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  docker:up:
+    desc: Start all services
+    cmds:
+      - docker compose up -d
+    status:
+      - docker compose ps --status running --format '{{.Name}}' | grep -q trading
+
+  docker:down:
+    desc: Stop all services
+    cmds:
+      - docker compose down
+
+  docker:build:
+    desc: Rebuild Docker images
+    cmds:
+      - docker compose build
+
+  docker:logs:
+    desc: Follow container logs (pass service name as arg)
+    cmds:
+      - docker compose logs -f {{.CLI_ARGS}}
+
+  setup:ollama:
+    desc: Pull Ollama models (run after first docker:up)
+    deps: [docker:up]
+    cmds:
+      - bash scripts/setup-ollama.sh
+
+  # ---------------------------------------------------------------------------
+  # Trading workflows
+  # ---------------------------------------------------------------------------
+  session:
+    desc: Run full consolidated daily session
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.session {{.CLI_ARGS}}
+
+  session:dry-run:
+    desc: Dry-run the full daily session
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.session --dry-run {{.CLI_ARGS}}
+
+  trade:
+    desc: Run the trader
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.trader {{.CLI_ARGS}}
+
+  trade:dry-run:
+    desc: Dry-run the trader
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.trader --dry-run {{.CLI_ARGS}}
+
+  ideation:
+    desc: Run Ollama ideation session
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.ideation {{.CLI_ARGS}}
+
+  ideation:claude:
+    desc: Run Claude strategist ideation
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.ideation_claude {{.CLI_ARGS}}
+
+  pipeline:
+    desc: Run news processing pipeline
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.pipeline {{.CLI_ARGS}}
+
+  learn:
+    desc: Run learning loop
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.learn {{.CLI_ARGS}}
+
+  backfill:
+    desc: Backfill decision outcomes
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m trading.backfill {{.CLI_ARGS}}
+
+  entertainment:
+    desc: Generate and post entertainment tweets
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.entertainment {{.CLI_ARGS}}
+
+  # ---------------------------------------------------------------------------
+  # Dev
+  # ---------------------------------------------------------------------------
+  test:
+    desc: Run tests
+    cmds:
+      - python3 -m pytest tests/ {{.CLI_ARGS}}
+
+  test:coverage:
+    desc: Run tests with coverage
+    cmds:
+      - python3 -m pytest tests/ --cov=trading --cov=dashboard {{.CLI_ARGS}}
