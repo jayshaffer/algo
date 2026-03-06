@@ -39,6 +39,93 @@ class _DecimalEncoder(json.JSONEncoder):
         return super().default(o)
 
 
+def get_deposit_history() -> list[dict]:
+    """Get chronological list of cash deposits/withdrawals from Alpaca.
+
+    Returns list of {date, amount} dicts sorted by date.
+    """
+    from .executor import get_trading_client
+
+    client = get_trading_client()
+    history = []
+    page_token = None
+
+    while True:
+        params = {"activity_types": "CSD,CSW", "page_size": 100, "direction": "asc"}
+        if page_token:
+            params["page_token"] = page_token
+
+        activities = client.get("/account/activities", params)
+        if not activities:
+            break
+
+        for a in activities:
+            history.append({
+                "date": a["date"],
+                "amount": Decimal(str(a["net_amount"])),
+            })
+
+        if len(activities) < 100:
+            break
+        page_token = activities[-1]["id"]
+
+    return history
+
+
+def _enrich_snapshots_with_deposits(snapshots: list[dict], deposit_history: list[dict]) -> None:
+    """Add cumulative_deposits to each snapshot dict, in place.
+
+    Deposits are credited on the first snapshot where portfolio_value reflects
+    the new cash. We detect this by checking if the portfolio jump between
+    consecutive snapshots is close to a known deposit amount.
+    """
+    if not snapshots:
+        return
+
+    if not deposit_history:
+        # No deposit data — assume first snapshot value is the only deposit
+        base = snapshots[0]["portfolio_value"]
+        for s in snapshots:
+            s["cumulative_deposits"] = base
+        return
+
+    # Sort deposits chronologically and build a list of (date_str, amount)
+    sorted_deposits = sorted(deposit_history, key=lambda x: str(x["date"]))
+
+    # For each snapshot, cumulative_deposits = sum of deposits whose effect
+    # is visible. A deposit on date D is reflected in the snapshot on or after
+    # the date where portfolio_value jumps by roughly the deposit amount.
+    # Simpler approach: credit deposit on the first snapshot where
+    # snap.date > deposit.date (next trading day after deposit settles).
+    cum = Decimal("0")
+    dep_idx = 0
+    for s in snapshots:
+        snap_date = str(s["date"])
+        # Credit all deposits with date strictly before this snapshot
+        while dep_idx < len(sorted_deposits) and str(sorted_deposits[dep_idx]["date"]) < snap_date:
+            cum += sorted_deposits[dep_idx]["amount"]
+            dep_idx += 1
+        s["cumulative_deposits"] = cum
+
+    # If the first snapshot still has 0 cumulative_deposits, the very first
+    # deposit happened on or before the first snapshot — credit it.
+    if snapshots[0]["cumulative_deposits"] == 0 and sorted_deposits:
+        first_dep_date = str(sorted_deposits[0]["date"])
+        first_snap_date = str(snapshots[0]["date"])
+        if first_dep_date <= first_snap_date:
+            # Credit deposits on or before first snapshot
+            credit = Decimal("0")
+            advanced = 0
+            for d in sorted_deposits:
+                if str(d["date"]) <= first_snap_date:
+                    credit += d["amount"]
+                    advanced += 1
+                else:
+                    break
+            for s in snapshots:
+                s["cumulative_deposits"] += credit
+
+
 def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = None) -> dict:
     """Gather all dashboard data in a single DB connection.
 
@@ -134,9 +221,19 @@ def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = 
         end = snapshots[-1]["date"]
         benchmark = fetch_spy_benchmark(start, end)
 
+    # Enrich snapshots with cumulative deposit data for accurate return calc
+    snapshot_dicts = [dict(r) for r in snapshots]
+    try:
+        deposit_history = get_deposit_history()
+    except Exception:
+        logger.warning("Could not fetch deposit history", exc_info=True)
+        deposit_history = []
+    _enrich_snapshots_with_deposits(snapshot_dicts, deposit_history)
+
+
     return {
         "summary": summary,
-        "snapshots": [dict(r) for r in snapshots],
+        "snapshots": snapshot_dicts,
         "positions": [dict(r) for r in positions],
         "decisions": [dict(r) for r in decisions],
         "theses": [dict(r) for r in theses],

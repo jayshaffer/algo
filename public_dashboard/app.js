@@ -89,14 +89,22 @@ function renderSummary(s, snapshots, benchmark) {
   // vs S&P: portfolio return minus SPY return
   var vsSp = document.getElementById("vs-sp");
   if (snapshots && snapshots.length > 1 && benchmark && benchmark.length > 0) {
-    var portfolioBase = snapshots[0].portfolio_value;
+    var baseDeposits = snapshots[0].cumulative_deposits || snapshots[0].portfolio_value;
+    var nowDeposits = snapshots[snapshots.length - 1].cumulative_deposits || baseDeposits;
     var portfolioNow = snapshots[snapshots.length - 1].portfolio_value;
-    var portfolioReturn = ((portfolioNow - portfolioBase) / portfolioBase) * 100;
+    var portfolioReturn = ((portfolioNow - nowDeposits) / baseDeposits) * 100;
 
     var spyMap = {};
     benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
-    var spyStart = spyMap[snapshots[0].date];
-    var spyEnd = spyMap[snapshots[snapshots.length - 1].date];
+    // Find first/last available benchmark close (dates may not align on weekends)
+    var spyStart = null;
+    for (var i = 0; i < snapshots.length; i++) {
+      if (spyMap[snapshots[i].date] != null) { spyStart = spyMap[snapshots[i].date]; break; }
+    }
+    var spyEnd = null;
+    for (var j = snapshots.length - 1; j >= 0; j--) {
+      if (spyMap[snapshots[j].date] != null) { spyEnd = spyMap[snapshots[j].date]; break; }
+    }
 
     if (spyStart && spyEnd) {
       var spyReturn = ((spyEnd - spyStart) / spyStart) * 100;
@@ -178,6 +186,106 @@ function renderEquityCurve(snapshots, benchmark) {
       responsive: true,
       plugins: {
         legend: { display: datasets.length > 1, labels: { color: "#8892a4" } },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              return "Portfolio: " + formatCurrency(ctx.parsed.y);
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#8892a4", maxTicksLimit: 8 },
+          grid: { color: "rgba(30, 58, 95, 0.4)" },
+        },
+        y: {
+          ticks: {
+            color: "#8892a4",
+            callback: function (v) { return formatCurrency(v); },
+          },
+          grid: { color: "rgba(30, 58, 95, 0.4)" },
+        },
+      },
+    },
+  });
+}
+
+function renderBenchmark(snapshots, benchmark) {
+  var canvas = document.getElementById("benchmark-chart");
+  var emptyMsg = document.getElementById("benchmark-empty");
+
+  if (!snapshots || snapshots.length === 0 || !benchmark || benchmark.length === 0) {
+    canvas.style.display = "none";
+    emptyMsg.style.display = "block";
+    return;
+  }
+
+  var labels = snapshots.map(function (s) { return s.date; });
+
+  // Normalize portfolio to % return, adjusted for cash deposits/withdrawals
+  // Return = (portfolio_value - cumulative_deposits) / first_deposits * 100
+  var baseDeposits = snapshots[0].cumulative_deposits || snapshots[0].portfolio_value;
+  var portfolioReturns = snapshots.map(function (s) {
+    var deposits = s.cumulative_deposits || baseDeposits;
+    return ((s.portfolio_value - deposits) / baseDeposits) * 100;
+  });
+
+  // Build a date->close map for SPY
+  var spyMap = {};
+  benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
+
+  // Find first available benchmark close (dates may not align on weekends)
+  var spyBase = null;
+  for (var i = 0; i < labels.length; i++) {
+    if (spyMap[labels[i]] != null) { spyBase = spyMap[labels[i]]; break; }
+  }
+  if (!spyBase) {
+    canvas.style.display = "none";
+    emptyMsg.style.display = "block";
+    return;
+  }
+
+  var spyReturns = labels.map(function (date) {
+    var close = spyMap[date];
+    if (close == null) return null;
+    return ((close - spyBase) / spyBase) * 100;
+  });
+
+  new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "Portfolio",
+          data: portfolioReturns,
+          borderColor: "#00d4aa",
+          backgroundColor: "rgba(0, 212, 170, 0.08)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHitRadius: 8,
+          borderWidth: 2,
+        },
+        {
+          label: "S&P 500",
+          data: spyReturns,
+          borderColor: "#5a6a7a",
+          borderDash: [6, 3],
+          backgroundColor: "transparent",
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHitRadius: 8,
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: true, labels: { color: "#8892a4" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
@@ -278,7 +386,8 @@ function renderTheses(theses) {
 document.addEventListener("DOMContentLoaded", function () {
   fetchAllData().then(function (data) {
     renderSummary(data.summary, data.snapshots, data.benchmark);
-    renderEquityCurve(data.snapshots, data.benchmark);
+    renderEquityCurve(data.snapshots);
+    renderBenchmark(data.snapshots, data.benchmark);
     renderPositions(data.positions);
     renderDecisions(data.decisions);
     renderTheses(data.theses);
