@@ -46,7 +46,7 @@ def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = 
         net_deposits: Total net cash deposited (from Alpaca activities).
             Used for accurate total return calculation excluding cash infusions.
 
-    Returns dict with keys: summary, snapshots, positions, decisions, theses.
+    Returns dict with keys: summary, snapshots, positions, decisions, theses, benchmark.
     Handles empty DB gracefully.
     """
     with get_cursor() as cur:

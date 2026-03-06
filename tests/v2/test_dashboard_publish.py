@@ -193,6 +193,9 @@ class TestGatherDashboardData:
         assert summary["inception_date"] is None
         assert summary["last_updated"] == "2025-06-15"
 
+        assert result["benchmark"] == []
+        mock_benchmark.assert_not_called()
+
     def test_no_previous_snapshot(self, mock_benchmark, mock_db):
         """First day of trading: latest exists but no previous snapshot."""
         session_date = date(2025, 6, 15)
@@ -281,7 +284,7 @@ class TestGatherDashboardData:
 
         assert "benchmark" in result
         assert result["benchmark"] == [{"date": "2025-06-15", "close": 540.0}]
-        mock_benchmark.assert_called_once()
+        mock_benchmark.assert_called_once_with(date(2025, 6, 14), date(2025, 6, 15))
 
 
 class TestBuildSummary:
