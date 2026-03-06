@@ -208,8 +208,8 @@ def fetch_spy_benchmark(start_date: date, end_date: date) -> list[dict]:
     Returns list of {date, close} dicts, or [] on error.
     """
     try:
-        api_key = os.environ.get("APCA_API_KEY_ID")
-        secret_key = os.environ.get("APCA_API_SECRET_KEY")
+        api_key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY")
+        secret_key = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_SECRET_KEY")
         client = StockHistoricalDataClient(api_key, secret_key)
 
         request = StockBarsRequest(
