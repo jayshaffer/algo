@@ -5,6 +5,7 @@ import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -35,6 +36,7 @@ def get_price_on_date(client: StockHistoricalDataClient, ticker: str, target_dat
             start=start,
             end=end,
             limit=5,
+            feed=DataFeed.IEX,
         )
         bars = client.get_stock_bars(request)
 

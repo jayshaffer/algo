@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Strategy - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Strategy</h1>
+
+{# --- Identity Card --- #}
+{% if state %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Identity</h2>
+        <span class="text-sm text-gray-500">v{{ state.version }}</span>
+    </div>
+    <div class="p-4 space-y-4">
+        <p class="text-gray-700 whitespace-pre-line">{{ state.identity_text }}</p>
+
+        <div class="flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-500">Risk Posture:</span>
+            <span class="px-2 py-1 rounded text-sm font-medium
+                {% if state.risk_posture == 'aggressive' %}bg-red-100 text-red-700
+                {% elif state.risk_posture == 'conservative' %}bg-blue-100 text-blue-700
+                {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+                {{ state.risk_posture }}
+            </span>
+        </div>
+
+        {% if state.sector_biases %}
+        <div>
+            <span class="text-sm font-medium text-gray-500">Sector Biases:</span>
+            <div class="flex flex-wrap gap-2 mt-1">
+                {% for sector, bias in state.sector_biases.items() %}
+                <span class="px-2 py-1 rounded text-xs font-medium
+                    {% if bias == 'bullish' %}bg-green-100 text-green-700
+                    {% elif bias == 'bearish' %}bg-red-100 text-red-700
+                    {% else %}bg-gray-100 text-gray-700{% endif %}">
+                    {{ sector }}: {{ bias }}
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if state.preferred_signals %}
+        <div>
+            <span class="text-sm font-medium text-gray-500">Preferred Signals:</span>
+            <div class="flex flex-wrap gap-2 mt-1">
+                {% for signal in state.preferred_signals %}
+                <span class="px-2 py-1 bg-green-50 text-green-700 rounded text-xs">{{ signal }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if state.avoided_signals %}
+        <div>
+            <span class="text-sm font-medium text-gray-500">Avoided Signals:</span>
+            <div class="flex flex-wrap gap-2 mt-1">
+                {% for signal in state.avoided_signals %}
+                <span class="px-2 py-1 bg-red-50 text-red-700 rounded text-xs">{{ signal }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center mb-6">
+    <p class="text-gray-500 text-lg">No strategy state found</p>
+    <p class="text-gray-400 text-sm mt-2">The trading agent has not yet established a strategy identity</p>
+</div>
+{% endif %}
+
+{# --- Rules --- #}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Active Rules</h2>
+    </div>
+    {% if rules %}
+    <div class="p-4">
+        <table class="w-full">
+            <thead>
+                <tr class="text-left text-gray-500 text-sm">
+                    <th class="pb-2">Rule</th>
+                    <th class="pb-2">Category</th>
+                    <th class="pb-2">Direction</th>
+                    <th class="pb-2">Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rule in rules %}
+                <tr class="border-t">
+                    <td class="py-2">{{ rule.rule_text }}</td>
+                    <td class="py-2 text-sm text-gray-600">{{ rule.category }}</td>
+                    <td class="py-2">
+                        <span class="px-2 py-1 rounded text-xs font-medium
+                            {% if rule.direction == 'long' %}bg-green-100 text-green-700
+                            {% elif rule.direction == 'short' %}bg-red-100 text-red-700
+                            {% else %}bg-gray-100 text-gray-700{% endif %}">
+                            {{ rule.direction }}
+                        </span>
+                    </td>
+                    <td class="py-2 text-sm">{{ "%.0f%%"|format(rule.confidence|float * 100) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="p-8 text-center">
+        <p class="text-gray-500">No active rules</p>
+    </div>
+    {% endif %}
+</div>
+
+{# --- Memos --- #}
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Recent Memos</h2>
+    </div>
+    {% if memos %}
+    <div class="divide-y">
+        {% for memo in memos %}
+        <div class="p-4">
+            <div class="flex items-center gap-2 mb-1">
+                <span class="text-sm font-medium text-gray-500">{{ memo.session_date }}</span>
+                <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ memo.memo_type }}</span>
+            </div>
+            <p class="text-gray-700 whitespace-pre-line">{{ memo.content }}</p>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="p-8 text-center">
+        <p class="text-gray-500">No memos in the last 30 days</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

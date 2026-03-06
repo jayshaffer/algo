@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Tweets - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Tweets</h1>
+
+{% if tweets %}
+<div class="bg-white rounded-lg shadow">
+    <div class="divide-y">
+        {% for tweet in tweets %}
+        <div class="p-4">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-gray-500">{{ tweet.session_date }}</span>
+                    <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ tweet.tweet_type }}</span>
+                    <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ tweet.platform }}</span>
+                </div>
+                <div>
+                    {% if tweet.posted %}
+                    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Posted</span>
+                    {% elif tweet.error %}
+                    <span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium">Failed</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Pending</span>
+                    {% endif %}
+                </div>
+            </div>
+            <p class="text-gray-700 whitespace-pre-line">{{ tweet.tweet_text }}</p>
+            {% if tweet.error %}
+            <p class="text-red-600 text-sm mt-2">Error: {{ tweet.error }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center">
+    <p class="text-gray-500 text-lg">No tweets yet</p>
+    <p class="text-gray-400 text-sm mt-2">Tweets will appear here after trading sessions</p>
+</div>
+{% endif %}
+{% endblock %}

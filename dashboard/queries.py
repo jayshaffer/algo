@@ -348,6 +348,63 @@ def close_thesis(thesis_id: int, status: str, reason: str = None) -> bool:
         conn.close()
 
 
+
+# --- Strategy ---
+
+def get_current_strategy():
+    """Fetch the current strategy state."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, identity_text, risk_posture, sector_biases,
+                   preferred_signals, avoided_signals, version, created_at
+            FROM strategy_state
+            WHERE is_current = TRUE
+            LIMIT 1
+        """)
+        return cur.fetchone()
+
+
+def get_strategy_rules(status='active'):
+    """Fetch strategy rules filtered by status."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, rule_text, category, direction, confidence,
+                   supporting_evidence, status, created_at, retired_at
+            FROM strategy_rules
+            WHERE status = %s
+            ORDER BY confidence DESC
+        """, (status,))
+        return cur.fetchall()
+
+
+def get_strategy_memos(days=30):
+    """Fetch recent strategy memos."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_date, memo_type, content, created_at
+            FROM strategy_memos
+            WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
+            ORDER BY session_date DESC, created_at DESC
+        """, (days,))
+        return cur.fetchall()
+
+
+# --- Tweets ---
+
+def get_recent_tweets(days=30, limit=50):
+    """Fetch recent tweets."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_date, tweet_type, tweet_text, platform,
+                   posted, error, created_at
+            FROM tweets
+            WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
+            ORDER BY session_date DESC, created_at DESC
+            LIMIT %s
+        """, (days, limit))
+        return cur.fetchall()
+
+
 def get_theses(status_filter: str = 'active', sort_by: str = 'newest'):
     """Return filtered/sorted thesis list."""
     with get_cursor() as cur:
