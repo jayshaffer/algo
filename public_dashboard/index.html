@@ -46,15 +46,28 @@
                 <span class="card-label"><span class="card-icon">&#128181;</span> Cash</span>
                 <span class="card-value" id="cash-value">—</span>
             </div>
+            <div class="card">
+                <span class="card-label"><span class="card-icon">&#128200;</span> vs S&P</span>
+                <span class="card-value" id="vs-sp">—</span>
+            </div>
         </section>
 
         <!-- Equity Curve -->
         <section class="panel">
-            <h2>Equity Curve (90 days)</h2>
+            <h2>Equity Curve</h2>
             <div class="chart-wrap">
                 <canvas id="equity-chart"></canvas>
             </div>
             <p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>
+        </section>
+
+        <!-- Benchmark Comparison -->
+        <section class="panel">
+            <h2>Performance vs S&amp;P 500</h2>
+            <div class="chart-wrap">
+                <canvas id="benchmark-chart"></canvas>
+            </div>
+            <p class="empty-state" id="benchmark-empty" style="display:none;">No benchmark data yet</p>
         </section>
 
         <!-- Current Holdings -->

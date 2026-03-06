@@ -48,7 +48,12 @@
       "Bash(git status:*)",
       "Bash(git log:*)",
       "WebFetch(domain:developers.cloudflare.com)",
-      "Bash(which task:*)"
+      "Bash(which task:*)",
+      "Bash(git push:*)",
+      "Bash(wrangler pages:*)",
+      "Bash(npx wrangler:*)",
+      "Bash(set:*)",
+      "Bash(cp:*)"
     ]
   }
 }
