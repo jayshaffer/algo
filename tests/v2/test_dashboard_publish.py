@@ -14,6 +14,7 @@ from v2.dashboard_publish import (
     _build_summary,
     assemble_deploy_dir,
     deploy_to_cloudflare,
+    fetch_spy_benchmark,
     gather_dashboard_data,
     run_dashboard_stage,
     write_json_files,
@@ -575,3 +576,53 @@ class TestAssembleDeployDir:
         assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
 
         assert deploy_dir.exists()
+
+
+class TestFetchSpyBenchmark:
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_spy_bars_for_date_range(self, mock_client_cls):
+        """Fetches SPY daily bars and returns [{date, close}, ...]."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        # Simulate Alpaca bar objects
+        bar1 = MagicMock()
+        bar1.timestamp = datetime(2025, 6, 14, 4, 0)
+        bar1.close = 540.50
+        bar2 = MagicMock()
+        bar2.timestamp = datetime(2025, 6, 15, 4, 0)
+        bar2.close = 542.00
+
+        mock_bars = MagicMock()
+        mock_bars.__getitem__ = MagicMock(return_value=[bar1, bar2])
+        mock_client.get_stock_bars.return_value = mock_bars
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert len(result) == 2
+        assert result[0] == {"date": "2025-06-14", "close": 540.50}
+        assert result[1] == {"date": "2025-06-15", "close": 542.00}
+
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_empty_list_on_api_error(self, mock_client_cls):
+        """Returns [] if Alpaca API call fails."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.get_stock_bars.side_effect = Exception("API down")
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert result == []
+
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_empty_list_when_no_bars(self, mock_client_cls):
+        """Returns [] if no bars returned."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_bars = MagicMock()
+        mock_bars.__getitem__ = MagicMock(return_value=[])
+        mock_client.get_stock_bars.return_value = mock_bars
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert result == []

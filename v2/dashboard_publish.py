@@ -14,6 +14,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+
 from .database.connection import get_cursor
 from .executor import get_net_deposits
 
@@ -188,6 +192,37 @@ def _build_summary(latest, first, previous, positions_count, session_date, net_d
         "total_pnl_pct": total_pnl_pct,
         "inception_date": inception_date,
     }
+
+
+def fetch_spy_benchmark(start_date: date, end_date: date) -> list[dict]:
+    """Fetch SPY daily bars from Alpaca for benchmark comparison.
+
+    Returns list of {date, close} dicts, or [] on error.
+    """
+    try:
+        api_key = os.environ.get("APCA_API_KEY_ID")
+        secret_key = os.environ.get("APCA_API_SECRET_KEY")
+        client = StockHistoricalDataClient(api_key, secret_key)
+
+        request = StockBarsRequest(
+            symbol_or_symbols="SPY",
+            timeframe=TimeFrame.Day,
+            start=datetime.combine(start_date, datetime.min.time()),
+            end=datetime.combine(end_date, datetime.max.time()),
+        )
+        bars = client.get_stock_bars(request)
+        spy_bars = list(bars["SPY"])
+
+        if not spy_bars:
+            return []
+
+        return [
+            {"date": bar.timestamp.strftime("%Y-%m-%d"), "close": bar.close}
+            for bar in spy_bars
+        ]
+    except Exception:
+        logger.warning("Failed to fetch SPY benchmark data", exc_info=True)
+        return []
 
 
 def write_json_files(data: dict, repo_path: str) -> list[str]:
