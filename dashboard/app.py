@@ -20,6 +20,10 @@ from queries import (
     get_thesis_stats,
     get_theses,
     close_thesis,
+    get_current_strategy,
+    get_strategy_rules,
+    get_strategy_memos,
+    get_recent_tweets,
 )
 
 app = Flask(__name__)
@@ -128,6 +132,22 @@ def performance():
         equity_data=equity_data,
         metrics=metrics,
     )
+
+
+@app.route("/strategy")
+def strategy():
+    """Strategy state, rules, and memos page."""
+    state = get_current_strategy()
+    rules = get_strategy_rules(status='active')
+    memos = get_strategy_memos(days=30)
+    return render_template("strategy.html", state=state, rules=rules, memos=memos)
+
+
+@app.route("/tweets")
+def tweets():
+    """Tweets page."""
+    tweet_list = get_recent_tweets(days=30, limit=50)
+    return render_template("tweets.html", tweets=tweet_list)
 
 
 @app.route("/api/theses/<int:thesis_id>/close", methods=["POST"])

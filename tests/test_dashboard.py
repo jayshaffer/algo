@@ -19,6 +19,10 @@ from tests.conftest import (
     make_attribution_row,
     make_open_order_row,
     make_playbook_action_row,
+    make_strategy_state_row,
+    make_strategy_rule_row,
+    make_strategy_memo_row,
+    make_tweet_row,
 )
 
 # Inject a mock queries module before importing dashboard.app,
@@ -75,6 +79,10 @@ def _reset_query_mocks():
     mock_queries.get_equity_curve.return_value = []
     mock_queries.get_performance_metrics.return_value = None
     mock_queries.close_thesis.return_value = True
+    mock_queries.get_current_strategy.return_value = None
+    mock_queries.get_strategy_rules.return_value = []
+    mock_queries.get_strategy_memos.return_value = []
+    mock_queries.get_recent_tweets.return_value = []
     yield
 
 
@@ -561,3 +569,92 @@ class TestApiSignals:
         data = resp.get_json()
         assert data["ticker_signals"] == []
         assert data["macro_signals"] == []
+
+
+# ---------------------------------------------------------------------------
+# Strategy page
+# ---------------------------------------------------------------------------
+
+
+class TestStrategyPage:
+    """Tests for GET /strategy."""
+
+    def test_strategy_renders_with_data(self, client):
+        state = make_strategy_state_row()
+        rules = [
+            make_strategy_rule_row(),
+            make_strategy_rule_row(id=2, rule_text="Avoid buying before Fed meetings", direction="short", confidence=Decimal("0.60")),
+        ]
+        memos = [make_strategy_memo_row()]
+
+        mock_queries.get_current_strategy.return_value = state
+        mock_queries.get_strategy_rules.return_value = rules
+        mock_queries.get_strategy_memos.return_value = memos
+
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+        assert b"Momentum-focused" in resp.data
+        assert b"moderate" in resp.data
+        assert b"Buy on earnings beat" in resp.data
+        assert b"Avoid buying before Fed" in resp.data
+        assert b"reflection" in resp.data
+        mock_queries.get_current_strategy.assert_called_once()
+        mock_queries.get_strategy_rules.assert_called_once_with(status='active')
+        mock_queries.get_strategy_memos.assert_called_once_with(days=30)
+
+    def test_strategy_empty_state(self, client):
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+        assert b"No strategy state found" in resp.data
+
+    def test_strategy_no_rules(self, client):
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+        assert b"No active rules" in resp.data
+
+    def test_strategy_no_memos(self, client):
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+        assert b"No memos in the last 30 days" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Tweets page
+# ---------------------------------------------------------------------------
+
+
+class TestTweetsPage:
+    """Tests for GET /tweets."""
+
+    def test_tweets_renders_with_data(self, client):
+        tweets = [
+            make_tweet_row(),
+            make_tweet_row(id=2, tweet_type="trade_alert", posted=False, error=None),
+        ]
+        mock_queries.get_recent_tweets.return_value = tweets
+
+        resp = client.get("/tweets")
+        assert resp.status_code == 200
+        assert b"Markets closed green" in resp.data
+        assert b"Posted" in resp.data
+        assert b"Pending" in resp.data
+        mock_queries.get_recent_tweets.assert_called_once_with(days=30, limit=50)
+
+    def test_tweets_empty_state(self, client):
+        resp = client.get("/tweets")
+        assert resp.status_code == 200
+        assert b"No tweets yet" in resp.data
+
+    def test_tweets_error_display(self, client):
+        tweets = [make_tweet_row(posted=False, error="Rate limit exceeded")]
+        mock_queries.get_recent_tweets.return_value = tweets
+
+        resp = client.get("/tweets")
+        assert resp.status_code == 200
+        assert b"Failed" in resp.data
+        assert b"Rate limit exceeded" in resp.data

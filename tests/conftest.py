@@ -413,3 +413,66 @@ def make_playbook_action_row(**kwargs):
     }
     defaults.update(kwargs)
     return defaults
+
+
+def make_strategy_state_row(**kwargs):
+    """Create a strategy_state dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "identity_text": "Momentum-focused trader with macro awareness",
+        "risk_posture": "moderate",
+        "sector_biases": {"tech": "bullish", "energy": "bearish"},
+        "preferred_signals": ["earnings", "insider_buying"],
+        "avoided_signals": ["penny_stocks"],
+        "version": 1,
+        "is_current": True,
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_strategy_rule_row(**kwargs):
+    """Create a strategy_rules dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "rule_text": "Buy on earnings beat with high confidence",
+        "category": "earnings",
+        "direction": "long",
+        "confidence": Decimal("0.80"),
+        "supporting_evidence": "Backtested over 30 sessions",
+        "status": "active",
+        "created_at": datetime.now(),
+        "retired_at": None,
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_strategy_memo_row(**kwargs):
+    """Create a strategy_memos dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "session_date": date.today(),
+        "memo_type": "reflection",
+        "content": "Market was volatile today, held positions steady",
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_tweet_row(**kwargs):
+    """Create a tweets dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "session_date": date.today(),
+        "tweet_type": "market_recap",
+        "tweet_text": "Markets closed green today. Tech led the rally.",
+        "platform": "twitter",
+        "posted": True,
+        "error": None,
+        "created_at": datetime.now(),
+    }
+    defaults.update(kwargs)
+    return defaults

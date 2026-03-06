@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import (
     StockBarsRequest,
@@ -82,6 +83,7 @@ def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) ->
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed=DataFeed.IEX,
         )
         bars = client.get_stock_bars(request)
         symbol_bars = list(bars[symbol])
@@ -157,6 +159,7 @@ def get_top_movers(
                 timeframe=TimeFrame.Day,
                 start=start,
                 end=end,
+                feed=DataFeed.IEX,
             )
             bars = client.get_stock_bars(request)
             symbol_bars = list(bars[ticker])
@@ -221,6 +224,7 @@ def get_unusual_volume(
                 timeframe=TimeFrame.Day,
                 start=start,
                 end=end,
+                feed=DataFeed.IEX,
             )
             bars = client.get_stock_bars(request)
             symbol_bars = list(bars[ticker])
