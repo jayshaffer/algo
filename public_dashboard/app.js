@@ -61,7 +61,7 @@ async function fetchAllData() {
 
 // === Renderers ===
 
-function renderSummary(s) {
+function renderSummary(s, snapshots, benchmark) {
   if (!s) return;
 
   document.getElementById("last-updated").textContent =
@@ -85,6 +85,26 @@ function renderSummary(s) {
     s.positions_count != null ? s.positions_count : "—";
 
   document.getElementById("cash-value").textContent = formatCurrency(s.cash);
+
+  // vs S&P: portfolio return minus SPY return
+  var vsSp = document.getElementById("vs-sp");
+  if (snapshots && snapshots.length > 1 && benchmark && benchmark.length > 0) {
+    var portfolioBase = snapshots[0].portfolio_value;
+    var portfolioNow = snapshots[snapshots.length - 1].portfolio_value;
+    var portfolioReturn = ((portfolioNow - portfolioBase) / portfolioBase) * 100;
+
+    var spyMap = {};
+    benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
+    var spyStart = spyMap[snapshots[0].date];
+    var spyEnd = spyMap[snapshots[snapshots.length - 1].date];
+
+    if (spyStart && spyEnd) {
+      var spyReturn = ((spyEnd - spyStart) / spyStart) * 100;
+      var alpha = portfolioReturn - spyReturn;
+      vsSp.textContent = formatPct(alpha);
+      vsSp.className = "card-value " + pnlClass(alpha);
+    }
+  }
 }
 
 function renderEquityCurve(snapshots, benchmark) {
@@ -257,7 +277,7 @@ function renderTheses(theses) {
 
 document.addEventListener("DOMContentLoaded", function () {
   fetchAllData().then(function (data) {
-    renderSummary(data.summary);
+    renderSummary(data.summary, data.snapshots, data.benchmark);
     renderEquityCurve(data.snapshots, data.benchmark);
     renderPositions(data.positions);
     renderDecisions(data.decisions);
