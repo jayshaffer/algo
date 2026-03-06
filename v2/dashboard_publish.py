@@ -14,6 +14,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
+from alpaca.data.enums import DataFeed
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+
 from .database.connection import get_cursor
 from .executor import get_net_deposits
 
@@ -42,7 +47,7 @@ def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = 
         net_deposits: Total net cash deposited (from Alpaca activities).
             Used for accurate total return calculation excluding cash infusions.
 
-    Returns dict with keys: summary, snapshots, positions, decisions, theses.
+    Returns dict with keys: summary, snapshots, positions, decisions, theses, benchmark.
     Handles empty DB gracefully.
     """
     with get_cursor() as cur:
@@ -122,12 +127,20 @@ def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = 
     # Build summary
     summary = _build_summary(latest, first, previous, len(positions), session_date, net_deposits)
 
+    # Fetch SPY benchmark for the same date range as snapshots
+    benchmark = []
+    if snapshots:
+        start = snapshots[0]["date"]
+        end = snapshots[-1]["date"]
+        benchmark = fetch_spy_benchmark(start, end)
+
     return {
         "summary": summary,
         "snapshots": [dict(r) for r in snapshots],
         "positions": [dict(r) for r in positions],
         "decisions": [dict(r) for r in decisions],
         "theses": [dict(r) for r in theses],
+        "benchmark": benchmark,
     }
 
 
@@ -190,6 +203,38 @@ def _build_summary(latest, first, previous, positions_count, session_date, net_d
     }
 
 
+def fetch_spy_benchmark(start_date: date, end_date: date) -> list[dict]:
+    """Fetch SPY daily bars from Alpaca for benchmark comparison.
+
+    Returns list of {date, close} dicts, or [] on error.
+    """
+    try:
+        api_key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY")
+        secret_key = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_SECRET_KEY")
+        client = StockHistoricalDataClient(api_key, secret_key)
+
+        request = StockBarsRequest(
+            symbol_or_symbols="SPY",
+            timeframe=TimeFrame.Day,
+            start=datetime.combine(start_date, datetime.min.time()),
+            end=datetime.combine(end_date, datetime.max.time()),
+            feed=DataFeed.IEX,
+        )
+        bars = client.get_stock_bars(request)
+        spy_bars = list(bars["SPY"])
+
+        if not spy_bars:
+            return []
+
+        return [
+            {"date": bar.timestamp.strftime("%Y-%m-%d"), "close": bar.close}
+            for bar in spy_bars
+        ]
+    except Exception:
+        logger.warning("Failed to fetch SPY benchmark data", exc_info=True)
+        return []
+
+
 def write_json_files(data: dict, repo_path: str) -> list[str]:
     """Write dashboard data as separate JSON files for GitHub Pages.
 
@@ -202,7 +247,9 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     os.makedirs(data_dir, exist_ok=True)
 
     files_written = []
-    for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+    for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
+        if key not in data:
+            continue
         file_path = os.path.join(data_dir, f"{key}.json")
         with open(file_path, "w") as f:
             json.dump(data[key], f, cls=_DecimalEncoder, indent=2)

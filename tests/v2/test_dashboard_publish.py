@@ -14,6 +14,7 @@ from v2.dashboard_publish import (
     _build_summary,
     assemble_deploy_dir,
     deploy_to_cloudflare,
+    fetch_spy_benchmark,
     gather_dashboard_data,
     run_dashboard_stage,
     write_json_files,
@@ -41,8 +42,9 @@ class TestDecimalEncoder:
             json.dumps({"x": object()}, cls=_DecimalEncoder)
 
 
+@patch("v2.dashboard_publish.fetch_spy_benchmark", return_value=[])
 class TestGatherDashboardData:
-    def test_returns_all_sections(self, mock_db):
+    def test_returns_all_sections(self, mock_benchmark, mock_db):
         """Happy path: all sections populated with data."""
         session_date = date(2025, 6, 15)
 
@@ -91,7 +93,7 @@ class TestGatherDashboardData:
         result = gather_dashboard_data(session_date)
 
         # Verify all top-level keys present
-        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses"}
+        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark"}
 
         # Verify snapshots
         assert len(result["snapshots"]) == 2
@@ -126,7 +128,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("10000")
         assert float(summary["total_pnl_pct"]) > 0
 
-    def test_total_return_uses_net_deposits(self, mock_db):
+    def test_total_return_uses_net_deposits(self, mock_benchmark, mock_db):
         """When net_deposits provided, total return = portfolio_value - net_deposits."""
         session_date = date(2025, 6, 15)
 
@@ -146,7 +148,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("5000")
         assert summary["total_pnl_pct"] == Decimal("5")  # 5000/100000 * 100
 
-    def test_total_return_fallback_without_net_deposits(self, mock_db):
+    def test_total_return_fallback_without_net_deposits(self, mock_benchmark, mock_db):
         """Without net_deposits, falls back to first snapshot comparison."""
         session_date = date(2025, 6, 15)
 
@@ -164,7 +166,7 @@ class TestGatherDashboardData:
         # Fallback: 105000 - 80000 = 25000
         assert summary["total_pnl"] == Decimal("25000")
 
-    def test_empty_database(self, mock_db):
+    def test_empty_database(self, mock_benchmark, mock_db):
         """Handles empty DB gracefully with empty lists and minimal summary."""
         session_date = date(2025, 6, 15)
 
@@ -191,7 +193,10 @@ class TestGatherDashboardData:
         assert summary["inception_date"] is None
         assert summary["last_updated"] == "2025-06-15"
 
-    def test_no_previous_snapshot(self, mock_db):
+        assert result["benchmark"] == []
+        mock_benchmark.assert_not_called()
+
+    def test_no_previous_snapshot(self, mock_benchmark, mock_db):
         """First day of trading: latest exists but no previous snapshot."""
         session_date = date(2025, 6, 15)
 
@@ -218,7 +223,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("0")
         assert summary["invested"] == Decimal("0")
 
-    def test_json_serializable_with_encoder(self, mock_db):
+    def test_json_serializable_with_encoder(self, mock_benchmark, mock_db):
         """Full result is JSON-serializable via _DecimalEncoder."""
         session_date = date(2025, 6, 15)
 
@@ -245,7 +250,7 @@ class TestGatherDashboardData:
         assert parsed["summary"]["portfolio_value"] == 100000.0
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
-    def test_query_count(self, mock_db):
+    def test_query_count(self, mock_benchmark, mock_db):
         """Verifies exactly 7 queries are executed (4 fetchall + 3 fetchone)."""
         session_date = date(2025, 6, 15)
 
@@ -255,6 +260,31 @@ class TestGatherDashboardData:
         gather_dashboard_data(session_date)
 
         assert mock_db.execute.call_count == 7
+
+    def test_includes_benchmark_key(self, mock_benchmark, mock_db):
+        """gather_dashboard_data includes 'benchmark' key from fetch_spy_benchmark."""
+        mock_benchmark.return_value = [{"date": "2025-06-15", "close": 540.0}]
+        session_date = date(2025, 6, 15)
+
+        mock_db.fetchall.side_effect = [
+            [{"date": date(2025, 6, 14), "portfolio_value": Decimal("99000"),
+              "cash": Decimal("49000"), "buying_power": Decimal("49000")},
+             {"date": date(2025, 6, 15), "portfolio_value": Decimal("100000"),
+              "cash": Decimal("50000"), "buying_power": Decimal("50000")}],
+            [], [], [],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
+             "long_market_value": Decimal("50000")},
+            {"portfolio_value": Decimal("90000"), "date": date(2025, 1, 1)},
+            {"portfolio_value": Decimal("99000")},
+        ]
+
+        result = gather_dashboard_data(session_date)
+
+        assert "benchmark" in result
+        assert result["benchmark"] == [{"date": "2025-06-15", "close": 540.0}]
+        mock_benchmark.assert_called_once_with(date(2025, 6, 14), date(2025, 6, 15))
 
 
 class TestBuildSummary:
@@ -299,12 +329,13 @@ class TestWriteJsonFiles:
         }
 
     def test_writes_all_files(self, tmp_path):
-        """All 5 JSON files are written with correct content."""
+        """All 6 JSON files are written with correct content."""
         data = self._sample_data()
+        data["benchmark"] = [{"date": "2025-06-15", "close": 540.0}]
         result = write_json_files(data, str(tmp_path))
 
-        assert len(result) == 5
-        for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+        assert len(result) == 6
+        for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
             file_path = tmp_path / "data" / f"{key}.json"
             assert file_path.exists()
             with open(file_path) as f:
@@ -338,6 +369,18 @@ class TestWriteJsonFiles:
             content = json.load(f)
         assert content["portfolio_value"] == 100000.50
         assert isinstance(content["portfolio_value"], float)
+
+    def test_writes_benchmark_file(self, tmp_path):
+        """benchmark.json is written when benchmark key present."""
+        data = self._sample_data()
+        data["benchmark"] = [{"date": "2025-06-15", "close": 540.0}]
+        result = write_json_files(data, str(tmp_path))
+
+        benchmark_path = tmp_path / "data" / "benchmark.json"
+        assert benchmark_path.exists()
+        with open(benchmark_path) as f:
+            content = json.load(f)
+        assert content == [{"date": "2025-06-15", "close": 540.0}]
 
 
 class TestRunDashboardStage:
@@ -575,3 +618,53 @@ class TestAssembleDeployDir:
         assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
 
         assert deploy_dir.exists()
+
+
+class TestFetchSpyBenchmark:
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_spy_bars_for_date_range(self, mock_client_cls):
+        """Fetches SPY daily bars and returns [{date, close}, ...]."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        # Simulate Alpaca bar objects
+        bar1 = MagicMock()
+        bar1.timestamp = datetime(2025, 6, 14, 4, 0)
+        bar1.close = 540.50
+        bar2 = MagicMock()
+        bar2.timestamp = datetime(2025, 6, 15, 4, 0)
+        bar2.close = 542.00
+
+        mock_bars = MagicMock()
+        mock_bars.__getitem__ = MagicMock(return_value=[bar1, bar2])
+        mock_client.get_stock_bars.return_value = mock_bars
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert len(result) == 2
+        assert result[0] == {"date": "2025-06-14", "close": 540.50}
+        assert result[1] == {"date": "2025-06-15", "close": 542.00}
+
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_empty_list_on_api_error(self, mock_client_cls):
+        """Returns [] if Alpaca API call fails."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.get_stock_bars.side_effect = Exception("API down")
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert result == []
+
+    @patch("v2.dashboard_publish.StockHistoricalDataClient")
+    def test_returns_empty_list_when_no_bars(self, mock_client_cls):
+        """Returns [] if no bars returned."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_bars = MagicMock()
+        mock_bars.__getitem__ = MagicMock(return_value=[])
+        mock_client.get_stock_bars.return_value = mock_bars
+
+        result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
+
+        assert result == []
