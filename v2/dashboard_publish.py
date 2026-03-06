@@ -14,6 +14,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -217,6 +218,7 @@ def fetch_spy_benchmark(start_date: date, end_date: date) -> list[dict]:
             timeframe=TimeFrame.Day,
             start=datetime.combine(start_date, datetime.min.time()),
             end=datetime.combine(end_date, datetime.max.time()),
+            feed=DataFeed.IEX,
         )
         bars = client.get_stock_bars(request)
         spy_bars = list(bars["SPY"])
