@@ -42,8 +42,9 @@ class TestDecimalEncoder:
             json.dumps({"x": object()}, cls=_DecimalEncoder)
 
 
+@patch("v2.dashboard_publish.fetch_spy_benchmark", return_value=[])
 class TestGatherDashboardData:
-    def test_returns_all_sections(self, mock_db):
+    def test_returns_all_sections(self, mock_benchmark, mock_db):
         """Happy path: all sections populated with data."""
         session_date = date(2025, 6, 15)
 
@@ -92,7 +93,7 @@ class TestGatherDashboardData:
         result = gather_dashboard_data(session_date)
 
         # Verify all top-level keys present
-        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses"}
+        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark"}
 
         # Verify snapshots
         assert len(result["snapshots"]) == 2
@@ -127,7 +128,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("10000")
         assert float(summary["total_pnl_pct"]) > 0
 
-    def test_total_return_uses_net_deposits(self, mock_db):
+    def test_total_return_uses_net_deposits(self, mock_benchmark, mock_db):
         """When net_deposits provided, total return = portfolio_value - net_deposits."""
         session_date = date(2025, 6, 15)
 
@@ -147,7 +148,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("5000")
         assert summary["total_pnl_pct"] == Decimal("5")  # 5000/100000 * 100
 
-    def test_total_return_fallback_without_net_deposits(self, mock_db):
+    def test_total_return_fallback_without_net_deposits(self, mock_benchmark, mock_db):
         """Without net_deposits, falls back to first snapshot comparison."""
         session_date = date(2025, 6, 15)
 
@@ -165,7 +166,7 @@ class TestGatherDashboardData:
         # Fallback: 105000 - 80000 = 25000
         assert summary["total_pnl"] == Decimal("25000")
 
-    def test_empty_database(self, mock_db):
+    def test_empty_database(self, mock_benchmark, mock_db):
         """Handles empty DB gracefully with empty lists and minimal summary."""
         session_date = date(2025, 6, 15)
 
@@ -192,7 +193,7 @@ class TestGatherDashboardData:
         assert summary["inception_date"] is None
         assert summary["last_updated"] == "2025-06-15"
 
-    def test_no_previous_snapshot(self, mock_db):
+    def test_no_previous_snapshot(self, mock_benchmark, mock_db):
         """First day of trading: latest exists but no previous snapshot."""
         session_date = date(2025, 6, 15)
 
@@ -219,7 +220,7 @@ class TestGatherDashboardData:
         assert summary["total_pnl"] == Decimal("0")
         assert summary["invested"] == Decimal("0")
 
-    def test_json_serializable_with_encoder(self, mock_db):
+    def test_json_serializable_with_encoder(self, mock_benchmark, mock_db):
         """Full result is JSON-serializable via _DecimalEncoder."""
         session_date = date(2025, 6, 15)
 
@@ -246,7 +247,7 @@ class TestGatherDashboardData:
         assert parsed["summary"]["portfolio_value"] == 100000.0
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
-    def test_query_count(self, mock_db):
+    def test_query_count(self, mock_benchmark, mock_db):
         """Verifies exactly 7 queries are executed (4 fetchall + 3 fetchone)."""
         session_date = date(2025, 6, 15)
 
@@ -256,6 +257,31 @@ class TestGatherDashboardData:
         gather_dashboard_data(session_date)
 
         assert mock_db.execute.call_count == 7
+
+    def test_includes_benchmark_key(self, mock_benchmark, mock_db):
+        """gather_dashboard_data includes 'benchmark' key from fetch_spy_benchmark."""
+        mock_benchmark.return_value = [{"date": "2025-06-15", "close": 540.0}]
+        session_date = date(2025, 6, 15)
+
+        mock_db.fetchall.side_effect = [
+            [{"date": date(2025, 6, 14), "portfolio_value": Decimal("99000"),
+              "cash": Decimal("49000"), "buying_power": Decimal("49000")},
+             {"date": date(2025, 6, 15), "portfolio_value": Decimal("100000"),
+              "cash": Decimal("50000"), "buying_power": Decimal("50000")}],
+            [], [], [],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
+             "long_market_value": Decimal("50000")},
+            {"portfolio_value": Decimal("90000"), "date": date(2025, 1, 1)},
+            {"portfolio_value": Decimal("99000")},
+        ]
+
+        result = gather_dashboard_data(session_date)
+
+        assert "benchmark" in result
+        assert result["benchmark"] == [{"date": "2025-06-15", "close": 540.0}]
+        mock_benchmark.assert_called_once()
 
 
 class TestBuildSummary:
@@ -300,12 +326,13 @@ class TestWriteJsonFiles:
         }
 
     def test_writes_all_files(self, tmp_path):
-        """All 5 JSON files are written with correct content."""
+        """All 6 JSON files are written with correct content."""
         data = self._sample_data()
+        data["benchmark"] = [{"date": "2025-06-15", "close": 540.0}]
         result = write_json_files(data, str(tmp_path))
 
-        assert len(result) == 5
-        for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+        assert len(result) == 6
+        for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
             file_path = tmp_path / "data" / f"{key}.json"
             assert file_path.exists()
             with open(file_path) as f:
@@ -339,6 +366,18 @@ class TestWriteJsonFiles:
             content = json.load(f)
         assert content["portfolio_value"] == 100000.50
         assert isinstance(content["portfolio_value"], float)
+
+    def test_writes_benchmark_file(self, tmp_path):
+        """benchmark.json is written when benchmark key present."""
+        data = self._sample_data()
+        data["benchmark"] = [{"date": "2025-06-15", "close": 540.0}]
+        result = write_json_files(data, str(tmp_path))
+
+        benchmark_path = tmp_path / "data" / "benchmark.json"
+        assert benchmark_path.exists()
+        with open(benchmark_path) as f:
+            content = json.load(f)
+        assert content == [{"date": "2025-06-15", "close": 540.0}]
 
 
 class TestRunDashboardStage:

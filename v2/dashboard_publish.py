@@ -126,12 +126,20 @@ def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = 
     # Build summary
     summary = _build_summary(latest, first, previous, len(positions), session_date, net_deposits)
 
+    # Fetch SPY benchmark for the same date range as snapshots
+    benchmark = []
+    if snapshots:
+        start = snapshots[0]["date"]
+        end = snapshots[-1]["date"]
+        benchmark = fetch_spy_benchmark(start, end)
+
     return {
         "summary": summary,
         "snapshots": [dict(r) for r in snapshots],
         "positions": [dict(r) for r in positions],
         "decisions": [dict(r) for r in decisions],
         "theses": [dict(r) for r in theses],
+        "benchmark": benchmark,
     }
 
 
@@ -237,7 +245,9 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     os.makedirs(data_dir, exist_ok=True)
 
     files_written = []
-    for key in ("summary", "snapshots", "positions", "decisions", "theses"):
+    for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
+        if key not in data:
+            continue
         file_path = os.path.join(data_dir, f"{key}.json")
         with open(file_path, "w") as f:
             json.dump(data[key], f, cls=_DecimalEncoder, indent=2)
