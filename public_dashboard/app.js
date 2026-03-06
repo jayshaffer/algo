@@ -47,14 +47,16 @@ async function fetchJSON(file) {
 }
 
 async function fetchAllData() {
-  var [summary, snapshots, positions, decisions, theses] = await Promise.all([
+  var [summary, snapshots, positions, decisions, theses, benchmark] = await Promise.all([
     fetchJSON("summary.json"),
     fetchJSON("snapshots.json"),
     fetchJSON("positions.json"),
     fetchJSON("decisions.json"),
     fetchJSON("theses.json"),
+    fetchJSON("benchmark.json"),
   ]);
-  return { summary: summary, snapshots: snapshots, positions: positions, decisions: decisions, theses: theses };
+  return { summary: summary, snapshots: snapshots, positions: positions,
+           decisions: decisions, theses: theses, benchmark: benchmark };
 }
 
 // === Renderers ===
@@ -85,7 +87,7 @@ function renderSummary(s) {
   document.getElementById("cash-value").textContent = formatCurrency(s.cash);
 }
 
-function renderEquityCurve(snapshots) {
+function renderEquityCurve(snapshots, benchmark) {
   var canvas = document.getElementById("equity-chart");
   var emptyMsg = document.getElementById("chart-empty");
 
@@ -96,32 +98,70 @@ function renderEquityCurve(snapshots) {
   }
 
   var labels = snapshots.map(function (s) { return s.date; });
-  var values = snapshots.map(function (s) { return s.portfolio_value; });
+
+  // Normalize portfolio to % return
+  var baseValue = snapshots[0].portfolio_value;
+  var portfolioReturns = snapshots.map(function (s) {
+    return ((s.portfolio_value - baseValue) / baseValue) * 100;
+  });
+
+  var datasets = [{
+    label: "Portfolio",
+    data: portfolioReturns,
+    borderColor: "#00d4aa",
+    backgroundColor: "rgba(0, 212, 170, 0.08)",
+    fill: true,
+    tension: 0.3,
+    pointRadius: 0,
+    pointHitRadius: 8,
+    borderWidth: 2,
+  }];
+
+  // Add SPY benchmark if available
+  if (benchmark && benchmark.length > 0) {
+    // Build a date->close map for SPY
+    var spyMap = {};
+    benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
+
+    // Find SPY base value matching the first snapshot date
+    var spyBase = spyMap[labels[0]];
+
+    if (spyBase) {
+      var spyReturns = labels.map(function (date) {
+        var close = spyMap[date];
+        if (close == null) return null;
+        return ((close - spyBase) / spyBase) * 100;
+      });
+
+      datasets.push({
+        label: "S&P 500",
+        data: spyReturns,
+        borderColor: "#5a6a7a",
+        borderDash: [6, 3],
+        backgroundColor: "transparent",
+        fill: false,
+        tension: 0.3,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        borderWidth: 2,
+      });
+    }
+  }
 
   new Chart(canvas, {
     type: "line",
     data: {
       labels: labels,
-      datasets: [{
-        label: "Portfolio Value",
-        data: values,
-        borderColor: "#00d4aa",
-        backgroundColor: "rgba(0, 212, 170, 0.08)",
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        pointHitRadius: 8,
-        borderWidth: 2,
-      }],
+      datasets: datasets,
     },
     options: {
       responsive: true,
       plugins: {
-        legend: { display: false },
+        legend: { display: datasets.length > 1, labels: { color: "#8892a4" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
-              return formatCurrency(ctx.parsed.y);
+              return ctx.dataset.label + ": " + formatPct(ctx.parsed.y);
             },
           },
         },
@@ -132,10 +172,9 @@ function renderEquityCurve(snapshots) {
           grid: { color: "rgba(30, 58, 95, 0.4)" },
         },
         y: {
-          beginAtZero: false,
           ticks: {
             color: "#8892a4",
-            callback: function (v) { return "$" + v.toLocaleString(); },
+            callback: function (v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; },
           },
           grid: { color: "rgba(30, 58, 95, 0.4)" },
         },
@@ -219,7 +258,7 @@ function renderTheses(theses) {
 document.addEventListener("DOMContentLoaded", function () {
   fetchAllData().then(function (data) {
     renderSummary(data.summary);
-    renderEquityCurve(data.snapshots);
+    renderEquityCurve(data.snapshots, data.benchmark);
     renderPositions(data.positions);
     renderDecisions(data.decisions);
     renderTheses(data.theses);
