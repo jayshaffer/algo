@@ -254,7 +254,10 @@ def get_latest_price(ticker: str) -> Optional[Decimal]:
     try:
         quotes = client.get_stock_latest_quote(request)
         quote = quotes[ticker]
-        return Decimal(str(quote.ask_price))
+        price = Decimal(str(quote.ask_price))
+        if price == 0:
+            return None
+        return price
     except Exception:
         return None
 

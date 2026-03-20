@@ -130,3 +130,28 @@ def build_attribution_constraints(min_samples: int = 5) -> str:
     lines.append("unless you have a specific reason to override (explain in thesis text).")
 
     return "\n".join(lines)
+
+
+def main():
+    """CLI entry point for attribution."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Compute signal attribution scores")
+    parser.add_argument("--constraints", action="store_true", help="Also print attribution constraints")
+    args = parser.parse_args()
+
+    print("Computing signal attribution...")
+    results = compute_signal_attribution()
+    print(f"  Updated {len(results)} categories")
+
+    print()
+    print(get_attribution_summary())
+
+    if args.constraints:
+        print()
+        constraints = build_attribution_constraints()
+        print(constraints if constraints else "No constraints generated (insufficient data)")
+
+
+if __name__ == "__main__":
+    main()

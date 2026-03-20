@@ -178,6 +178,7 @@ def run_trading_session(
     max_trades_per_session = 10
 
     order_ids = {}
+    order_results = {}
     for i, decision in enumerate(response.decisions):
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
@@ -219,6 +220,7 @@ def run_trading_session(
         if result.success:
             trades_executed += 1
             order_ids[i] = result.order_id
+            order_results[i] = result
             trade_value = price * Decimal(str(decision.quantity))
 
             if decision.action == "buy":
@@ -267,7 +269,9 @@ def run_trading_session(
 
     for i, decision in enumerate(response.decisions):
         try:
-            price = get_latest_price(decision.ticker)
+            # Prefer filled price from order, fall back to latest quote
+            result = order_results.get(i)
+            price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker)
             decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
