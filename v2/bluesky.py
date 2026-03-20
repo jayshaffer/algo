@@ -77,12 +77,12 @@ Respond with JSON in this exact format:
 {{"text": "post text here"}}
 
 Rules:
+- 2-3 short sentences max. Keep it well under {limit} characters.
 - Sound like a real person, not a brand account or a character
-- Ground it in the actual trading data — what you bought/sold, how P&L looked
-- Use 1-3 relevant cashtags ($AAPL, $NVDA, etc.) when mentioning tickers
-- Summarize the full session: trades made, P&L result, and how things stand
-- If it was a quiet day with no trades, just say so
-- Maximum {limit} characters"""
+- Pick ONE thing worth mentioning — the main trade or the P&L, not both
+- Use 1-2 cashtags ($AAPL, $NVDA) only for tickers you're actually talking about
+- If it was a quiet day, just say so
+- No lists, no rundowns, no "also" — one clean take"""
 
 BLUESKY_GRAPHEME_LIMIT = 300
 # LLMs can't count graphemes reliably; tell them a lower number as buffer

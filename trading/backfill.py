@@ -45,7 +45,7 @@ def get_price_on_date(client: StockHistoricalDataClient, ticker: str, target_dat
         )
         bars = client.get_stock_bars(request)
 
-        if ticker in bars and bars[ticker]:
+        if ticker in bars.data and bars[ticker]:
             # Find the first bar on or after target date
             for bar in bars[ticker]:
                 bar_date = bar.timestamp.date()

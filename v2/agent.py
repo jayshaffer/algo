@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
 
 
+def _safe_int(value) -> Optional[int]:
+    """Coerce a value to int, returning None if not possible."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class PlaybookAction:
     """A structured action from the playbook."""
@@ -198,13 +208,19 @@ def get_trading_decisions(
             confidence=d.get("confidence", "low"),
             is_off_playbook=d.get("is_off_playbook", False),
             signal_refs=d.get("signal_refs", []),
-            thesis_id=d.get("thesis_id"),
+            thesis_id=_safe_int(d.get("thesis_id")),
         ))
 
     thesis_invalidations = []
     for inv in data.get("thesis_invalidations", []):
+        raw_id = inv.get("thesis_id")
+        try:
+            tid = int(raw_id)
+        except (TypeError, ValueError):
+            logger.warning("Skipping thesis invalidation with non-integer thesis_id: %s", raw_id)
+            continue
         thesis_invalidations.append(ThesisInvalidation(
-            thesis_id=inv["thesis_id"],
+            thesis_id=tid,
             reason=inv.get("reason", ""),
         ))
 

@@ -85,7 +85,7 @@ class TestGetPriceOnDate:
         target = date(2025, 1, 15)
         bar = self._make_bar(target, 150.25)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: key == "AAPL"
+        bars_dict.data = {"AAPL": [bar]}
         bars_dict.__getitem__ = lambda self, key: [bar]
         client.get_stock_bars.return_value = bars_dict
 
@@ -96,7 +96,7 @@ class TestGetPriceOnDate:
         client = MagicMock()
         target = date(2025, 1, 15)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: False
+        bars_dict.data = {}
         client.get_stock_bars.return_value = bars_dict
 
         result = get_price_on_date(client, "AAPL", target)
@@ -106,7 +106,7 @@ class TestGetPriceOnDate:
         client = MagicMock()
         target = date(2025, 1, 15)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: key == "AAPL"
+        bars_dict.data = {"AAPL": []}
         bars_dict.__getitem__ = lambda self, key: []
         client.get_stock_bars.return_value = bars_dict
 
@@ -128,7 +128,7 @@ class TestGetPriceOnDate:
         # Monday bar
         bar_monday = self._make_bar(date(2025, 1, 13), 155.00)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: key == "AAPL"
+        bars_dict.data = {"AAPL": [bar_monday]}
         bars_dict.__getitem__ = lambda self, key: [bar_monday]
         client.get_stock_bars.return_value = bars_dict
 
@@ -142,7 +142,7 @@ class TestGetPriceOnDate:
         bar_before = self._make_bar(date(2025, 1, 14), 100.00)
         bar_on = self._make_bar(date(2025, 1, 15), 150.00)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: key == "AAPL"
+        bars_dict.data = {"AAPL": [bar_before, bar_on]}
         bars_dict.__getitem__ = lambda self, key: [bar_before, bar_on]
         client.get_stock_bars.return_value = bars_dict
 
@@ -154,7 +154,7 @@ class TestGetPriceOnDate:
         client = MagicMock()
         target = date(2025, 1, 15)
         bars_dict = MagicMock()
-        bars_dict.__contains__ = lambda self, key: False
+        bars_dict.data = {}
         client.get_stock_bars.return_value = bars_dict
 
         get_price_on_date(client, "AAPL", target)

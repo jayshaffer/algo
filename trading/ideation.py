@@ -210,12 +210,14 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
     theses_closed = 0
 
     for review_data in response.get("reviews", []):
-        thesis_id = review_data.get("thesis_id")
+        raw_id = review_data.get("thesis_id")
         action = review_data.get("action")
 
         # Skip malformed entries
-        if thesis_id is None:
-            print("  Warning: Skipping review with missing thesis_id")
+        try:
+            thesis_id = int(raw_id)
+        except (TypeError, ValueError):
+            print(f"  Warning: Skipping review with non-integer thesis_id: {raw_id}")
             continue
         if action is None:
             print(f"  Warning: Skipping review for thesis {thesis_id} with missing action")
