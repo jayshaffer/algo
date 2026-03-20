@@ -11,6 +11,16 @@ from .claude_client import get_claude_client, _call_with_retry
 logger = logging.getLogger(__name__)
 
 
+def _safe_int(value) -> Optional[int]:
+    """Coerce a value to int, returning None if not possible."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class TradingDecision:
     """A trading decision from the LLM."""
@@ -149,14 +159,20 @@ def get_trading_decisions(
             quantity=d.get("quantity"),
             reasoning=d.get("reasoning", ""),
             confidence=d.get("confidence", "low"),
-            thesis_id=d.get("thesis_id"),
+            thesis_id=_safe_int(d.get("thesis_id")),
             signal_refs=d.get("signal_refs", []),
         ))
 
     thesis_invalidations = []
     for inv in data.get("thesis_invalidations", []):
+        raw_id = inv.get("thesis_id")
+        try:
+            tid = int(raw_id)
+        except (TypeError, ValueError):
+            logger.warning("Skipping thesis invalidation with non-integer thesis_id: %s", raw_id)
+            continue
         thesis_invalidations.append(ThesisInvalidation(
-            thesis_id=inv["thesis_id"],
+            thesis_id=tid,
             reason=inv.get("reason", ""),
         ))
 
