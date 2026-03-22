@@ -13,6 +13,24 @@ from alpaca.data.timeframe import TimeFrame
 from .database.connection import get_cursor
 
 
+def trading_day_offset(start: date, trading_days: int) -> date:
+    """Advance start date by N trading days (skipping weekends).
+
+    Does not account for market holidays — a minor inaccuracy
+    that's acceptable for 7/30 day outcome windows.
+    """
+    current = start
+    days_counted = 0
+    while days_counted < trading_days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:  # Mon-Fri
+            days_counted += 1
+    # If we land on a weekend (only if trading_days=0), advance to Monday
+    while current.weekday() >= 5:
+        current += timedelta(days=1)
+    return current
+
+
 def get_data_client() -> StockHistoricalDataClient:
     """Create Alpaca data client from environment variables."""
     api_key = os.environ.get("ALPACA_API_KEY")
@@ -125,13 +143,22 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
         action = decision["action"]
         entry_price = Decimal(str(decision["price"]))
         decision_date = decision["date"]
-        exit_date = decision_date + timedelta(days=days)
+        exit_date = trading_day_offset(decision_date, days)
 
         exit_price = get_price_on_date(client, ticker, exit_date)
 
         if exit_price is None:
-            print(f"  [{decision_id}] {ticker}: No price data for {exit_date}")
-            stats["skipped_no_price"] += 1
+            outcome = Decimal("-100")
+            if dry_run:
+                print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — assuming -100% [DRY RUN]")
+            else:
+                try:
+                    update_outcome(decision_id, days, outcome)
+                    print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — recorded -100%")
+                    stats["outcomes_filled"] += 1
+                except Exception as e:
+                    print(f"  [{decision_id}] Error updating: {e}")
+                    stats["errors"] += 1
             continue
 
         outcome = calculate_outcome(action, entry_price, exit_price)
