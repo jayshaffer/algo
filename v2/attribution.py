@@ -68,22 +68,22 @@ def get_attribution_summary() -> str:
         return "Signal Attribution:\n- No attribution data yet"
 
     lines = ["Signal Attribution:"]
-    predictive = [r for r in rows if r.get("win_rate_7d") and r["win_rate_7d"] > Decimal("0.5")]
-    weak = [r for r in rows if r.get("win_rate_7d") and r["win_rate_7d"] <= Decimal("0.5")]
+    profitable = [r for r in rows if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) > 0]
+    unprofitable = [r for r in rows if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) <= 0]
 
-    if predictive:
-        lines.append("Predictive signal types:")
-        for r in predictive:
-            wr = float(r["win_rate_7d"]) * 100
+    if profitable:
+        lines.append("Profitable signal types (positive avg 7d return):")
+        for r in profitable:
             avg = float(r.get("avg_outcome_7d") or 0)
-            lines.append(f"  - {r['category']}: {wr:.0f}% win rate, {avg:+.2f}% avg 7d return (n={r['sample_size']})")
+            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
+            lines.append(f"  - {r['category']}: {avg:+.2f}% avg 7d return, {wr:.0f}% win rate (n={r['sample_size']})")
 
-    if weak:
-        lines.append("Weak/non-predictive signal types:")
-        for r in weak:
-            wr = float(r["win_rate_7d"]) * 100
+    if unprofitable:
+        lines.append("Unprofitable signal types (negative avg 7d return):")
+        for r in unprofitable:
             avg = float(r.get("avg_outcome_7d") or 0)
-            lines.append(f"  - {r['category']}: {wr:.0f}% win rate, {avg:+.2f}% avg 7d return (n={r['sample_size']})")
+            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
+            lines.append(f"  - {r['category']}: {avg:+.2f}% avg 7d return, {wr:.0f}% win rate (n={r['sample_size']})")
 
     return "\n".join(lines)
 
@@ -91,12 +91,11 @@ def get_attribution_summary() -> str:
 def build_attribution_constraints(min_samples: int = 5) -> str:
     """Format signal attribution into constraint block for strategist system prompt.
 
-    This is the function that closes the learning loop. The output is injected
-    into the strategist's system prompt, making attribution scores enforceable.
+    Uses expected value (avg_outcome_7d) as the primary metric instead of win rate.
 
     Categories:
-      STRONG: >55% win rate, >= min_samples
-      WEAK: <45% win rate, >= min_samples
+      STRONG: avg 7d return > +0.5%, >= min_samples
+      WEAK: avg 7d return < -0.5%, >= min_samples
       INSUFFICIENT DATA: < min_samples
     """
     rows = get_signal_attribution()
@@ -108,26 +107,27 @@ def build_attribution_constraints(min_samples: int = 5) -> str:
     for r in rows:
         cat = r["category"]
         n = r["sample_size"]
+        avg = float(r["avg_outcome_7d"]) if r.get("avg_outcome_7d") else 0
         wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
 
         if n < min_samples:
             insufficient.append(f"{cat} (n={n})")
-        elif wr > 55:
-            strong.append(f"{cat} ({wr:.0f}%, n={n})")
-        elif wr < 45:
-            weak.append(f"{cat} ({wr:.0f}%, n={n})")
+        elif avg > 0.5:
+            strong.append(f"{cat} ({avg:+.2f}% avg 7d return, {wr:.0f}% win rate, n={n})")
+        elif avg < -0.5:
+            weak.append(f"{cat} ({avg:+.2f}% avg 7d return, {wr:.0f}% win rate, n={n})")
 
     lines = ["SIGNAL PERFORMANCE (last 60 days):"]
     if strong:
-        lines.append(f"  STRONG (>55% win rate): {', '.join(strong)}")
+        lines.append(f"  STRONG (positive avg return): {', '.join(strong)}")
     if weak:
-        lines.append(f"  WEAK (<45% win rate): {', '.join(weak)}")
+        lines.append(f"  WEAK (negative avg return): {', '.join(weak)}")
     if insufficient:
         lines.append(f"  INSUFFICIENT DATA (<{min_samples} samples): {', '.join(insufficient)}")
 
     lines.append("")
     lines.append("CONSTRAINT: Do not create theses primarily based on WEAK signal categories")
-    lines.append("unless you have a specific reason to override (explain in thesis text).")
+    lines.append("(negative avg 7d return) unless you have a specific reason to override (explain in thesis text).")
 
     return "\n".join(lines)
 

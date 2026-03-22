@@ -39,13 +39,13 @@ class TestBuildAttributionConstraints:
             from v2.attribution import build_attribution_constraints
             result = build_attribution_constraints(min_samples=5)
 
-        assert "STRONG (>55% win rate)" in result
+        assert "STRONG (positive avg return)" in result
         assert "news_signal:earnings" in result
-        assert "70%" in result
+        assert "avg 7d return" in result
 
-        assert "WEAK (<45% win rate)" in result
+        assert "WEAK (negative avg return)" in result
         assert "macro_signal:fed" in result
-        assert "30%" in result
+        assert "-1.00% avg 7d return" in result
 
         assert "INSUFFICIENT DATA" in result
         assert "news_signal:rumor (n=3)" in result
@@ -62,61 +62,62 @@ class TestBuildAttributionConstraints:
         assert result == ""
 
     def test_threshold_boundaries(self):
-        """Test that exactly 55% is not STRONG and exactly 45% is not WEAK.
+        """Test EV thresholds: +0.5% boundary for STRONG, -0.5% for WEAK.
 
-        The implementation converts Decimal to float before comparing, so we
-        use values that land cleanly on 50% (0.5) to test the neutral zone —
-        50% is neither >55 nor <45.
+        Exactly +0.5 is NOT > +0.5, so not STRONG.
+        Exactly -0.5 is NOT < -0.5, so not WEAK.
+        Values above/below the thresholds should be categorized.
         """
         mock_rows = [
             {
-                "category": "news_signal:neutral_high",
+                "category": "news_signal:at_strong_boundary",
                 "sample_size": 10,
-                "avg_outcome_7d": Decimal("1.0"),
+                "avg_outcome_7d": Decimal("0.5"),
+                "avg_outcome_30d": Decimal("1.0"),
+                "win_rate_7d": Decimal("0.55"),
+                "win_rate_30d": Decimal("0.55"),
+            },
+            {
+                "category": "news_signal:at_weak_boundary",
+                "sample_size": 10,
+                "avg_outcome_7d": Decimal("-0.5"),
+                "avg_outcome_30d": Decimal("-0.5"),
+                "win_rate_7d": Decimal("0.45"),
+                "win_rate_30d": Decimal("0.45"),
+            },
+            {
+                "category": "news_signal:above_strong",
+                "sample_size": 10,
+                "avg_outcome_7d": Decimal("0.51"),
                 "avg_outcome_30d": Decimal("1.0"),
                 "win_rate_7d": Decimal("0.50"),
                 "win_rate_30d": Decimal("0.50"),
             },
             {
-                "category": "news_signal:neutral_low",
+                "category": "news_signal:below_weak",
                 "sample_size": 10,
-                "avg_outcome_7d": Decimal("-0.5"),
-                "avg_outcome_30d": Decimal("-0.5"),
+                "avg_outcome_7d": Decimal("-0.51"),
+                "avg_outcome_30d": Decimal("-1.0"),
                 "win_rate_7d": Decimal("0.50"),
                 "win_rate_30d": Decimal("0.50"),
-            },
-            {
-                "category": "news_signal:just_above_strong",
-                "sample_size": 10,
-                "avg_outcome_7d": Decimal("1.5"),
-                "avg_outcome_30d": Decimal("2.0"),
-                "win_rate_7d": Decimal("0.56"),
-                "win_rate_30d": Decimal("0.56"),
-            },
-            {
-                "category": "news_signal:just_below_weak",
-                "sample_size": 10,
-                "avg_outcome_7d": Decimal("-1.0"),
-                "avg_outcome_30d": Decimal("-1.0"),
-                "win_rate_7d": Decimal("0.44"),
-                "win_rate_30d": Decimal("0.44"),
             },
         ]
         with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
             from v2.attribution import build_attribution_constraints
             result = build_attribution_constraints(min_samples=5)
 
-        # 50% win rate is NOT >55, so should not be STRONG
-        assert "news_signal:neutral_high" not in result
-        assert "news_signal:neutral_low" not in result
+        # Exactly +0.5 is NOT > +0.5, so should not be STRONG
+        assert "news_signal:at_strong_boundary" not in result
+        # Exactly -0.5 is NOT < -0.5, so should not be WEAK
+        assert "news_signal:at_weak_boundary" not in result
 
-        # 56% IS >55, so should be STRONG
+        # +0.51 IS > +0.5, so should be STRONG
         assert "STRONG" in result
-        assert "news_signal:just_above_strong" in result
+        assert "news_signal:above_strong" in result
 
-        # 44% IS <45, so should be WEAK
-        assert "WEAK" in result
-        assert "news_signal:just_below_weak" in result
+        # -0.51 IS < -0.5, so should be WEAK
+        assert "WEAK (negative avg return)" in result
+        assert "news_signal:below_weak" in result
 
 
 class TestComputeSignalAttribution:
@@ -249,14 +250,110 @@ class TestGetAttributionSummary:
             result = get_attribution_summary()
 
         assert "Signal Attribution:" in result
-        assert "Predictive signal types:" in result
+        assert "Profitable signal types (positive avg 7d return):" in result
         assert "news_signal:earnings" in result
         assert "70% win rate" in result
         assert "+2.50% avg 7d return" in result
         assert "n=20" in result
 
-        assert "Weak/non-predictive signal types:" in result
+        assert "Unprofitable signal types (negative avg 7d return):" in result
         assert "macro_signal:fed" in result
         assert "30% win rate" in result
         assert "-1.00% avg 7d return" in result
         assert "n=15" in result
+
+
+class TestExpectedValueConstraints:
+    def test_profitable_low_winrate_is_strong(self):
+        """40% win rate but +2.0% avg return -> STRONG."""
+        mock_rows = [
+            {
+                "category": "news_signal:contrarian",
+                "sample_size": 20,
+                "avg_outcome_7d": Decimal("2.0"),
+                "avg_outcome_30d": Decimal("3.0"),
+                "win_rate_7d": Decimal("0.40"),
+                "win_rate_30d": Decimal("0.45"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import build_attribution_constraints
+            result = build_attribution_constraints(min_samples=5)
+
+        assert "STRONG" in result
+        assert "news_signal:contrarian" in result
+
+    def test_unprofitable_high_winrate_is_weak(self):
+        """60% win rate but -0.6% avg return -> WEAK."""
+        mock_rows = [
+            {
+                "category": "news_signal:momentum",
+                "sample_size": 20,
+                "avg_outcome_7d": Decimal("-0.6"),
+                "avg_outcome_30d": Decimal("-1.0"),
+                "win_rate_7d": Decimal("0.60"),
+                "win_rate_30d": Decimal("0.55"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import build_attribution_constraints
+            result = build_attribution_constraints(min_samples=5)
+
+        assert "WEAK" in result
+        assert "news_signal:momentum" in result
+
+    def test_neutral_ev_not_categorized(self):
+        """Near-zero avg return should not be STRONG or WEAK."""
+        mock_rows = [
+            {
+                "category": "news_signal:flat",
+                "sample_size": 20,
+                "avg_outcome_7d": Decimal("0.05"),
+                "avg_outcome_30d": Decimal("0.1"),
+                "win_rate_7d": Decimal("0.50"),
+                "win_rate_30d": Decimal("0.50"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import build_attribution_constraints
+            result = build_attribution_constraints(min_samples=5)
+
+        # The category should not appear in any STRONG or WEAK section
+        assert "news_signal:flat" not in result
+
+    def test_insufficient_data_unchanged(self):
+        """Below min_samples should still be INSUFFICIENT."""
+        mock_rows = [
+            {
+                "category": "news_signal:rare",
+                "sample_size": 2,
+                "avg_outcome_7d": Decimal("10.0"),
+                "avg_outcome_30d": Decimal("15.0"),
+                "win_rate_7d": Decimal("1.0"),
+                "win_rate_30d": Decimal("1.0"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import build_attribution_constraints
+            result = build_attribution_constraints(min_samples=5)
+
+        assert "INSUFFICIENT DATA" in result
+        assert "news_signal:rare" in result
+
+    def test_constraint_text_references_expected_value(self):
+        """Constraint text should mention avg return."""
+        mock_rows = [
+            {
+                "category": "news_signal:test",
+                "sample_size": 10,
+                "avg_outcome_7d": Decimal("-2.0"),
+                "avg_outcome_30d": Decimal("-1.5"),
+                "win_rate_7d": Decimal("0.35"),
+                "win_rate_30d": Decimal("0.40"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import build_attribution_constraints
+            result = build_attribution_constraints(min_samples=5)
+
+        assert "avg return" in result.lower() or "expected value" in result.lower() or "avg 7d" in result.lower()
