@@ -308,6 +308,7 @@ def get_latest_price(
     ticker: str,
     max_age_seconds: int = 60,
     max_spread_pct: Decimal = Decimal("0.05"),
+    client: StockHistoricalDataClient = None,
 ) -> Optional[Decimal]:
     """Get latest quote price for a ticker with staleness and spread validation.
 
@@ -315,14 +316,15 @@ def get_latest_price(
         ticker: Stock ticker symbol
         max_age_seconds: Reject quotes older than this (seconds). 0 to disable.
         max_spread_pct: Reject quotes with bid-ask spread wider than this fraction. 0 to disable.
+        client: Optional pre-created StockHistoricalDataClient to reuse.
 
     Returns:
         Ask price as Decimal, or None if quote is stale, wide-spread, zero, or unavailable.
     """
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
-
-    client = StockHistoricalDataClient(api_key, secret_key)
+    if client is None:
+        api_key = os.environ.get("ALPACA_API_KEY")
+        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        client = StockHistoricalDataClient(api_key, secret_key)
     request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
 
     try:

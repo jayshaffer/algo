@@ -124,6 +124,39 @@ class TestGetLatestPrice:
         assert price == Decimal("150.25")
 
 
+class TestGetLatestPriceClientReuse:
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_uses_provided_client(self, mock_client_cls):
+        from v2.executor import get_latest_price
+        external_client = MagicMock()
+        quote = MagicMock()
+        quote.ask_price = 150.0
+        quote.bid_price = 149.5
+        quote.timestamp = None
+        external_client.get_stock_latest_quote.return_value = {"AAPL": quote}
+        result = get_latest_price("AAPL", client=external_client)
+        assert result == Decimal("150.0")
+        mock_client_cls.assert_not_called()
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_creates_client_when_none_provided(self, mock_client_cls):
+        """When no client is provided, it should create one (existing behavior)."""
+        from v2.executor import get_latest_price
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 100.0
+        mock_quote.bid_price = 99.5
+        mock_quote.timestamp = None
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"TSLA": mock_quote}
+        mock_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            result = get_latest_price("TSLA")
+
+        assert result == Decimal("100.0")
+        mock_client_cls.assert_called_once()
+
+
 class TestWaitForFill:
     @patch("v2.executor.get_trading_client")
     def test_returns_filled_order(self, mock_client):

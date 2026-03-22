@@ -118,6 +118,14 @@ def run_trading_session(
             errors=errors,
         )
 
+    # Create a shared data client for price lookups
+    from alpaca.data.historical import StockHistoricalDataClient
+    import os
+    data_client = StockHistoricalDataClient(
+        os.environ.get("ALPACA_API_KEY"),
+        os.environ.get("ALPACA_SECRET_KEY"),
+    )
+
     # Step 2: Take account snapshot
     logger.info("[Step 2] Taking account snapshot")
     try:
@@ -209,7 +217,7 @@ def run_trading_session(
             break
 
         # Get current price for validation
-        price = get_latest_price(decision.ticker)
+        price = get_latest_price(decision.ticker, client=data_client)
         if price is None:
             errors.append(f"Could not get price for {decision.ticker}")
             logger.error("%s: Could not get price", decision.ticker)
@@ -320,7 +328,7 @@ def run_trading_session(
         try:
             # Prefer filled price from order, fall back to latest quote
             result = order_results.get(i)
-            price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker)
+            price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker, client=data_client)
             decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
