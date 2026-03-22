@@ -21,6 +21,7 @@ from .executor import (
 from .agent import (
     get_trading_decisions,
     validate_decision,
+    validate_signal_refs,
     format_decisions_for_logging,
     AgentResponse,
     ExecutorDecision,
@@ -324,14 +325,20 @@ def run_trading_session(
             logger.error("Error logging %s: %s", decision.ticker, e)
             continue
 
-        # Log signal-decision links for attribution
+        # Log signal-decision links for attribution (validate first)
         if decision.signal_refs:
             try:
-                signal_links = [
-                    (decision_id, ref["type"], ref["id"])
-                    for ref in decision.signal_refs
-                ]
-                insert_decision_signals_batch(signal_links)
+                validated_refs = validate_signal_refs(decision.signal_refs)
+                if len(validated_refs) < len(decision.signal_refs):
+                    logger.warning("%s: stripped %d invalid signal refs",
+                                   decision.ticker,
+                                   len(decision.signal_refs) - len(validated_refs))
+                if validated_refs:
+                    signal_links = [
+                        (decision_id, ref["type"], ref["id"])
+                        for ref in validated_refs
+                    ]
+                    insert_decision_signals_batch(signal_links)
             except Exception as e:
                 errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
 

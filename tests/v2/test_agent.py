@@ -201,3 +201,59 @@ class TestFormatDecisionsForLogging:
         result = format_decisions_for_logging(response)
         assert result["decision_count"] == 1
         assert result["market_summary"] == "Test summary"
+
+
+class TestValidateSignalRefs:
+    def test_valid_news_signal_passes(self, mock_db, mock_cursor):
+        """Existing news_signal ID should pass validation."""
+        mock_cursor.fetchone.return_value = {"id": 5}
+
+        from v2.agent import validate_signal_refs
+        valid = validate_signal_refs([{"type": "news_signal", "id": 5}])
+        assert valid == [{"type": "news_signal", "id": 5}]
+
+    def test_invalid_signal_id_stripped(self, mock_db, mock_cursor):
+        """Non-existent signal ID should be stripped."""
+        mock_cursor.fetchone.return_value = None
+
+        from v2.agent import validate_signal_refs
+        valid = validate_signal_refs([{"type": "news_signal", "id": 99999}])
+        assert valid == []
+
+    def test_invalid_signal_type_stripped(self, mock_db, mock_cursor):
+        """Unknown signal type should be stripped."""
+        from v2.agent import validate_signal_refs
+        valid = validate_signal_refs([{"type": "invalid_type", "id": 1}])
+        assert valid == []
+
+    def test_mixed_valid_and_invalid(self, mock_db, mock_cursor):
+        """Should keep valid refs and strip invalid ones."""
+        call_count = [0]
+        def mock_fetchone():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return {"id": 1}
+            return None
+
+        mock_cursor.fetchone.side_effect = mock_fetchone
+
+        from v2.agent import validate_signal_refs
+        refs = [
+            {"type": "news_signal", "id": 1},
+            {"type": "news_signal", "id": 99999},
+        ]
+        valid = validate_signal_refs(refs)
+        assert len(valid) == 1
+        assert valid[0]["id"] == 1
+
+    def test_empty_refs_returns_empty(self, mock_db, mock_cursor):
+        from v2.agent import validate_signal_refs
+        assert validate_signal_refs([]) == []
+
+    def test_thesis_type_validated(self, mock_db, mock_cursor):
+        """thesis signal type should also be validated."""
+        mock_cursor.fetchone.return_value = {"id": 3}
+
+        from v2.agent import validate_signal_refs
+        valid = validate_signal_refs([{"type": "thesis", "id": 3}])
+        assert valid == [{"type": "thesis", "id": 3}]
