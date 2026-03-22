@@ -281,3 +281,15 @@ class TestWaitForFillCancellation:
         assert result.success is False
         assert "cancel attempted" in result.error.lower()
         mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
+
+
+class TestDryRunPrice:
+    def test_dry_run_order_uses_simulated_price(self):
+        from v2.executor import execute_market_order
+        result = execute_market_order("AAPL", "buy", Decimal("5"), dry_run=True, simulated_price=Decimal("150.00"))
+        assert result.filled_avg_price == Decimal("150.00")
+
+    def test_dry_run_without_simulated_price(self):
+        from v2.executor import execute_market_order
+        result = execute_market_order("AAPL", "buy", Decimal("5"), dry_run=True)
+        assert result.filled_avg_price is None  # backwards compatible

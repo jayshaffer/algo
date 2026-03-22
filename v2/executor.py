@@ -158,7 +158,8 @@ def execute_market_order(
     ticker: str,
     side: str,
     qty: Decimal,
-    dry_run: bool = False
+    dry_run: bool = False,
+    simulated_price: Decimal = None,
 ) -> OrderResult:
     """Execute a market order."""
     if dry_run:
@@ -166,7 +167,7 @@ def execute_market_order(
             success=True,
             order_id="DRY_RUN",
             filled_qty=qty,
-            filled_avg_price=None,
+            filled_avg_price=simulated_price,
             error=None,
         )
 

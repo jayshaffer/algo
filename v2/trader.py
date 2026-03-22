@@ -268,6 +268,7 @@ def run_trading_session(
             side=decision.action,
             qty=Decimal(decision.quantity),
             dry_run=dry_run,
+            simulated_price=price,
         )
 
         if result.success:
@@ -368,6 +369,10 @@ def run_trading_session(
             # Prefer filled price from order, fall back to latest quote
             result = order_results.get(i)
             price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker, client=data_client)
+            if price is None:
+                errors.append(f"No price available for {decision.ticker} — skipping decision log")
+                logger.error("Cannot log decision for %s: no price available", decision.ticker)
+                continue
             decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
