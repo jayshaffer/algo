@@ -252,6 +252,51 @@ def execute_limit_order(
         )
 
 
+def wait_for_fill(
+    order_id: str,
+    timeout_seconds: float = 30,
+    poll_interval: float = 0.5,
+) -> OrderResult:
+    """Poll Alpaca until order is filled, cancelled, or timeout."""
+    import time
+
+    client = get_trading_client()
+    terminal_failures = {"canceled", "cancelled", "expired", "rejected", "suspended"}
+    start = time.monotonic()
+
+    while time.monotonic() - start < timeout_seconds:
+        order = client.get_order_by_id(order_id)
+        status = order.status.value if hasattr(order.status, "value") else str(order.status)
+
+        if status == "filled":
+            return OrderResult(
+                success=True,
+                order_id=order_id,
+                filled_qty=Decimal(str(order.filled_qty)) if order.filled_qty else None,
+                filled_avg_price=Decimal(str(order.filled_avg_price)) if order.filled_avg_price else None,
+                error=None,
+            )
+
+        if status in terminal_failures:
+            return OrderResult(
+                success=False,
+                order_id=order_id,
+                filled_qty=None,
+                filled_avg_price=None,
+                error=f"Order {status}",
+            )
+
+        time.sleep(poll_interval)
+
+    return OrderResult(
+        success=False,
+        order_id=order_id,
+        filled_qty=None,
+        filled_avg_price=None,
+        error=f"Timeout waiting for fill after {timeout_seconds}s",
+    )
+
+
 def get_latest_price(
     ticker: str,
     max_age_seconds: int = 60,

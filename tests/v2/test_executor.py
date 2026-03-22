@@ -1,5 +1,6 @@
 """Tests for v2 executor functions."""
 
+import time
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
@@ -121,3 +122,98 @@ class TestGetLatestPrice:
             price = get_latest_price("AAPL")
 
         assert price == Decimal("150.25")
+
+
+class TestWaitForFill:
+    @patch("v2.executor.get_trading_client")
+    def test_returns_filled_order(self, mock_client):
+        mock_order = MagicMock()
+        mock_order.status.value = "filled"
+        mock_order.filled_qty = "2.5"
+        mock_order.filled_avg_price = "150.25"
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is True
+        assert result.filled_qty == Decimal("2.5")
+        assert result.filled_avg_price == Decimal("150.25")
+
+    @patch("v2.executor.get_trading_client")
+    def test_returns_error_on_timeout(self, mock_client):
+        mock_order = MagicMock()
+        mock_order.status.value = "accepted"
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert "timeout" in result.error.lower()
+
+    @patch("v2.executor.get_trading_client")
+    def test_returns_error_on_cancelled(self, mock_client):
+        mock_order = MagicMock()
+        mock_order.status.value = "canceled"
+        mock_order.filled_qty = "0"
+        mock_order.filled_avg_price = None
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is False
+        assert "canceled" in result.error.lower()
+
+    @patch("v2.executor.get_trading_client")
+    def test_returns_error_on_rejected(self, mock_client):
+        mock_order = MagicMock()
+        mock_order.status.value = "rejected"
+        mock_order.filled_qty = "0"
+        mock_order.filled_avg_price = None
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is False
+        assert "rejected" in result.error.lower()
+
+    @patch("v2.executor.get_trading_client")
+    def test_polls_until_filled(self, mock_client):
+        """Should poll multiple times until order status becomes filled."""
+        pending = MagicMock()
+        pending.status.value = "accepted"
+
+        filled = MagicMock()
+        filled.status.value = "filled"
+        filled.filled_qty = "5"
+        filled.filled_avg_price = "100.00"
+
+        mock_client.return_value.get_order_by_id.side_effect = [pending, pending, filled]
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is True
+        assert mock_client.return_value.get_order_by_id.call_count == 3
+
+    @patch("v2.executor.get_trading_client")
+    def test_partially_filled_waits(self, mock_client):
+        """Partially filled should keep polling."""
+        partial = MagicMock()
+        partial.status.value = "partially_filled"
+
+        filled = MagicMock()
+        filled.status.value = "filled"
+        filled.filled_qty = "10"
+        filled.filled_avg_price = "200.00"
+
+        mock_client.return_value.get_order_by_id.side_effect = [partial, filled]
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-123", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is True
+        assert result.filled_qty == Decimal("10")

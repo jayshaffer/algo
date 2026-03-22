@@ -16,6 +16,7 @@ from .executor import (
     get_latest_price,
     calculate_position_size,
     is_market_open,
+    wait_for_fill,
 )
 from .agent import (
     get_trading_decisions,
@@ -236,10 +237,24 @@ def run_trading_session(
         )
 
         if result.success:
+            # Wait for fill confirmation (skip for dry run — fills are instant)
+            if not dry_run and result.order_id != "DRY_RUN":
+                fill = wait_for_fill(result.order_id)
+                if not fill.success:
+                    trades_failed += 1
+                    errors.append(f"{decision.ticker} fill failed: {fill.error}")
+                    logger.error("  %s: fill failed: %s", decision.ticker, fill.error)
+                    continue
+                # Update result with fill data
+                result = fill
+
             trades_executed += 1
             order_ids[i] = result.order_id
             order_results[i] = result
-            trade_value = price * Decimal(str(decision.quantity))
+
+            # Use fill price if available, fall back to quote price
+            fill_price = result.filled_avg_price if result.filled_avg_price else price
+            trade_value = fill_price * Decimal(str(decision.quantity))
 
             if decision.action == "buy":
                 total_buy_value += trade_value
@@ -247,7 +262,7 @@ def run_trading_session(
             else:
                 total_sell_value += trade_value
 
-            status = "[DRY RUN]" if dry_run else f"Order {result.order_id}"
+            status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
             logger.info("  %s - Success", status)
 
             # Mark thesis as executed if trade was based on one
@@ -256,7 +271,7 @@ def run_trading_session(
                     close_thesis(
                         thesis_id=decision.thesis_id,
                         status="executed",
-                        reason=f"Trade executed: {decision.action} {decision.quantity} shares"
+                        reason=f"Trade executed: {decision.action} {decision.quantity} shares @ ${fill_price}"
                     )
                     logger.info("  Thesis %d marked as executed", decision.thesis_id)
                 except Exception as e:
