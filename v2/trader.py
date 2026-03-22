@@ -15,6 +15,7 @@ from .executor import (
     execute_market_order,
     get_latest_price,
     calculate_position_size,
+    is_market_open,
 )
 from .agent import (
     get_trading_decisions,
@@ -97,6 +98,23 @@ def run_trading_session(
         errors.append(f"Order sync failed: {e}")
         logger.error("Order sync failed: %s", e)
         orders_synced = 0
+
+    # Market hours gate — skip trading if market is closed (dry_run bypasses)
+    if not dry_run and not is_market_open():
+        logger.warning("Market is closed. Skipping trading session (use --dry-run to bypass)")
+        errors.append("Market is closed — skipped trading")
+        return TradingSessionResult(
+            timestamp=timestamp,
+            account_snapshot_id=0,
+            positions_synced=positions_synced,
+            orders_synced=orders_synced,
+            decisions_made=0,
+            trades_executed=0,
+            trades_failed=0,
+            total_buy_value=Decimal(0),
+            total_sell_value=Decimal(0),
+            errors=errors,
+        )
 
     # Step 2: Take account snapshot
     logger.info("[Step 2] Taking account snapshot")

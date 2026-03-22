@@ -63,6 +63,13 @@ def get_account_info() -> dict:
     }
 
 
+def is_market_open() -> bool:
+    """Check if the market is currently open via Alpaca clock API."""
+    client = get_trading_client()
+    clock = client.get_clock()
+    return clock.is_open
+
+
 def take_account_snapshot() -> int:
     """Take a daily snapshot of account state and store in database."""
     info = get_account_info()

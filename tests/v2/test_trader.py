@@ -135,6 +135,72 @@ class TestRunTradingSession:
         mock_close.assert_called_once_with(thesis_id=5, status="invalidated", reason="Conditions changed")
 
 
+class TestMarketHoursGate:
+    def test_skips_trading_when_market_closed(self, mock_db, mock_cursor):
+        """When market is closed and not dry_run, should return early after sync."""
+        with patch("v2.trader.sync_positions_from_alpaca", return_value=2), \
+             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
+             patch("v2.trader.is_market_open", return_value=False), \
+             patch("v2.trader.get_account_info") as mock_acct, \
+             patch("v2.trader.take_account_snapshot") as mock_snap:
+
+            result = run_trading_session(dry_run=False)
+
+        mock_acct.assert_not_called()
+        assert result.trades_executed == 0
+        assert any("market" in e.lower() for e in result.errors)
+
+    def test_allows_trading_when_market_open(self, mock_db, mock_cursor):
+        """When market is open, should proceed normally."""
+        with patch("v2.trader.sync_positions_from_alpaca", return_value=2), \
+             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
+             patch("v2.trader.is_market_open", return_value=True), \
+             patch("v2.trader.get_account_info") as mock_acct, \
+             patch("v2.trader.take_account_snapshot", return_value=1), \
+             patch("v2.trader.build_executor_input") as mock_build, \
+             patch("v2.trader.get_trading_decisions") as mock_decisions:
+
+            mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            mock_build.return_value = ExecutorInput(
+                playbook_actions=[], positions=[], account={},
+                attribution_summary={}, recent_outcomes=[],
+                market_outlook="Neutral", risk_notes="",
+            )
+            mock_decisions.return_value = AgentResponse(
+                decisions=[], thesis_invalidations=[],
+                market_summary="No trades", risk_assessment="Low",
+            )
+
+            result = run_trading_session(dry_run=False)
+
+        mock_acct.assert_called_once()
+
+    def test_dry_run_bypasses_market_hours_check(self, mock_db, mock_cursor):
+        """Dry run should work even when market is closed."""
+        with patch("v2.trader.sync_positions_from_alpaca", return_value=0), \
+             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
+             patch("v2.trader.is_market_open", return_value=False), \
+             patch("v2.trader.get_account_info") as mock_acct, \
+             patch("v2.trader.take_account_snapshot", return_value=1), \
+             patch("v2.trader.build_executor_input") as mock_build, \
+             patch("v2.trader.get_trading_decisions") as mock_decisions:
+
+            mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            mock_build.return_value = ExecutorInput(
+                playbook_actions=[], positions=[], account={},
+                attribution_summary={}, recent_outcomes=[],
+                market_outlook="", risk_notes="",
+            )
+            mock_decisions.return_value = AgentResponse(
+                decisions=[], thesis_invalidations=[],
+                market_summary="No trades", risk_assessment="Low",
+            )
+
+            result = run_trading_session(dry_run=True)
+
+        mock_acct.assert_called_once()
+
+
 class TestTradingSessionResult:
     def test_has_required_fields(self):
         result = TradingSessionResult(
