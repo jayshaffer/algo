@@ -32,6 +32,7 @@ from .strategy import StrategyReflectionResult, run_strategy_reflection
 from .twitter import TwitterStageResult, run_twitter_stage
 from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
+from .database.trading_db import get_session_for_date, insert_session_record, complete_session, fail_session
 
 logger = logging.getLogger("session")
 
@@ -86,9 +87,32 @@ def run_session(
     skip_dashboard: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
+    force: bool = False,
 ) -> SessionResult:
     start = time.monotonic()
     result = SessionResult(skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation, skipped_executor=skip_executor, skipped_strategy=skip_strategy, skipped_twitter=skip_twitter, skipped_bluesky=skip_bluesky, skipped_dashboard=skip_dashboard)
+
+    # Idempotency check — prevent duplicate sessions
+    from datetime import date
+    today = date.today()
+    session_id = None
+
+    if not force:
+        try:
+            existing = get_session_for_date(today)
+            if existing and existing["status"] == "completed":
+                logger.warning("Session already completed for %s. Use --force to override.", today)
+                result.learning_error = f"Session already completed for {today}"
+                result.duration_seconds = time.monotonic() - start
+                return result
+        except Exception as e:
+            logger.warning("Could not check session status: %s — proceeding", e)
+
+    try:
+        session_id = insert_session_record(today)
+        logger.info("Session ID: %d", session_id)
+    except Exception as e:
+        logger.warning("Could not create session record: %s — proceeding without tracking", e)
 
     # Stage 0: Refresh learning data
     attribution_constraints = ""
@@ -189,6 +213,21 @@ def run_session(
 
     result.duration_seconds = time.monotonic() - start
 
+    # Mark session status
+    if session_id:
+        try:
+            if result.has_errors:
+                error_summary = "; ".join(
+                    str(getattr(result, f))
+                    for f in ["learning_error", "pipeline_error", "strategist_error", "trading_error", "strategy_error", "twitter_error", "bluesky_error", "dashboard_error"]
+                    if getattr(result, f)
+                )
+                fail_session(session_id, error_summary)
+            else:
+                complete_session(session_id)
+        except Exception as e:
+            logger.warning("Could not update session status: %s", e)
+
     # Summary
     logger.info("=" * 60)
     logger.info("Session complete in %.1fs", result.duration_seconds)
@@ -221,6 +260,7 @@ def main():
     parser.add_argument("--skip-bluesky", action="store_true")
     parser.add_argument("--skip-dashboard", action="store_true")
     parser.add_argument("--pipeline-hours", type=int, default=24)
+    parser.add_argument("--force", action="store_true", help="Override session idempotency check")
 
     args = parser.parse_args()
     result = run_session(
@@ -231,6 +271,7 @@ def main():
         skip_twitter=args.skip_twitter, skip_bluesky=args.skip_bluesky,
         skip_dashboard=args.skip_dashboard,
         pipeline_hours=args.pipeline_hours,
+        force=args.force,
     )
     if result.has_errors:
         sys.exit(1)

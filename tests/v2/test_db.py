@@ -725,6 +725,41 @@ class TestStrategyRules:
         assert result is False
 
 
+class TestSessionTracking:
+    def test_insert_session_record(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_session_record
+        result = insert_session_record(date(2026, 3, 22), "daily")
+        assert result == 1
+        assert "INSERT INTO sessions" in mock_cursor.execute.call_args[0][0]
+
+    def test_get_session_for_date(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1, "status": "completed"}
+        from v2.database.trading_db import get_session_for_date
+        result = get_session_for_date(date(2026, 3, 22), "daily")
+        assert result["status"] == "completed"
+
+    def test_get_session_for_date_returns_none(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = None
+        from v2.database.trading_db import get_session_for_date
+        result = get_session_for_date(date(2026, 3, 22), "daily")
+        assert result is None
+
+    def test_complete_session(self, mock_db, mock_cursor):
+        from v2.database.trading_db import complete_session
+        complete_session(1)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE sessions" in sql
+        assert "completed" in sql
+
+    def test_fail_session(self, mock_db, mock_cursor):
+        from v2.database.trading_db import fail_session
+        fail_session(1, "Something broke")
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE sessions" in sql
+        assert "failed" in sql
+
+
 class TestStrategyMemos:
     def test_insert_strategy_memo(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = {"id": 1}

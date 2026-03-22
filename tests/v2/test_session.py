@@ -1,5 +1,6 @@
 """Tests for 5-stage session orchestrator."""
 from unittest.mock import patch, MagicMock
+from datetime import date
 
 from v2.session import run_session, SessionResult
 from v2.strategy import StrategyReflectionResult
@@ -454,3 +455,84 @@ class TestStage6Dashboard:
 
         mock_dashboard.assert_not_called()
         assert result.skipped_dashboard is True
+
+
+class TestSessionIdempotency:
+    def test_blocks_duplicate_session(self):
+        """Should refuse to run if a completed session exists for today."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline:
+
+            mock_get.return_value = {"id": 1, "status": "completed"}
+
+            result = run_session(dry_run=True)
+
+        mock_pipeline.assert_not_called()
+        assert result.has_errors or result.skipped_executor
+
+    def test_allows_session_when_none_exists(self):
+        """Should proceed normally when no session exists for today."""
+        with patch("v2.session.get_session_for_date", return_value=None), \
+             patch("v2.session.insert_session_record", return_value=1), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        mock_pipeline.assert_called_once()
+
+    def test_allows_session_when_previous_failed(self):
+        """Should allow re-run if previous session failed."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.insert_session_record", return_value=2), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_get.return_value = {"id": 1, "status": "failed"}
+
+            result = run_session(dry_run=True)
+
+        mock_pipeline.assert_called_once()
+
+    def test_force_flag_overrides_idempotency(self):
+        """--force should allow running even if completed session exists."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.insert_session_record", return_value=2), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_get.return_value = {"id": 1, "status": "completed"}
+
+            result = run_session(dry_run=True, force=True)
+
+        mock_pipeline.assert_called_once()
