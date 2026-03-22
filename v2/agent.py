@@ -281,11 +281,15 @@ def validate_decision(
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${buying_power:.2f}"
 
         if portfolio_value and portfolio_value > 0:
-            pct = cost / portfolio_value
+            existing_shares = positions.get(decision.ticker, Decimal(0))
+            existing_value = existing_shares * current_price
+            total_exposure = existing_value + cost
+            pct = total_exposure / portfolio_value
             if pct > MAX_POSITION_PCT:
                 return False, (
-                    f"Position size ${cost:.2f} is {pct:.1%} of portfolio "
-                    f"(max {MAX_POSITION_PCT:.0%})"
+                    f"Total exposure ${total_exposure:.2f} ({pct:.1%} of portfolio) "
+                    f"exceeds max {MAX_POSITION_PCT:.0%} "
+                    f"(existing: ${existing_value:.2f} + new: ${cost:.2f})"
                 )
 
         return True, "Buy order validated"

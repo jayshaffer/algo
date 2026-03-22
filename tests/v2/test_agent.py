@@ -257,3 +257,36 @@ class TestValidateSignalRefs:
         from v2.agent import validate_signal_refs
         valid = validate_signal_refs([{"type": "thesis", "id": 3}])
         assert valid == [{"type": "thesis", "id": 3}]
+
+
+class TestValidateDecisionTotalExposure:
+    def test_buy_rejected_when_total_exposure_exceeds_cap(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="AAPL", action="buy", quantity=3.0)
+        positions = {"AAPL": Decimal("5.33")}  # 5.33 * 150 = ~$800 = 8%
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
+            positions=positions, portfolio_value=Decimal("10000"),
+        )
+        assert not is_valid
+        assert "exposure" in reason.lower() or "position" in reason.lower()
+
+    def test_buy_allowed_when_total_exposure_under_cap(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="AAPL", action="buy", quantity=1.0)
+        positions = {"AAPL": Decimal("3.33")}  # 3.33 * 150 = ~$500 = 5%
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
+            positions=positions, portfolio_value=Decimal("10000"),
+        )
+        assert is_valid
+
+    def test_buy_new_ticker_still_uses_new_cost_only(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="MSFT", action="buy", quantity=2.0)
+        positions = {"AAPL": Decimal("10")}
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("200"),
+            positions=positions, portfolio_value=Decimal("10000"),
+        )
+        assert is_valid  # $400 / $10000 = 4% < 10%
