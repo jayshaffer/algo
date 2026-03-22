@@ -171,6 +171,21 @@ def run_trading_session(
             risk_notes="",
         )
 
+    # Check sector concentration and inject warnings
+    from .risk import check_sector_concentration
+    position_values = {}
+    for p in get_positions():
+        price = get_latest_price(p["ticker"], client=data_client)
+        if price:
+            position_values[p["ticker"]] = p["shares"] * price
+    sector_warnings = check_sector_concentration(position_values, account_info["portfolio_value"])
+    if sector_warnings:
+        logger.warning("Sector concentration warnings: %s", sector_warnings)
+        if executor_input.risk_notes:
+            executor_input.risk_notes += "\n" + "\n".join(sector_warnings)
+        else:
+            executor_input.risk_notes = "\n".join(sector_warnings)
+
     # Step 4: Get LLM decisions
     logger.info("[Step 4] Getting trading decisions from executor")
     try:
