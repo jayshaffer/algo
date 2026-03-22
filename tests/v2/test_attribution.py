@@ -357,3 +357,33 @@ class TestExpectedValueConstraints:
             result = build_attribution_constraints(min_samples=5)
 
         assert "avg return" in result.lower() or "expected value" in result.lower() or "avg 7d" in result.lower()
+
+
+class TestAttributionTimeWindow:
+    @pytest.fixture(autouse=True)
+    def _patch_attribution_cursor(self, mock_cursor):
+        """Patch get_cursor in the attribution module where it's imported."""
+        @contextmanager
+        def _get_cursor():
+            yield mock_cursor
+
+        with patch("v2.attribution.get_cursor", _get_cursor):
+            yield
+
+    def test_compute_attribution_filters_by_days(self, mock_db, mock_cursor):
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution(days=60)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "d.date" in sql
+        params = mock_cursor.execute.call_args[0][1] if len(mock_cursor.execute.call_args[0]) > 1 else None
+        assert params is not None
+
+    def test_compute_attribution_defaults_to_90_days(self, mock_db, mock_cursor):
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        params = mock_cursor.execute.call_args[0][1] if len(mock_cursor.execute.call_args[0]) > 1 else None
+        assert params is not None

@@ -6,7 +6,7 @@ from .database.trading_db import upsert_signal_attribution, get_signal_attributi
 from .database.connection import get_cursor
 
 
-def compute_signal_attribution() -> list[dict]:
+def compute_signal_attribution(days: int = 90) -> list[dict]:
     """
     Compute signal attribution scores from decision_signals joined with decisions.
 
@@ -14,6 +14,9 @@ def compute_signal_attribution() -> list[dict]:
     JOINs through decision_signals FK — not time-window JOINs.
     Upserts results into signal_attribution table.
     """
+    from datetime import date, timedelta
+    cutoff_date = date.today() - timedelta(days=days)
+
     with get_cursor() as cur:
         cur.execute("""
             WITH categorized AS (
@@ -33,6 +36,7 @@ def compute_signal_attribution() -> list[dict]:
                 LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
                 LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
                 WHERE d.action IN ('buy', 'sell')
+                  AND d.date >= %s
             )
             SELECT
                 category,
@@ -45,7 +49,7 @@ def compute_signal_attribution() -> list[dict]:
             WHERE outcome_7d IS NOT NULL
             GROUP BY category
             ORDER BY sample_size DESC
-        """)
+        """, (cutoff_date,))
         results = [dict(row) for row in cur.fetchall()]
 
     for row in results:
@@ -117,7 +121,7 @@ def build_attribution_constraints(min_samples: int = 5) -> str:
         elif avg < -0.5:
             weak.append(f"{cat} ({avg:+.2f}% avg 7d return, {wr:.0f}% win rate, n={n})")
 
-    lines = ["SIGNAL PERFORMANCE (last 60 days):"]
+    lines = ["SIGNAL PERFORMANCE (rolling window):"]
     if strong:
         lines.append(f"  STRONG (positive avg return): {', '.join(strong)}")
     if weak:
