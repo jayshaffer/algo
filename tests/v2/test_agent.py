@@ -259,6 +259,25 @@ class TestValidateSignalRefs:
         assert valid == [{"type": "thesis", "id": 3}]
 
 
+class TestExecutorInputPrices:
+    def test_executor_input_has_current_prices(self):
+        inp = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+            current_prices={"AAPL": Decimal("175.50")},
+        )
+        assert inp.current_prices["AAPL"] == Decimal("175.50")
+
+    def test_executor_input_defaults_empty_prices(self):
+        inp = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+        assert inp.current_prices == {}
+
+
 class TestValidateDecisionTotalExposure:
     def test_buy_rejected_when_total_exposure_exceeds_cap(self):
         from tests.v2.conftest import make_trading_decision

@@ -403,6 +403,19 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         for d in recent if d.get("outcome_7d") is not None
     ][:10]
 
+    from .executor import get_latest_price
+    tickers_needed = set()
+    for a in actions:
+        tickers_needed.add(a.ticker)
+    for p in positions:
+        tickers_needed.add(p["ticker"])
+
+    current_prices = {}
+    for ticker in tickers_needed:
+        price = get_latest_price(ticker)
+        if price:
+            current_prices[ticker] = price
+
     return ExecutorInput(
         playbook_actions=actions,
         positions=[dict(p) for p in positions],
@@ -411,4 +424,5 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         recent_outcomes=recent_outcomes,
         market_outlook=playbook.get("market_outlook", "") if playbook else "No playbook available",
         risk_notes=playbook.get("risk_notes", "") if playbook else "",
+        current_prices=current_prices,
     )

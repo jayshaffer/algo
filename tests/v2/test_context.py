@@ -26,14 +26,17 @@ class TestBuildExecutorInput:
 
         from v2.context import build_executor_input
         from v2.agent import ExecutorInput
-        result = build_executor_input(
-            account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"), "portfolio_value": Decimal("100000")},
-        )
+        with patch("v2.executor.get_latest_price", return_value=Decimal("150.00")):
+            result = build_executor_input(
+                account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"), "portfolio_value": Decimal("100000")},
+            )
 
         assert isinstance(result, ExecutorInput)
         assert len(result.playbook_actions) == 1
         assert result.playbook_actions[0].ticker == "AAPL"
         assert result.market_outlook == "Bullish"
+        assert result.current_prices["AAPL"] == Decimal("150.00")
+        assert result.current_prices["MSFT"] == Decimal("150.00")
 
     def test_no_playbook_returns_empty_actions(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
@@ -139,9 +142,10 @@ class TestBuildExecutorInput:
         ]
 
         from v2.context import build_executor_input
-        result = build_executor_input(
-            account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"), "portfolio_value": Decimal("100000")},
-        )
+        with patch("v2.executor.get_latest_price", return_value=Decimal("200.00")):
+            result = build_executor_input(
+                account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"), "portfolio_value": Decimal("100000")},
+            )
 
         action = result.playbook_actions[0]
         assert action.ticker == "TSLA"

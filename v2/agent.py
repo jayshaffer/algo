@@ -46,6 +46,11 @@ class ExecutorInput:
     recent_outcomes: list[dict]
     market_outlook: str
     risk_notes: str
+    current_prices: dict[str, Decimal] = None
+
+    def __post_init__(self):
+        if self.current_prices is None:
+            self.current_prices = {}
 
 
 @dataclass
@@ -94,12 +99,14 @@ INPUTS (as JSON object):
 5. recent_outcomes — recent decision outcomes for calibration
 6. market_outlook — current market conditions summary
 7. risk_notes — risk warnings and constraints
+8. current_prices — latest ask prices for relevant tickers (use these for dollar-based sizing)
 
 RULES:
 - For each playbook action: execute, adjust, or skip (with reason)
 - Set playbook_action_id to the action's id when executing a playbook action
 - Set is_off_playbook to true for trades not in the playbook
 - You may add trades if signals warrant, but playbook actions come first
+- Use current_prices to calculate position sizes by dollar amount (e.g., to invest $500 in a $200 stock, set quantity to 2.5)
 - Conservative sizing: 1-5% of buying power per trade
 - Never exceed available buying power
 - Fractional shares are supported -- use them to size positions precisely by dollar amount
@@ -141,6 +148,7 @@ def get_trading_decisions(
         "recent_outcomes": executor_input.recent_outcomes,
         "market_outlook": executor_input.market_outlook,
         "risk_notes": executor_input.risk_notes,
+        "current_prices": {k: str(v) for k, v in executor_input.current_prices.items()},
     }
     input_json = json.dumps(input_data, default=str)
 
