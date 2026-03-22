@@ -288,12 +288,19 @@ def wait_for_fill(
 
         time.sleep(poll_interval)
 
+    # Timeout — attempt to cancel the orphaned order
+    try:
+        client.cancel_order_by_id(order_id)
+        logger.warning("Order %s timed out after %.0fs — cancelled", order_id, timeout_seconds)
+    except Exception as cancel_err:
+        logger.error("Order %s timed out and cancel failed: %s — order may still be live", order_id, cancel_err)
+
     return OrderResult(
         success=False,
         order_id=order_id,
         filled_qty=None,
         filled_avg_price=None,
-        error=f"Timeout waiting for fill after {timeout_seconds}s",
+        error=f"Timeout waiting for fill after {timeout_seconds}s (cancel attempted)",
     )
 
 

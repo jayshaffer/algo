@@ -217,3 +217,34 @@ class TestWaitForFill:
 
         assert result.success is True
         assert result.filled_qty == Decimal("10")
+
+
+class TestWaitForFillCancellation:
+    @patch("v2.executor.get_trading_client")
+    def test_timeout_cancels_order(self, mock_client):
+        """On timeout, cancel_order_by_id should be called to prevent ghost fills."""
+        mock_order = MagicMock()
+        mock_order.status.value = "accepted"
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert "cancel attempted" in result.error.lower()
+        mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
+
+    @patch("v2.executor.get_trading_client")
+    def test_timeout_cancel_failure_still_returns_timeout(self, mock_client):
+        """If cancel fails, should still return timeout error (not raise)."""
+        mock_order = MagicMock()
+        mock_order.status.value = "accepted"
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+        mock_client.return_value.cancel_order_by_id.side_effect = Exception("API error")
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert "cancel attempted" in result.error.lower()
+        mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
