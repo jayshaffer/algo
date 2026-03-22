@@ -1,14 +1,19 @@
 """Trade execution and position management via Alpaca API."""
 
+import logging
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestQuoteRequest
+
+logger = logging.getLogger(__name__)
 
 from .database.trading_db import (
     upsert_position,
@@ -247,11 +252,21 @@ def execute_limit_order(
         )
 
 
-def get_latest_price(ticker: str) -> Optional[Decimal]:
-    """Get latest quote price for a ticker."""
-    from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.requests import StockLatestQuoteRequest
+def get_latest_price(
+    ticker: str,
+    max_age_seconds: int = 60,
+    max_spread_pct: Decimal = Decimal("0.05"),
+) -> Optional[Decimal]:
+    """Get latest quote price for a ticker with staleness and spread validation.
 
+    Args:
+        ticker: Stock ticker symbol
+        max_age_seconds: Reject quotes older than this (seconds). 0 to disable.
+        max_spread_pct: Reject quotes with bid-ask spread wider than this fraction. 0 to disable.
+
+    Returns:
+        Ask price as Decimal, or None if quote is stale, wide-spread, zero, or unavailable.
+    """
     api_key = os.environ.get("ALPACA_API_KEY")
     secret_key = os.environ.get("ALPACA_SECRET_KEY")
 
@@ -261,10 +276,28 @@ def get_latest_price(ticker: str) -> Optional[Decimal]:
     try:
         quotes = client.get_stock_latest_quote(request)
         quote = quotes[ticker]
-        price = Decimal(str(quote.ask_price))
-        if price == 0:
+
+        ask = Decimal(str(quote.ask_price))
+        if ask == 0:
             return None
-        return price
+
+        # Staleness check
+        if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
+            from datetime import timezone
+            age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
+            if age > max_age_seconds:
+                logger.warning("%s: quote is %.0fs old (max %ds) — rejecting", ticker, age, max_age_seconds)
+                return None
+
+        # Spread check
+        bid = Decimal(str(quote.bid_price)) if hasattr(quote, "bid_price") else Decimal(0)
+        if max_spread_pct > 0 and bid > 0:
+            spread_pct = (ask - bid) / bid
+            if spread_pct > max_spread_pct:
+                logger.warning("%s: spread %.2f%% exceeds max %.2f%% — rejecting", ticker, float(spread_pct) * 100, float(max_spread_pct) * 100)
+                return None
+
+        return ask
     except Exception:
         return None
 
