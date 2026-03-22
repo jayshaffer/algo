@@ -290,3 +290,40 @@ class TestValidateDecisionTotalExposure:
             positions=positions, portfolio_value=Decimal("10000"),
         )
         assert is_valid  # $400 / $10000 = 4% < 10%
+
+
+class TestValidateDecisionPendingSells:
+    def test_sell_rejected_when_pending_orders_consume_shares(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=8.0)
+        positions = {"AAPL": Decimal("10")}
+        open_sell_orders = {"AAPL": Decimal("5")}
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
+            positions=positions, portfolio_value=Decimal("10000"),
+            open_sell_orders=open_sell_orders,
+        )
+        assert not is_valid
+        assert "pending" in reason.lower() or "available" in reason.lower()
+
+    def test_sell_allowed_after_accounting_for_pending(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=4.0)
+        positions = {"AAPL": Decimal("10")}
+        open_sell_orders = {"AAPL": Decimal("5")}
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
+            positions=positions, portfolio_value=Decimal("10000"),
+            open_sell_orders=open_sell_orders,
+        )
+        assert is_valid
+
+    def test_sell_works_with_no_pending_orders(self):
+        from tests.v2.conftest import make_trading_decision
+        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=5.0)
+        positions = {"AAPL": Decimal("10")}
+        is_valid, reason = validate_decision(
+            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
+            positions=positions, portfolio_value=Decimal("10000"),
+        )
+        assert is_valid

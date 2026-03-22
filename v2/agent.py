@@ -255,6 +255,7 @@ def validate_decision(
     current_price: Decimal,
     positions: dict[str, Decimal],
     portfolio_value: Decimal = None,
+    open_sell_orders: dict[str, Decimal] = None,
 ) -> tuple[bool, str]:
     """
     Validate a trading decision before execution.
@@ -265,6 +266,7 @@ def validate_decision(
         current_price: Current stock price
         positions: Dict of ticker -> shares held
         portfolio_value: Total portfolio value (for position-size cap)
+        open_sell_orders: Dict of ticker -> shares committed to pending sell orders
 
     Returns:
         Tuple of (is_valid, reason)
@@ -299,8 +301,13 @@ def validate_decision(
             return False, "Sell requires positive quantity"
 
         held = positions.get(decision.ticker, Decimal(0))
-        if Decimal(str(decision.quantity)) > held:
-            return False, f"Insufficient shares: want to sell {decision.quantity}, hold {held}"
+        pending_sell = (open_sell_orders or {}).get(decision.ticker, Decimal(0))
+        available = held - pending_sell
+        if Decimal(str(decision.quantity)) > available:
+            return False, (
+                f"Insufficient available shares: want to sell {decision.quantity}, "
+                f"hold {held}, pending sell {pending_sell}, available {available}"
+            )
 
         return True, "Sell order validated"
 

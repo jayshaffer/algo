@@ -27,7 +27,7 @@ from .agent import (
     ExecutorDecision,
     DEFAULT_EXECUTOR_MODEL,
 )
-from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch
+from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
 
 logger = logging.getLogger("trader")
 
@@ -199,6 +199,15 @@ def run_trading_session(
     buying_power = account_info["buying_power"]
     portfolio_value = account_info["portfolio_value"]
 
+    # Build pending sell orders map for validation
+    open_orders_list = get_open_orders()
+    open_sell_orders = {}
+    for order in open_orders_list:
+        if order["side"] == "sell" and order["status"] in ("new", "accepted", "partially_filled"):
+            ticker = order["ticker"]
+            remaining = order["qty"] - (order.get("filled_qty") or Decimal(0))
+            open_sell_orders[ticker] = open_sell_orders.get(ticker, Decimal(0)) + remaining
+
     trades_executed = 0
     trades_failed = 0
     total_buy_value = Decimal(0)
@@ -226,7 +235,8 @@ def run_trading_session(
 
         # Validate decision
         is_valid, reason = validate_decision(
-            decision, buying_power, price, positions, portfolio_value
+            decision, buying_power, price, positions, portfolio_value,
+            open_sell_orders=open_sell_orders,
         )
 
         if not is_valid:
