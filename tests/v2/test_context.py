@@ -435,7 +435,7 @@ class TestGetAttributionContext:
         ]
         from v2.context import get_attribution_context
         result = get_attribution_context()
-        assert "Predictive" in result
+        assert "Profitable" in result
         assert "news_signal:earnings" in result
 
 

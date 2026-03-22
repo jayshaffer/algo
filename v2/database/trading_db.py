@@ -434,6 +434,44 @@ def get_signal_attribution() -> list:
         return cur.fetchall()
 
 
+# --- Session Tracking ---
+
+def insert_session_record(session_date, session_type="daily") -> int:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO sessions (session_date, session_type, status)
+            VALUES (%s, %s, 'running')
+            RETURNING id
+        """, (session_date, session_type))
+        return cur.fetchone()["id"]
+
+
+def get_session_for_date(session_date, session_type="daily"):
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM sessions
+            WHERE session_date = %s AND session_type = %s
+            ORDER BY id DESC LIMIT 1
+        """, (session_date, session_type))
+        return cur.fetchone()
+
+
+def complete_session(session_id):
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE sessions SET status = 'completed', completed_at = NOW()
+            WHERE id = %s
+        """, (session_id,))
+
+
+def fail_session(session_id, error_text):
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE sessions SET status = 'failed', completed_at = NOW(), error = %s
+            WHERE id = %s
+        """, (error_text, session_id))
+
+
 # --- Strategy State ---
 
 def insert_strategy_state(identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version) -> int:

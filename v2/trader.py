@@ -15,10 +15,13 @@ from .executor import (
     execute_market_order,
     get_latest_price,
     calculate_position_size,
+    is_market_open,
+    wait_for_fill,
 )
 from .agent import (
     get_trading_decisions,
     validate_decision,
+    validate_signal_refs,
     format_decisions_for_logging,
     AgentResponse,
     ExecutorDecision,
@@ -97,6 +100,23 @@ def run_trading_session(
         errors.append(f"Order sync failed: {e}")
         logger.error("Order sync failed: %s", e)
         orders_synced = 0
+
+    # Market hours gate — skip trading if market is closed (dry_run bypasses)
+    if not dry_run and not is_market_open():
+        logger.warning("Market is closed. Skipping trading session (use --dry-run to bypass)")
+        errors.append("Market is closed — skipped trading")
+        return TradingSessionResult(
+            timestamp=timestamp,
+            account_snapshot_id=0,
+            positions_synced=positions_synced,
+            orders_synced=orders_synced,
+            decisions_made=0,
+            trades_executed=0,
+            trades_failed=0,
+            total_buy_value=Decimal(0),
+            total_sell_value=Decimal(0),
+            errors=errors,
+        )
 
     # Step 2: Take account snapshot
     logger.info("[Step 2] Taking account snapshot")
@@ -218,18 +238,47 @@ def run_trading_session(
         )
 
         if result.success:
+            # Wait for fill confirmation (skip for dry run — fills are instant)
+            if not dry_run and result.order_id != "DRY_RUN":
+                fill = wait_for_fill(result.order_id)
+                if not fill.success:
+                    trades_failed += 1
+                    errors.append(f"{decision.ticker} fill failed: {fill.error}")
+                    logger.error("  %s: fill failed: %s", decision.ticker, fill.error)
+                    continue
+                # Update result with fill data
+                result = fill
+
             trades_executed += 1
             order_ids[i] = result.order_id
             order_results[i] = result
-            trade_value = price * Decimal(str(decision.quantity))
+
+            # Use fill price if available, fall back to quote price
+            fill_price = result.filled_avg_price if result.filled_avg_price else price
+            trade_value = fill_price * Decimal(str(decision.quantity))
 
             if decision.action == "buy":
                 total_buy_value += trade_value
-                buying_power -= trade_value
             else:
                 total_sell_value += trade_value
 
-            status = "[DRY RUN]" if dry_run else f"Order {result.order_id}"
+            # Refresh buying power from Alpaca after real trades
+            if not dry_run:
+                try:
+                    refreshed = get_account_info()
+                    buying_power = refreshed["buying_power"]
+                    portfolio_value = refreshed["portfolio_value"]
+                except Exception as e:
+                    # Fall back to local estimate if refresh fails
+                    logger.warning("Could not refresh buying power: %s — using local estimate", e)
+                    if decision.action == "buy":
+                        buying_power -= trade_value
+            else:
+                # Dry run: use local estimate
+                if decision.action == "buy":
+                    buying_power -= trade_value
+
+            status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
             logger.info("  %s - Success", status)
 
             # Mark thesis as executed if trade was based on one
@@ -238,7 +287,7 @@ def run_trading_session(
                     close_thesis(
                         thesis_id=decision.thesis_id,
                         status="executed",
-                        reason=f"Trade executed: {decision.action} {decision.quantity} shares"
+                        reason=f"Trade executed: {decision.action} {decision.quantity} shares @ ${fill_price}"
                     )
                     logger.info("  Thesis %d marked as executed", decision.thesis_id)
                 except Exception as e:
@@ -291,14 +340,20 @@ def run_trading_session(
             logger.error("Error logging %s: %s", decision.ticker, e)
             continue
 
-        # Log signal-decision links for attribution
+        # Log signal-decision links for attribution (validate first)
         if decision.signal_refs:
             try:
-                signal_links = [
-                    (decision_id, ref["type"], ref["id"])
-                    for ref in decision.signal_refs
-                ]
-                insert_decision_signals_batch(signal_links)
+                validated_refs = validate_signal_refs(decision.signal_refs)
+                if len(validated_refs) < len(decision.signal_refs):
+                    logger.warning("%s: stripped %d invalid signal refs",
+                                   decision.ticker,
+                                   len(decision.signal_refs) - len(validated_refs))
+                if validated_refs:
+                    signal_links = [
+                        (decision_id, ref["type"], ref["id"])
+                        for ref in validated_refs
+                    ]
+                    insert_decision_signals_batch(signal_links)
             except Exception as e:
                 errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
 

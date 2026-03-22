@@ -301,3 +301,45 @@ def validate_decision(
         return True, "Sell order validated"
 
     return False, f"Unknown action: {decision.action}"
+
+
+# Valid signal types and their corresponding DB tables
+_SIGNAL_TYPE_TABLES = {
+    "news_signal": "news_signals",
+    "macro_signal": "macro_signals",
+    "thesis": "theses",
+}
+
+
+def validate_signal_refs(signal_refs: list[dict]) -> list[dict]:
+    """Validate signal refs against the database, stripping invalid ones.
+
+    Args:
+        signal_refs: List of {"type": str, "id": int} dicts from LLM output
+
+    Returns:
+        Filtered list containing only refs that exist in the database.
+    """
+    if not signal_refs:
+        return []
+
+    from .database.connection import get_cursor
+
+    valid = []
+    for ref in signal_refs:
+        sig_type = ref.get("type", "")
+        sig_id = ref.get("id")
+
+        table = _SIGNAL_TYPE_TABLES.get(sig_type)
+        if not table:
+            logger.warning("Stripping signal ref with unknown type: %s", sig_type)
+            continue
+
+        with get_cursor() as cur:
+            cur.execute(f"SELECT id FROM {table} WHERE id = %s", (sig_id,))
+            if cur.fetchone():
+                valid.append(ref)
+            else:
+                logger.warning("Stripping signal ref %s:%s — not found in DB", sig_type, sig_id)
+
+    return valid
