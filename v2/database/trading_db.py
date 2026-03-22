@@ -29,6 +29,7 @@ def insert_news_signals_batch(signals: list[tuple]) -> int:
         execute_values(cur, """
             INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at)
             VALUES %s
+            ON CONFLICT DO NOTHING
         """, signals)
         return len(signals)
 
@@ -69,6 +70,7 @@ def insert_macro_signals_batch(signals: list[tuple]) -> int:
         execute_values(cur, """
             INSERT INTO macro_signals (headline, category, affected_sectors, sentiment, published_at)
             VALUES %s
+            ON CONFLICT DO NOTHING
         """, signals)
         return len(signals)
 

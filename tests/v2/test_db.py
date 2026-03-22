@@ -857,3 +857,23 @@ class TestStrategyMemos:
         sql = mock_cursor.execute.call_args[0][0]
         assert "LIMIT" in sql
         assert "ORDER BY" in sql
+
+
+class TestNewsSignalDedup:
+    """Verify batch inserts use ON CONFLICT for deduplication."""
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_news_batch_insert_uses_on_conflict(self, mock_ev, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_news_signals_batch
+        signals = [("AAPL", "Headline", "earnings", "bullish", "high", datetime.now())]
+        insert_news_signals_batch(signals)
+        sql_template = mock_ev.call_args[0][1]
+        assert "ON CONFLICT" in sql_template.upper()
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_macro_batch_insert_uses_on_conflict(self, mock_ev, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_macro_signals_batch
+        signals = [("Fed holds", "fed", ["finance"], "neutral", datetime.now())]
+        insert_macro_signals_batch(signals)
+        sql_template = mock_ev.call_args[0][1]
+        assert "ON CONFLICT" in sql_template.upper()
