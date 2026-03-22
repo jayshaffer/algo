@@ -32,7 +32,10 @@ from .strategy import StrategyReflectionResult, run_strategy_reflection
 from .twitter import TwitterStageResult, run_twitter_stage
 from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
-from .database.trading_db import get_session_for_date, insert_session_record, complete_session, fail_session
+from .database.trading_db import (
+    get_session_for_date, insert_session_record, complete_session, fail_session,
+    insert_session_stage, complete_session_stage, fail_session_stage, get_completed_stages,
+)
 
 logger = logging.getLogger("session")
 
@@ -96,6 +99,7 @@ def run_session(
     from datetime import date
     today = date.today()
     session_id = None
+    completed_stages = set()
 
     if not force:
         try:
@@ -105,6 +109,10 @@ def run_session(
                 result.learning_error = f"Session already completed for {today}"
                 result.duration_seconds = time.monotonic() - start
                 return result
+            if existing:
+                completed_stages = get_completed_stages(existing["id"])
+                if completed_stages:
+                    logger.info("Resuming session — already completed: %s", completed_stages)
         except Exception as e:
             logger.warning("Could not check session status: %s — proceeding", e)
 
@@ -127,88 +135,200 @@ def run_session(
         logger.warning("Learning refresh failed: %s — continuing with stale data", e)
 
     # Stage 1: News pipeline
-    if skip_pipeline:
-        logger.info("[Stage 1] News pipeline — SKIPPED")
+    if skip_pipeline or "pipeline" in completed_stages:
+        logger.info("[Stage 1] News pipeline — SKIPPED%s",
+                     " (completed in prior run)" if "pipeline" in completed_stages else "")
     else:
         logger.info("[Stage 1] Running news pipeline")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "pipeline")
+            except Exception:
+                pass
         try:
             result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit)
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "pipeline")
+                except Exception:
+                    pass
         except Exception as e:
             result.pipeline_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "pipeline", str(e))
+                except Exception:
+                    pass
             logger.error("Pipeline failed: %s — continuing with existing signals", e)
 
     # Stage 2: Claude strategist (receives attribution constraints)
-    if skip_ideation:
-        logger.info("[Stage 2] Strategist — SKIPPED")
+    if skip_ideation or "strategist" in completed_stages:
+        logger.info("[Stage 2] Strategist — SKIPPED%s",
+                     " (completed in prior run)" if "strategist" in completed_stages else "")
     else:
         logger.info("[Stage 2] Running Claude strategist")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "strategist")
+            except Exception:
+                pass
         try:
             result.strategist_result = run_strategist_loop(
                 model=model,
                 max_turns=max_turns,
                 attribution_constraints=attribution_constraints,
             )
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "strategist")
+                except Exception:
+                    pass
         except Exception as e:
             result.strategist_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "strategist", str(e))
+                except Exception:
+                    pass
             logger.error("Strategist failed: %s — continuing with existing playbook", e)
 
     # Stage 3: Trading session
-    if skip_executor:
-        logger.info("[Stage 3] Trading executor — SKIPPED")
+    if skip_executor or "executor" in completed_stages:
+        logger.info("[Stage 3] Trading executor — SKIPPED%s",
+                     " (completed in prior run)" if "executor" in completed_stages else "")
     else:
         logger.info("[Stage 3] Running trading session")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "executor")
+            except Exception:
+                pass
         try:
             result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "executor")
+                except Exception:
+                    pass
         except Exception as e:
             result.trading_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "executor", str(e))
+                except Exception:
+                    pass
             logger.error("Trading session failed: %s", e)
 
     # Stage 4: Strategy reflection
-    if skip_strategy:
-        logger.info("[Stage 4] Strategy reflection — SKIPPED")
+    if skip_strategy or "strategy" in completed_stages:
+        logger.info("[Stage 4] Strategy reflection — SKIPPED%s",
+                     " (completed in prior run)" if "strategy" in completed_stages else "")
         result.skipped_strategy = True
     else:
         logger.info("[Stage 4] Running strategy reflection")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "strategy")
+            except Exception:
+                pass
         try:
             result.strategy_result = run_strategy_reflection(model=model, max_turns=10)
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "strategy")
+                except Exception:
+                    pass
         except Exception as e:
             result.strategy_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "strategy", str(e))
+                except Exception:
+                    pass
             logger.error("Strategy reflection failed: %s", e)
 
     # Stage 5: Twitter posting
-    if skip_twitter:
-        logger.info("[Stage 5] Twitter posting — SKIPPED")
+    if skip_twitter or "twitter" in completed_stages:
+        logger.info("[Stage 5] Twitter posting — SKIPPED%s",
+                     " (completed in prior run)" if "twitter" in completed_stages else "")
         result.skipped_twitter = True
     else:
         logger.info("[Stage 5] Running Twitter posting")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "twitter")
+            except Exception:
+                pass
         try:
             result.twitter_result = run_twitter_stage()
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "twitter")
+                except Exception:
+                    pass
         except Exception as e:
             result.twitter_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "twitter", str(e))
+                except Exception:
+                    pass
             logger.error("Twitter stage failed: %s", e)
 
     # Stage 5b: Bluesky posting
-    if skip_bluesky:
-        logger.info("[Stage 5b] Bluesky posting — SKIPPED")
+    if skip_bluesky or "bluesky" in completed_stages:
+        logger.info("[Stage 5b] Bluesky posting — SKIPPED%s",
+                     " (completed in prior run)" if "bluesky" in completed_stages else "")
         result.skipped_bluesky = True
     else:
         logger.info("[Stage 5b] Running Bluesky posting")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "bluesky")
+            except Exception:
+                pass
         try:
             result.bluesky_result = run_bluesky_stage()
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "bluesky")
+                except Exception:
+                    pass
         except Exception as e:
             result.bluesky_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "bluesky", str(e))
+                except Exception:
+                    pass
             logger.error("Bluesky stage failed: %s", e)
 
     # Stage 6: Dashboard publish
-    if skip_dashboard:
-        logger.info("[Stage 6] Dashboard publish — SKIPPED")
+    if skip_dashboard or "dashboard" in completed_stages:
+        logger.info("[Stage 6] Dashboard publish — SKIPPED%s",
+                     " (completed in prior run)" if "dashboard" in completed_stages else "")
         result.skipped_dashboard = True
     else:
         logger.info("[Stage 6] Publishing public dashboard")
+        if session_id:
+            try:
+                insert_session_stage(session_id, "dashboard")
+            except Exception:
+                pass
         try:
             result.dashboard_result = run_dashboard_stage()
+            if session_id:
+                try:
+                    complete_session_stage(session_id, "dashboard")
+                except Exception:
+                    pass
         except Exception as e:
             result.dashboard_error = str(e)
+            if session_id:
+                try:
+                    fail_session_stage(session_id, "dashboard", str(e))
+                except Exception:
+                    pass
             logger.error("Dashboard publish failed: %s", e)
 
     result.duration_seconds = time.monotonic() - start

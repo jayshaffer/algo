@@ -536,3 +536,116 @@ class TestSessionIdempotency:
             result = run_session(dry_run=True, force=True)
 
         mock_pipeline.assert_called_once()
+
+
+class TestPerStageResume:
+    def test_resumes_skipping_completed_stages(self):
+        """Re-run should skip stages that completed in a prior run."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.get_completed_stages", return_value={"pipeline", "strategist"}), \
+             patch("v2.session.insert_session_record", return_value=2), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop") as mock_strat, \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_get.return_value = {"id": 1, "status": "failed"}
+
+            result = run_session(dry_run=True)
+
+        # Pipeline and strategist were completed before — should be skipped
+        mock_pipeline.assert_not_called()
+        mock_strat.assert_not_called()
+        # Executor was not completed — should run
+        mock_trade.assert_called_once()
+
+    def test_stage_tracking_calls_insert_and_complete(self):
+        """Successful stage should call insert_session_stage then complete_session_stage."""
+        with patch("v2.session.get_session_for_date", return_value=None), \
+             patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.get_completed_stages", return_value=set()), \
+             patch("v2.session.insert_session_stage") as mock_insert_stage, \
+             patch("v2.session.complete_session_stage") as mock_complete_stage, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            run_session(dry_run=True)
+
+        # Should have called insert_session_stage for each stage
+        stage_names_inserted = [call[0][1] for call in mock_insert_stage.call_args_list]
+        assert "pipeline" in stage_names_inserted
+        assert "strategist" in stage_names_inserted
+        assert "executor" in stage_names_inserted
+        # Should have called complete_session_stage for each stage
+        stage_names_completed = [call[0][1] for call in mock_complete_stage.call_args_list]
+        assert "pipeline" in stage_names_completed
+        assert "executor" in stage_names_completed
+
+    def test_failed_stage_calls_fail_session_stage(self):
+        """A stage that raises should call fail_session_stage."""
+        with patch("v2.session.get_session_for_date", return_value=None), \
+             patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.get_completed_stages", return_value=set()), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage"), \
+             patch("v2.session.fail_session_stage") as mock_fail_stage, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline", side_effect=Exception("fetch error")), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.pipeline_error == "fetch error"
+        mock_fail_stage.assert_any_call(5, "pipeline", "fetch error")
+
+    def test_stage_tracking_failure_does_not_break_session(self):
+        """If insert_session_stage raises, the stage should still run."""
+        with patch("v2.session.get_session_for_date", return_value=None), \
+             patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.get_completed_stages", return_value=set()), \
+             patch("v2.session.insert_session_stage", side_effect=Exception("DB down")), \
+             patch("v2.session.complete_session_stage", side_effect=Exception("DB down")), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        # Pipeline should still have run despite tracking failures
+        mock_pipeline.assert_called_once()
+        # No pipeline_error since the pipeline itself succeeded
+        assert result.pipeline_error is None

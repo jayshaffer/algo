@@ -565,3 +565,42 @@ def get_tweets_for_date(session_date) -> list:
             (session_date,),
         )
         return cur.fetchall()
+
+
+# --- Session Stages ---
+
+def insert_session_stage(session_id: int, stage_name: str) -> int:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO session_stages (session_id, stage_name, status)
+            VALUES (%s, %s, 'running')
+            ON CONFLICT (session_id, stage_name) DO UPDATE SET
+                status = 'running', started_at = NOW(), completed_at = NULL, error = NULL
+            RETURNING id
+        """, (session_id, stage_name))
+        return cur.fetchone()["id"]
+
+
+def complete_session_stage(session_id: int, stage_name: str):
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE session_stages SET status = 'completed', completed_at = NOW()
+            WHERE session_id = %s AND stage_name = %s
+        """, (session_id, stage_name))
+
+
+def fail_session_stage(session_id: int, stage_name: str, error: str):
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE session_stages SET status = 'failed', completed_at = NOW(), error = %s
+            WHERE session_id = %s AND stage_name = %s
+        """, (error, session_id, stage_name))
+
+
+def get_completed_stages(session_id: int) -> set[str]:
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT stage_name FROM session_stages
+            WHERE session_id = %s AND status = 'completed'
+        """, (session_id,))
+        return {row["stage_name"] for row in cur.fetchall()}

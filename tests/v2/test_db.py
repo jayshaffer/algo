@@ -760,6 +760,43 @@ class TestSessionTracking:
         assert "failed" in sql
 
 
+class TestSessionStages:
+    def test_insert_session_stage(self, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_session_stage
+        mock_cursor.fetchone.return_value = {"id": 1}
+        result = insert_session_stage(session_id=1, stage_name="pipeline")
+        assert result == 1
+        assert "session_stages" in mock_cursor.execute.call_args[0][0]
+
+    def test_complete_session_stage(self, mock_db, mock_cursor):
+        from v2.database.trading_db import complete_session_stage
+        complete_session_stage(session_id=1, stage_name="pipeline")
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "completed" in sql
+
+    def test_fail_session_stage(self, mock_db, mock_cursor):
+        from v2.database.trading_db import fail_session_stage
+        fail_session_stage(session_id=1, stage_name="pipeline", error="boom")
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "failed" in sql
+        params = mock_cursor.execute.call_args[0][1]
+        assert "boom" in params
+
+    def test_get_completed_stages(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_completed_stages
+        mock_cursor.fetchall.return_value = [
+            {"stage_name": "pipeline"}, {"stage_name": "strategist"},
+        ]
+        result = get_completed_stages(session_id=1)
+        assert result == {"pipeline", "strategist"}
+
+    def test_get_completed_stages_empty(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_completed_stages
+        mock_cursor.fetchall.return_value = []
+        result = get_completed_stages(session_id=1)
+        assert result == set()
+
+
 class TestStrategyMemos:
     def test_insert_strategy_memo(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = {"id": 1}
