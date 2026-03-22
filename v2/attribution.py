@@ -24,10 +24,10 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                     ds.decision_id,
                     CASE
                         WHEN ds.signal_type = 'news_signal' THEN
-                            'news_signal:' || COALESCE(ns.category, 'unknown')
+                            'news_signal:' || COALESCE(ns.category, 'unknown') || ':' || d.action
                         WHEN ds.signal_type = 'macro_signal' THEN
-                            'macro_signal:' || COALESCE(ms.category, 'unknown')
-                        ELSE ds.signal_type
+                            'macro_signal:' || COALESCE(ms.category, 'unknown') || ':' || d.action
+                        ELSE ds.signal_type || ':' || d.action
                     END AS category,
                     d.outcome_7d,
                     d.outcome_30d
