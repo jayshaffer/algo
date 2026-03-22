@@ -15,6 +15,7 @@ from .database.trading_db import (
     get_active_theses,
     get_playbook,
     get_playbook_actions,
+    get_pending_playbook_actions,
     get_signal_attribution,
 )
 from .attribution import get_attribution_summary
@@ -376,7 +377,7 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         playbook_date = date.today()
 
     playbook = get_playbook(playbook_date)
-    playbook_actions_rows = get_playbook_actions(playbook["id"]) if playbook else []
+    playbook_actions_rows = get_pending_playbook_actions(playbook["id"]) if playbook else []
 
     actions = [
         PlaybookAction(

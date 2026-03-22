@@ -412,6 +412,44 @@ class TestPlaybookActions:
         assert result == 2
 
 
+class TestPlaybookActionStatus:
+    def test_update_playbook_action_status(self, mock_db, mock_cursor):
+        from v2.database.trading_db import update_playbook_action_status
+        update_playbook_action_status(action_id=1, status="executed")
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "playbook_actions" in sql
+        assert "status" in sql
+
+    def test_update_playbook_action_status_failed(self, mock_db, mock_cursor):
+        from v2.database.trading_db import update_playbook_action_status
+        update_playbook_action_status(action_id=5, status="failed")
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == ("failed", 5)
+
+    def test_get_pending_playbook_actions(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_pending_playbook_actions
+        from tests.v2.conftest import make_playbook_action_row
+        mock_cursor.fetchall.return_value = [make_playbook_action_row()]
+        result = get_pending_playbook_actions(playbook_id=1)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "pending" in sql
+        assert len(result) == 1
+
+    def test_get_pending_playbook_actions_filters_null_status(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_pending_playbook_actions
+        mock_cursor.fetchall.return_value = []
+        get_pending_playbook_actions(playbook_id=1)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "status IS NULL" in sql
+        assert "ORDER BY priority" in sql
+
+    def test_get_pending_playbook_actions_empty(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_pending_playbook_actions
+        mock_cursor.fetchall.return_value = []
+        result = get_pending_playbook_actions(playbook_id=99)
+        assert result == []
+
+
 class TestSignalAttribution:
     def test_upsert_signal_attribution(self, mock_db, mock_cursor):
         from v2.database.trading_db import upsert_signal_attribution

@@ -372,6 +372,23 @@ def get_playbook_actions(playbook_id) -> list:
         return cur.fetchall()
 
 
+def update_playbook_action_status(action_id: int, status: str):
+    """Update the status of a playbook action (e.g. pending -> executed)."""
+    with get_cursor() as cur:
+        cur.execute("UPDATE playbook_actions SET status = %s WHERE id = %s", (status, action_id))
+
+
+def get_pending_playbook_actions(playbook_id: int) -> list[dict]:
+    """Get pending (not yet executed) actions for a playbook."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM playbook_actions
+            WHERE playbook_id = %s AND (status = 'pending' OR status IS NULL)
+            ORDER BY priority ASC
+        """, (playbook_id,))
+        return [dict(row) for row in cur.fetchall()]
+
+
 def delete_playbook_actions(playbook_id) -> int:
     """Delete all actions for a playbook, clearing decision references first."""
     with get_cursor() as cur:

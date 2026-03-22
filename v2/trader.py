@@ -271,6 +271,14 @@ def run_trading_session(
             order_ids[i] = result.order_id
             order_results[i] = result
 
+            if decision.playbook_action_id:
+                try:
+                    from .database.trading_db import update_playbook_action_status
+                    update_playbook_action_status(decision.playbook_action_id, "executed")
+                except Exception as e:
+                    logger.warning("Could not mark playbook action %d as executed: %s",
+                                   decision.playbook_action_id, e)
+
             # Use fill price if available, fall back to quote price
             fill_price = result.filled_avg_price if result.filled_avg_price else price
             trade_value = fill_price * Decimal(str(decision.quantity))
@@ -314,6 +322,12 @@ def run_trading_session(
             trades_failed += 1
             errors.append(f"{decision.ticker} execution failed: {result.error}")
             logger.error("  %s: execution failed: %s", decision.ticker, result.error)
+            if hasattr(decision, 'playbook_action_id') and decision.playbook_action_id:
+                try:
+                    from .database.trading_db import update_playbook_action_status
+                    update_playbook_action_status(decision.playbook_action_id, "failed")
+                except Exception:
+                    pass
 
     # Step 5b: Process thesis invalidations
     if response.thesis_invalidations:
