@@ -259,9 +259,24 @@ def run_trading_session(
 
             if decision.action == "buy":
                 total_buy_value += trade_value
-                buying_power -= trade_value
             else:
                 total_sell_value += trade_value
+
+            # Refresh buying power from Alpaca after real trades
+            if not dry_run:
+                try:
+                    refreshed = get_account_info()
+                    buying_power = refreshed["buying_power"]
+                    portfolio_value = refreshed["portfolio_value"]
+                except Exception as e:
+                    # Fall back to local estimate if refresh fails
+                    logger.warning("Could not refresh buying power: %s — using local estimate", e)
+                    if decision.action == "buy":
+                        buying_power -= trade_value
+            else:
+                # Dry run: use local estimate
+                if decision.action == "buy":
+                    buying_power -= trade_value
 
             status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
             logger.info("  %s - Success", status)
