@@ -55,6 +55,8 @@ class TradingSessionResult:
     total_buy_value: Decimal
     total_sell_value: Decimal
     errors: list[str]
+    market_summary: str = ""
+    risk_assessment: str = ""
 
 
 def run_trading_session(
@@ -421,6 +423,9 @@ def run_trading_session(
                     insert_decision_signals_batch(signal_links)
             except Exception as e:
                 errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
+        else:
+            logger.warning("%s: no signal_refs cited — decision will be excluded from attribution",
+                           decision.ticker)
 
     logger.info("Logged %d decisions", len(response.decisions))
 
@@ -445,6 +450,8 @@ def run_trading_session(
         total_buy_value=total_buy_value,
         total_sell_value=total_sell_value,
         errors=errors,
+        market_summary=response.market_summary,
+        risk_assessment=response.risk_assessment,
     )
 
 

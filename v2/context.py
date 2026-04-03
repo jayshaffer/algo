@@ -477,6 +477,15 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
     except Exception:
         equity_summary = ""
 
+    # Today's already-executed decisions (so executor doesn't duplicate trades)
+    today = date.today()
+    todays_decisions = [
+        {"ticker": d["ticker"], "action": d["action"],
+         "quantity": float(d["quantity"]) if d.get("quantity") else None,
+         "price": float(d["price"]) if d.get("price") else None}
+        for d in recent if d["date"] == today
+    ]
+
     return ExecutorInput(
         playbook_actions=actions,
         positions=[dict(p) for p in positions],
@@ -489,4 +498,5 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         strategy_identity=strategy_identity,
         strategy_rules=strategy_rules,
         equity_summary=equity_summary,
+        todays_decisions=todays_decisions,
     )

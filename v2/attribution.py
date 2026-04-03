@@ -27,17 +27,25 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                     ds.decision_id,
                     CASE
                         WHEN ds.signal_type = 'news_signal' THEN
-                            'news_signal:' || COALESCE(ns.category, 'unknown') || ':' || d.action
+                            'news_signal:' || COALESCE(ns.category, 'unknown')
+                            || ':' || COALESCE(ns.sentiment, 'neutral')
+                            || ':' || d.action
                         WHEN ds.signal_type = 'macro_signal' THEN
-                            'macro_signal:' || COALESCE(ms.category, 'unknown') || ':' || d.action
+                            'macro_signal:' || COALESCE(ms.category, 'unknown')
+                            || ':' || COALESCE(ms.sentiment, 'neutral')
+                            || ':' || d.action
                         ELSE ds.signal_type || ':' || d.action
                     END AS category,
                     d.outcome_7d,
                     d.outcome_30d,
                     d.benchmark_7d,
                     d.benchmark_30d,
-                    d.outcome_7d - COALESCE(d.benchmark_7d, 0) AS alpha_7d,
-                    d.outcome_30d - COALESCE(d.benchmark_30d, 0) AS alpha_30d
+                    CASE WHEN d.benchmark_7d IS NOT NULL
+                         THEN d.outcome_7d - d.benchmark_7d
+                         ELSE NULL END AS alpha_7d,
+                    CASE WHEN d.benchmark_30d IS NOT NULL
+                         THEN d.outcome_30d - d.benchmark_30d
+                         ELSE NULL END AS alpha_30d
                 FROM decision_signals ds
                 JOIN decisions d ON d.id = ds.decision_id
                 LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
@@ -54,6 +62,7 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                 AVG(CASE WHEN alpha_30d > 0 THEN 1.0 ELSE 0.0 END) AS win_rate_30d
             FROM categorized
             WHERE outcome_7d IS NOT NULL
+              AND alpha_7d IS NOT NULL
             GROUP BY category
             ORDER BY sample_size DESC
         """, (cutoff_date,))

@@ -50,10 +50,13 @@ class ExecutorInput:
     strategy_identity: str = ""
     strategy_rules: str = ""
     equity_summary: str = ""
+    todays_decisions: list[dict] = None
 
     def __post_init__(self):
         if self.current_prices is None:
             self.current_prices = {}
+        if self.todays_decisions is None:
+            self.todays_decisions = []
 
 
 @dataclass
@@ -106,6 +109,7 @@ INPUTS (as JSON object):
 9. strategy_identity — the system's evolving trading identity and style (respect this)
 10. strategy_rules — active constraints and preferences from past performance (MUST follow these)
 11. equity_summary — recent account performance for position sizing context
+12. todays_decisions — decisions already executed THIS session (avoid duplicating trades or over-deploying capital to the same ticker)
 
 RULES:
 - For each playbook action: execute, adjust, or skip (with reason)
@@ -158,6 +162,7 @@ def get_trading_decisions(
         "strategy_identity": executor_input.strategy_identity,
         "strategy_rules": executor_input.strategy_rules,
         "equity_summary": executor_input.equity_summary,
+        "todays_decisions": executor_input.todays_decisions,
     }
     input_json = json.dumps(input_data, default=str)
 
