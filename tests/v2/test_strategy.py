@@ -150,7 +150,7 @@ class TestToolGetSessionSummary:
         mock_attr.return_value = "Attribution data here"
 
         result = tool_get_session_summary()
-        assert "Recent decisions" in result
+        assert "Decisions" in result
         assert "AAPL" in result
         assert "Attribution" in result
 

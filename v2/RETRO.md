@@ -1,189 +1,231 @@
 # V2 Pipeline Retrospective
 
-Audit of limitations, gaps, and risks in the v2 trading pipeline.
+Audit of P0 and P1 issues in the v2 trading pipeline, organized by the specific execution path where each bug lives.
 
 ---
 
-## 1. Execution Model
+## P0: Money-Risk Issues
 
-### Buying power not tracked across trades in a session
-`trader.py:171` snapshots `buying_power` once from Alpaca at session start. As trades execute, it subtracts estimated cost (line 226), but this is based on `get_latest_price()` at validation time — not the actual fill price. If Alpaca's reported buying power differs from the local accounting (margin, pending settlements), later trades in the same session can over-commit.
-
-### No fill confirmation
-`execute_market_order()` returns immediately after `submit_order()`. The order hasn't filled yet — it's just accepted. The `OrderResult.filled_qty` and `filled_avg_price` will be `None` for market orders at submission time (`executor.py:178-179`). The system logs decisions as if they executed at the quote price, not the fill price. There's no reconciliation step that checks what actually happened.
-
-### Stale quote risk
-`get_latest_price()` (`executor.py:243-259`) uses `ask_price` from the latest quote with no staleness check. If the market is closed, halted, or the quote is stale, the system validates and logs trades against a potentially outdated price. No spread check either — a wide bid-ask spread on a low-liquidity name could mean significant slippage.
-
-### Max 10 trades hardcoded
-`trader.py:178` — `max_trades_per_session = 10`. Not configurable via CLI or session args. If the strategist writes a playbook with 15 actions, the executor silently drops the last 5.
-
-### Position size cap is validation-only
-The 10% position size cap (`agent.py:233`) is enforced in `validate_decision()` but the executor LLM doesn't know about it. The LLM might propose a 15% position, get rejected, and the capital is wasted for that session. The cap should be in the system prompt so the LLM can self-correct.
+These bugs can cause real financial loss on every session run.
 
 ---
 
-## 2. Learning Loop
+### P0-1: Orders fire without fill confirmation
 
-### Attribution uses only 7-day win rate
-`attribution.py:43-46` — The WHERE clause filters to `outcome_7d IS NOT NULL`. The 30-day data is computed but `build_attribution_constraints()` only uses `win_rate_7d` (lines 111-118). This biases toward short-term signal quality and ignores whether signals that look bad at 7 days recover by 30 days (or vice versa).
+**Where:** `executor.py:145-190` → `trader.py:213-218` → `trader.py:220-230`
 
-### Win rate is a blunt metric
-Attribution labels signals as STRONG (>55%) or WEAK (<45%) based purely on directional win rate. No consideration of magnitude — a signal type that wins 40% of the time but averages +5% per win and -1% per loss is highly profitable, but gets flagged WEAK. Expected value or Sharpe-like metric would be more informative.
+`execute_market_order()` calls `submit_order()` and returns immediately. At submission time, `OrderResult.filled_qty` and `filled_avg_price` are `None` for market orders — the order is accepted, not filled. The pipeline treats this as a completed trade:
 
-### Backfill uses calendar days, not trading days
-`backfill.py:128` — `exit_date = decision_date + timedelta(days=days)`. A decision made on Friday gets its 7-day outcome measured on the following Friday (including the weekend). If the exit date lands on a weekend/holiday, `get_price_on_date()` searches forward up to 5 calendar days, but this means "7-day" outcomes are really 5-7 trading days depending on when the decision was made. Inconsistent measurement window.
+- `trader.py:224` computes `trade_value = price * qty` using the quote price, not the fill price
+- `trader.py:228` deducts this estimated value from `buying_power`
+- `trader.py:274` tries to use `result.filled_avg_price` for logging but falls back to `get_latest_price()` since the fill hasn't happened yet
 
-### Missing prices silently skipped
-`backfill.py:132-135` — When `get_price_on_date()` returns None (delisted stock, data gap, API error), the decision is silently skipped. These decisions never get backfilled and accumulate as permanent holes in the attribution data. No alerting, no retry queue.
+**Consequence:** Every logged decision records a price that may not match reality. The attribution system backfills outcomes against this phantom entry price, so the entire learning loop is training on inaccurate data. If the fill price is significantly worse (fast-moving stock, low liquidity), the system doesn't know it overpaid.
 
-### Attribution constraints are soft
-`build_attribution_constraints()` appends a text block to the strategist prompt saying "Do not create theses primarily based on WEAK signal categories unless you have a specific reason to override." The strategist can trivially override by writing "I have a specific reason" with no actual enforcement. The constraint is advisory, not structural.
+**Fix scope:** Add a `wait_for_fill()` function in `executor.py` that polls the order status until filled or timed out. Wire it into `trader.py` after `execute_market_order()` so buying power updates and decision logging use the actual fill price.
 
 ---
 
-## 3. Strategist
+### P0-2: Stale quotes used for validation and logging
 
-### No budget awareness
-The strategist (Claude Opus, 25 turns) has no token budget visibility. Each turn can use up to 4096 output tokens. With 25 turns, that's potentially 100K+ output tokens per session at Opus pricing. There's no early-exit if the strategist has finished its work — it runs until it stops calling tools or hits the turn limit.
+**Where:** `executor.py:243-262` → `trader.py:192` → `agent.py:279`
 
-### Playbook actions don't require max_quantity
-`tools.py:568` — `max_quantity` is not in the `required` array for playbook actions. The strategist can write "buy AAPL" with no quantity cap, and the executor decides sizing independently. This creates a disconnect: the strategist reasons about what to buy but the executor makes the sizing decision without the strategist's full context.
+`get_latest_price()` fetches `quote.ask_price` with zero staleness checks:
 
-### One thesis per ticker restriction
-`tools.py:98-103` — `tool_create_thesis()` rejects if an active thesis already exists for the ticker. This prevents the strategist from holding a long-term bull thesis and a short-term tactical sell thesis on the same name simultaneously. Also prevents creating a thesis for a ticker already in the portfolio (`tools.py:106-107`), which means you can't set exit conditions on existing positions via the thesis system.
+```python
+# executor.py:254-260
+quotes = client.get_stock_latest_quote(request)
+quote = quotes[ticker]
+price = Decimal(str(quote.ask_price))
+if price == 0:
+    return None
+return price
+```
 
-### Web search has no grounding verification
-The strategist has access to `web_search` (10 uses max per session) but there's no mechanism to verify that search results are accurate or that the strategist correctly interprets them. Search results flow directly into thesis creation with no fact-checking layer.
+No timestamp validation. No spread check. No market-hours awareness. If the market is closed, halted, or the feed is delayed, this returns whatever the last quote was — could be hours or days old.
 
----
+This stale price flows into two critical paths:
 
-## 4. Executor
+1. **Validation** (`trader.py:200-202`): `validate_decision()` checks `cost <= buying_power` and position size against portfolio value using this price. A stale price that's 20% below current could let through a trade that blows the position limit.
+2. **Logging** (`trader.py:274`): When `filled_avg_price` is unavailable (which is always, per P0-1), the stale quote is the recorded entry price.
 
-### No market hours check
-Nothing in the pipeline checks whether the market is open before executing trades. `execute_market_order()` submits with `TimeInForce.DAY`, so orders submitted after hours will queue for next open — but the system logs them as if they executed at the current (stale) quote price.
-
-### Signal refs not validated
-`agent.py:200` — `signal_refs` from the LLM response are accepted as-is. The executor can cite `{"type": "news_signal", "id": 99999}` referencing a signal that doesn't exist. These bad references flow into `decision_signals` and corrupt the attribution loop. No FK constraint check before insert.
-
-### Dry run doesn't test validation
-Dry run skips `execute_market_order()` but still calls `validate_decision()`. However, the price fetched via `get_latest_price()` is real — so dry runs during market hours validate against live prices, but dry runs after hours validate against stale prices. Inconsistent behavior.
-
-### No order type flexibility
-The executor only supports market orders (`trader.py:212-217`). Limit orders exist in `executor.py:193-240` but are never called from the trading session. For any position where entry price matters (which the strategist specifies via `entry_trigger`), the system ignores the trigger and market-orders immediately.
+**Fix scope:** Add timestamp and spread validation to `get_latest_price()`. Reject quotes older than N seconds. Reject quotes with bid-ask spread wider than a threshold. Return a richer object (price, timestamp, spread) so callers can make informed decisions.
 
 ---
 
-## 5. News Pipeline
+### P0-3: No market hours gate
 
-### Alpaca News API is the only source
-V1 had plans for SEC EDGAR integration (10-K, 10-Q, 8-K). V2 dropped this and relies solely on the Alpaca News API. This means:
-- No fundamental data (earnings reports, filings)
-- No analyst estimate data
-- Classification quality is bounded by headline quality
-- Weekend/holiday gaps in news flow
+**Where:** `trader.py:57-328` (entire `run_trading_session()`), `session.py:132-140` (Stage 3)
 
-### Batch classification failure mode is expensive
-`classifier.py` sends 50 headlines per Haiku call. On batch failure, it falls back to classifying each headline individually — 50 separate API calls instead of 1. No circuit breaker pattern: if Haiku is having issues, the fallback will fail 50 times too.
+Nothing in the pipeline checks whether the market is open before executing trades. `execute_market_order()` submits with `TimeInForce.DAY`, so after-hours submissions queue for next open. But:
 
-### No deduplication
-The pipeline fetches news by time window (`--hours 24`). If the session runs twice in a day (retry after failure, manual re-run), duplicate signals get inserted. No unique constraint on headline+ticker+timestamp.
+- The system logs the trade as executed now, at the current (stale) quote price
+- Buying power is decremented immediately
+- The thesis is marked as "executed" (`trader.py:236-243`)
+- Next morning when the order actually fills, the price could be materially different
+- If the session runs again the next day (before the queued order fills), it may try to buy the same thing again
 
----
+The session orchestrator (`session.py:132-140`) has no market-hours guard either — it hands off to the executor unconditionally.
 
-## 6. Strategy Reflection
-
-### Unbounded identity drift
-`strategy.py` allows the reflection stage to `update_strategy_identity()` every session. There's no constraint on how much the identity can change per session. Over many sessions, the identity could drift far from any coherent strategy. No mechanism to detect or prevent contradictory rules accumulating.
-
-### Rules never expire
-`tool_propose_rule()` adds rules that stay active until explicitly retired. Old rules based on market conditions that no longer apply (e.g., "avoid tech during rate hikes") persist indefinitely. No time-decay or automatic review cycle.
-
-### No reflection on reflection
-The strategy reflection stage reviews decisions and proposes rules, but never reviews whether its own rules improved performance. The attribution system measures signal quality but not rule quality.
+**Fix scope:** Add `is_market_open()` in `executor.py` using the Alpaca clock API. Gate `run_trading_session()` on market open (with override for `--dry-run`). The gate should be in `trader.py` between Step 1 (sync) and Step 2 (snapshot), so we still sync positions even if we can't trade.
 
 ---
 
-## 7. Social Media
+## P1: Learning Loop & Data Integrity Issues
 
-### Twitter: no length validation
-`twitter.py:149` says "Maximum 200 characters" in the prompt, but `generate_tweet()` never validates the output length. If Claude generates >280 characters, the post will fail at the Twitter API. Dashboard URL appended afterward (`twitter.py:187`) could push a valid tweet over the limit.
-
-### Bluesky: length enforcement is good, Twitter has none
-Bluesky has proper grapheme counting, LLM-based condensing, and hard truncation as fallback (`bluesky.py:96-165`). Twitter has zero enforcement. Inconsistent handling of the same problem.
-
-### Both platforms share context but generate independently
-Twitter and Bluesky each make a separate Claude call to generate their post from the same context. They could produce contradictory takes on the same session. No coordination between the two.
-
-### No duplicate post prevention
-If the session runs twice, both platforms get posted to twice. No check for "did we already post today?"
+These bugs degrade the attribution system, corrupt the learning feedback loop, or create data quality problems that compound over time.
 
 ---
 
-## 8. Database & Infrastructure
+### P1-1: Signal refs accepted without validation
 
-### No connection pooling
-`get_cursor()` creates a new connection per call. Under load (batch classification + multiple tool calls), this could exhaust PostgreSQL connection limits. No connection pool (pgbouncer, psycopg2.pool).
+**Where:** `agent.py:210` → `trader.py:295-303` → `database/trading_db.py:397-405`
 
-### SQL injection surface in backfill
-`backfill.py:61` and `backfill.py:95` use f-strings for column names: `f"outcome_{days_threshold}d"`. The `days` parameter comes from code (7 or 30), not user input, so it's safe today — but the pattern is fragile. If `days` ever came from CLI input without validation, it's injectable.
+The executor LLM returns `signal_refs` as part of each decision:
 
-### No database migrations
-Schema changes appear to be applied manually. No migration tool (alembic, flyway). Adding a column or table requires coordinating manual SQL across environments.
+```python
+# agent.py:210
+signal_refs=d.get("signal_refs", [])
+```
 
-### Single point of failure on PostgreSQL
-If PostgreSQL is down, every stage crashes. No graceful degradation, no local cache, no retry. The session exits with code 1 and the day's pipeline is lost.
+These refs (e.g., `{"type": "news_signal", "id": 99999}`) are never validated. The flow:
 
----
+1. LLM produces `signal_refs` — no schema enforcement beyond the system prompt asking nicely (`agent.py:110`)
+2. `trader.py:297-300` builds `(decision_id, ref["type"], ref["id"])` tuples directly from the LLM output
+3. `insert_decision_signals_batch()` inserts them with `ON CONFLICT DO NOTHING`
 
-## 9. Operational Gaps
+There's no check that `signal_type` is a valid enum. No check that `signal_id` exists in the referenced table. No FK constraint in the database. The LLM can hallucinate signal IDs (it often does — it has no way to verify IDs exist), and these phantom references flow into `compute_signal_attribution()` where they JOIN against `news_signals`/`macro_signals`. Phantom refs produce NULL categories, which silently drop from the attribution results — but they still occupy rows in `decision_signals`, inflating the apparent sample count.
 
-### No alerting
-Session errors are logged but not alerted. If the session fails at 4pm every day for a week, nobody knows unless they check the logs.
-
-### No idempotency
-Running the session twice in a day creates duplicate decisions, duplicate signals, duplicate tweets. No session-level deduplication or "already ran today" check.
-
-### No cost tracking
-Claude API usage (Opus strategist + Haiku executor + Haiku classifier + Haiku tweets + Opus reflection) is not tracked or budgeted. A session with a chatty strategist (25 turns of Opus) could cost $5-10+ per run with no visibility.
-
-### Env var inconsistency
-V2 uses `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` (`executor.py:37-38`, `backfill.py:18-19`), while the project's `.env` documentation and v1 use `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. Two different naming conventions for the same credentials.
-
-### No scheduling
-The session is designed to run daily after market close, but there's no cron job, systemd timer, or scheduler defined. It's invoked manually or via an undocumented external trigger.
+**Fix scope:** Add `validate_signal_refs()` in `agent.py` that queries the DB to confirm each referenced signal exists. Strip invalid refs before insertion. Log warnings for hallucinated refs so we can tune the system prompt.
 
 ---
 
-## 10. What's Working Well
+### P1-2: Attribution measures win rate, not expected value
 
-For balance — areas that are solid:
+**Where:** `attribution.py:42-43` → `attribution.py:91-132` → `session.py:99`
 
-- **Structured executor input** — The `ExecutorInput` dataclass is a clean contract between strategist and executor. Much better than v1's prose context.
-- **Decision-signal linkage** — The `decision_signals` FK table enables proper attribution. This is the backbone of the learning loop.
-- **Stage isolation** — Each session stage is independent with try/except. A Twitter failure doesn't kill the trading session.
-- **Playbook system** — The strategist → playbook → executor flow gives clear traceability for why trades were made.
-- **Bluesky length enforcement** — The grapheme counting + LLM condensing + hard truncation pattern is well-designed.
-- **Test coverage** — Comprehensive test suite with good mocking patterns.
+The attribution query computes win rate:
+
+```sql
+-- attribution.py:42-43
+AVG(CASE WHEN outcome_7d > 0 THEN 1.0 ELSE 0.0 END) AS win_rate_7d
+```
+
+It also computes `AVG(outcome_7d)` (average return), but `build_attribution_constraints()` only uses the win rate to categorize signals:
+
+```python
+# attribution.py:115-118
+if wr > 55:
+    strong.append(...)
+elif wr < 45:
+    weak.append(...)
+```
+
+This is a fundamental flaw. A signal type with 40% win rate but +8% average wins and -2% average losses is highly profitable (EV = 0.4 * 8 - 0.6 * 2 = +2.0% per trade). Under the current system, it gets flagged WEAK and the strategist is told to avoid it. Conversely, a signal type with 60% win rate but +0.5% average wins and -3% average losses is a money loser (EV = 0.6 * 0.5 - 0.4 * 3 = -0.9%) but gets flagged STRONG.
+
+The `get_attribution_summary()` function (`attribution.py:64-88`) does include `avg_outcome_7d` in the text it sends to the LLM, but the STRONG/WEAK categorization in constraints is purely directional.
+
+**Fix scope:** Replace win-rate thresholds with expected value. The query already computes `AVG(outcome_7d)` — use it directly as the primary metric. Optionally compute a risk-adjusted metric (avg_return / stddev or a simplified Sharpe). Update both `build_attribution_constraints()` and `get_attribution_summary()`.
 
 ---
 
-## Priority Ranking
+### P1-3: No session idempotency
 
-| Priority | Issue | Risk |
-|----------|-------|------|
-| P0 | No fill confirmation / price reconciliation | Money |
-| P0 | Stale quotes → bad validation | Money |
-| P0 | No market hours check | Money |
-| P1 | Signal refs not validated → corrupt attribution | Learning loop integrity |
-| P1 | Attribution uses only win rate, not expected value | Bad signal filtering |
-| P1 | No idempotency (duplicate runs) | Data integrity |
-| P1 | Buying power drift across multi-trade sessions | Money |
-| P2 | Max trades hardcoded | Missed opportunities |
-| P2 | No connection pooling | Reliability |
-| P2 | Twitter length not validated | Failed posts |
-| P2 | No alerting | Operational blindness |
-| P2 | No cost tracking | Budget |
-| P3 | One thesis per ticker | Strategy limitation |
-| P3 | Rules never expire | Strategy drift |
-| P3 | Env var naming inconsistency | Confusing |
+**Where:** `session.py:75-204` → `trader.py:275-288` → `database/trading_db.py:124-139`
+
+Running the session twice in a day produces duplicate everything:
+
+- `insert_decision()` always creates a new row — no deduplication on (date, ticker, action)
+- `insert_decision_signals_batch()` uses `ON CONFLICT DO NOTHING` on the unique constraint, but since the decision_id is new, the "same" signal link gets a fresh row
+- The news pipeline (Stage 1) re-fetches and re-classifies the same headlines
+- Social media posts go out twice
+- Attribution data doubles, skewing sample sizes
+
+There's no `sessions` table, no session ID, no "already ran today" check.
+
+**Fix scope:** Add a `sessions` table with a unique constraint on `(session_date, session_type)`. Add `get_session_for_date()` and `insert_session_record()` to `trading_db.py`. Gate `run_session()` on "no completed session exists for today" with a `--force` override flag.
+
+---
+
+### P1-4: Buying power drifts from reality across trades
+
+**Where:** `trader.py:171` → `trader.py:224-228`
+
+Buying power is snapshotted once at session start:
+
+```python
+# trader.py:171
+buying_power = account_info["buying_power"]
+```
+
+Then locally decremented per trade:
+
+```python
+# trader.py:224-228
+trade_value = price * Decimal(str(decision.quantity))
+if decision.action == "buy":
+    total_buy_value += trade_value
+    buying_power -= trade_value
+```
+
+Problems:
+
+1. `trade_value` uses the quote price, not the fill price (see P0-1). If fill is worse, the real buying power consumed is higher.
+2. Alpaca's buying power accounts for margin, pending settlements, and fees — the local calculation doesn't.
+3. Sell proceeds aren't added back to buying power (line 230 only tracks `total_sell_value`, doesn't credit `buying_power`).
+4. After 3-4 trades, the local `buying_power` can be significantly wrong in either direction.
+
+A later trade in the same session could be rejected (buying power exhausted locally but available on Alpaca) or approved (buying power available locally but Alpaca would reject due to margin/settlement).
+
+**Fix scope:** After each fill confirmation (see P0-1), re-query `get_account_info()` to get the real buying power from Alpaca. Use that for subsequent validations instead of the local estimate.
+
+---
+
+## Pipeline Data Flow (current state)
+
+Shows where each P0/P1 issue injects error into the pipeline:
+
+```
+session.py:run_session()
+  │
+  ├─ Stage 0: backfill + attribution
+  │    └─ attribution.py:compute_signal_attribution()
+  │         └─ [P1-2] Win rate only, no expected value
+  │         └─ [P1-1] Phantom signal refs inflate sample counts
+  │
+  ├─ Stage 2: strategist
+  │    └─ Receives attribution constraints (advisory only)
+  │
+  ├─ Stage 3: executor
+  │    └─ trader.py:run_trading_session()
+  │         ├─ [P0-3] No market hours check
+  │         ├─ executor.py:get_latest_price()
+  │         │    └─ [P0-2] No staleness/spread validation
+  │         ├─ agent.py:validate_decision()
+  │         │    └─ Uses stale price + drifted buying power
+  │         ├─ executor.py:execute_market_order()
+  │         │    └─ [P0-1] Returns before fill
+  │         ├─ buying_power -= estimated_cost
+  │         │    └─ [P1-4] Drift accumulates per trade
+  │         ├─ insert_decision(price=stale_or_phantom)
+  │         │    └─ [P1-3] No dedup, no session tracking
+  │         └─ insert_decision_signals_batch(unvalidated_refs)
+  │              └─ [P1-1] Hallucinated signal IDs stored
+  │
+  └─ Next day: backfill computes outcomes against phantom entry prices
+       └─ Attribution trains on garbage → strategist gets bad constraints
+```
+
+---
+
+## Priority Summary
+
+| ID | Issue | Risk | Root Cause |
+|----|-------|------|------------|
+| P0-1 | No fill confirmation | Phantom entry prices poison attribution | `execute_market_order()` returns at submission, not fill |
+| P0-2 | Stale quotes | Bad validation, bad logging | `get_latest_price()` has no timestamp/spread checks |
+| P0-3 | No market hours gate | Queued orders at wrong prices | Neither `trader.py` nor `session.py` check market clock |
+| P1-1 | Unvalidated signal refs | Corrupt attribution data | LLM output accepted as-is, no DB validation |
+| P1-2 | Win rate instead of EV | Profitable signals flagged weak | `build_attribution_constraints()` ignores magnitude |
+| P1-3 | No idempotency | Duplicate trades, doubled data | No session tracking, no dedup on decisions |
+| P1-4 | Buying power drift | Wrong validation after first trade | Local estimate diverges from Alpaca state |

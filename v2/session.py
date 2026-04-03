@@ -28,7 +28,7 @@ from .pipeline import PipelineStats, run_pipeline
 from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .agent import DEFAULT_EXECUTOR_MODEL
 from .trader import TradingSessionResult, run_trading_session
-from .strategy import StrategyReflectionResult, run_strategy_reflection
+from .strategy import StrategyReflectionResult, run_strategy_reflection, DEFAULT_REFLECTION_MODEL
 from .twitter import TwitterStageResult, run_twitter_stage
 from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
@@ -232,7 +232,7 @@ def run_session(
             except Exception:
                 pass
         try:
-            result.strategy_result = run_strategy_reflection(model=model, max_turns=10)
+            result.strategy_result = run_strategy_reflection(model=DEFAULT_REFLECTION_MODEL, max_turns=10)
             if session_id:
                 try:
                     complete_session_stage(session_id, "strategy")

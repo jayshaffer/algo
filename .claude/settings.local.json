@@ -53,7 +53,9 @@
       "Bash(wrangler pages:*)",
       "Bash(npx wrangler:*)",
       "Bash(set:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(git:*)",
+      "Bash(cat /home/jay/dev/algo/db/init/*.sql)"
     ]
   }
 }

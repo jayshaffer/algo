@@ -142,13 +142,12 @@ def tool_get_session_summary(days: int = 30) -> str:
 
     decisions = get_recent_decisions(days=days)
     if decisions:
-        lines.append(f"Recent decisions ({len(decisions)}):")
+        lines.append(f"Decisions ({len(decisions)}):")
         for d in decisions[:10]:
-            outcome_7d = f"{d['outcome_7d']:+.2f}%" if d.get("outcome_7d") is not None else "pending"
-            outcome_30d = f"{d['outcome_30d']:+.2f}%" if d.get("outcome_30d") is not None else "pending"
+            outcome_7d = f"{d['outcome_7d']:+.1f}%" if d.get("outcome_7d") is not None else "-"
+            outcome_30d = f"{d['outcome_30d']:+.1f}%" if d.get("outcome_30d") is not None else "-"
             lines.append(
-                f"  [{d['date']}] {d['action'].upper()} {d['ticker']}: "
-                f"7d={outcome_7d}, 30d={outcome_30d}"
+                f"  {d['date']} {d['action'].upper()} {d['ticker']} 7d:{outcome_7d} 30d:{outcome_30d}"
             )
     else:
         lines.append("No recent decisions.")
@@ -165,115 +164,86 @@ def tool_get_session_summary(days: int = 30) -> str:
 STRATEGY_TOOL_DEFINITIONS = [
     {
         "name": "get_strategy_identity",
-        "description": "Get the system's current strategy identity.",
+        "description": "Current trading identity, risk posture, biases.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_strategy_rules",
-        "description": "Get all active strategy rules.",
+        "description": "Active strategy rules (constraints/preferences).",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_strategy_history",
-        "description": "Get recent strategy reflection memos.",
+        "description": "Recent strategy reflection memos.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "description": "Number of memos (default: 5)"},
+                "n": {"type": "integer", "description": "Count (default: 5)"},
             },
             "required": [],
         },
     },
     {
         "name": "get_session_summary",
-        "description": (
-            "Get a summary of recent trading activity — decisions, outcomes, "
-            "and signal attribution scores. Use this to understand what happened."
-        ),
+        "description": "Recent decisions, outcomes, and signal attribution.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {"type": "integer", "description": "Look back period (default: 30)"},
+                "days": {"type": "integer", "description": "Lookback days (default: 30)"},
             },
             "required": [],
         },
     },
     {
         "name": "update_strategy_identity",
-        "description": (
-            "Update the system's trading identity. Creates a new versioned identity. "
-            "Use this to reflect changes in trading style, risk posture, or signal preferences."
-        ),
+        "description": "Update trading identity (creates new version).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "identity_text": {"type": "string", "description": "Who is this system as a trader?"},
-                "risk_posture": {
-                    "type": "string",
-                    "enum": ["conservative", "moderate", "aggressive"],
-                },
-                "sector_biases": {
-                    "type": "object",
-                    "description": "Sector biases, e.g. {\"tech\": \"overweight\", \"energy\": \"avoid\"}",
-                },
-                "preferred_signals": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Signal types to favor",
-                },
-                "avoided_signals": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Signal types to avoid",
-                },
+                "identity_text": {"type": "string"},
+                "risk_posture": {"type": "string", "enum": ["conservative", "moderate", "aggressive"]},
+                "sector_biases": {"type": "object"},
+                "preferred_signals": {"type": "array", "items": {"type": "string"}},
+                "avoided_signals": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["identity_text", "risk_posture", "sector_biases", "preferred_signals", "avoided_signals"],
         },
     },
     {
         "name": "propose_rule",
-        "description": (
-            "Propose a new strategy rule based on observed patterns. "
-            "Rules are either constraints (avoid X) or preferences (favor X)."
-        ),
+        "description": "Propose new rule (constraint or preference) with evidence.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "rule_text": {"type": "string", "description": "Human-readable rule"},
-                "category": {"type": "string", "description": "Domain, e.g. news_signal:legal, position_sizing"},
+                "rule_text": {"type": "string"},
+                "category": {"type": "string", "description": "e.g. news_signal:legal, position_sizing"},
                 "direction": {"type": "string", "enum": ["constraint", "preference"]},
-                "confidence": {"type": "number", "description": "0.0 to 1.0"},
-                "supporting_evidence": {"type": "string", "description": "Data backing this rule"},
+                "confidence": {"type": "number", "description": "0.0-1.0"},
+                "supporting_evidence": {"type": "string"},
             },
             "required": ["rule_text", "category", "direction", "confidence", "supporting_evidence"],
         },
     },
     {
         "name": "retire_rule",
-        "description": "Retire a strategy rule that is no longer supported by data.",
+        "description": "Retire a rule no longer supported by data.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "rule_id": {"type": "integer", "description": "ID of rule to retire"},
-                "reason": {"type": "string", "description": "Why this rule is being retired"},
+                "rule_id": {"type": "integer"},
+                "reason": {"type": "string"},
             },
             "required": ["rule_id", "reason"],
         },
     },
     {
         "name": "write_strategy_memo",
-        "description": (
-            "Write a strategy reflection memo. Always write one at the end of reflection. "
-            "Types: reflection (general), rule_change (when rules changed), identity_update (when identity changed)."
-        ),
+        "description": "Write reflection memo. REQUIRED at end of every session.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "memo_type": {
-                    "type": "string",
-                    "enum": ["reflection", "rule_change", "identity_update"],
-                },
-                "content": {"type": "string", "description": "The memo content (2-4 paragraphs)"},
+                "memo_type": {"type": "string", "enum": ["reflection", "rule_change", "identity_update"]},
+                "content": {"type": "string", "description": "2-4 paragraphs"},
             },
             "required": ["memo_type", "content"],
         },
@@ -319,8 +289,11 @@ def _count_actions(messages: list[dict]) -> tuple[int, int, bool, bool]:
     return proposed, retired, identity_updated, memo_written
 
 
+DEFAULT_REFLECTION_MODEL = "claude-sonnet-4-6"
+
+
 def run_strategy_reflection(
-    model: str = "claude-opus-4-6",
+    model: str = DEFAULT_REFLECTION_MODEL,
     max_turns: int = 10,
 ) -> StrategyReflectionResult:
     """Run the strategy reflection stage (Stage 4)."""

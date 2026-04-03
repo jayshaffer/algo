@@ -70,14 +70,18 @@ def tool_get_active_theses(ticker: Optional[str] = None) -> str:
     for t in theses:
         age_days = (datetime.now() - t["created_at"]).days
         lines.append(
-            f"ID {t['id']}: {t['ticker']} ({t['direction']}) - "
-            f"{t['confidence']} confidence, {age_days}d old"
+            f"#{t['id']} {t['ticker']} {t['direction']} {t['confidence']} {age_days}d | "
+            f"{t['thesis'][:120]}"
         )
-        lines.append(f"  Thesis: {t['thesis']}")
-        lines.append(f"  Entry: {t['entry_trigger'] or 'N/A'}")
-        lines.append(f"  Exit: {t['exit_trigger'] or 'N/A'}")
-        lines.append(f"  Invalidation: {t['invalidation'] or 'N/A'}")
-        lines.append("")
+        parts = []
+        if t['entry_trigger']:
+            parts.append(f"entry:{t['entry_trigger'][:60]}")
+        if t['exit_trigger']:
+            parts.append(f"exit:{t['exit_trigger'][:60]}")
+        if t['invalidation']:
+            parts.append(f"invalidate:{t['invalidation'][:60]}")
+        if parts:
+            lines.append(f"  {' | '.join(parts)}")
 
     return "\n".join(lines)
 
@@ -172,11 +176,10 @@ def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
 
     lines = []
     for s in signals:
-        date_str = s["published_at"].strftime("%Y-%m-%d %H:%M")
-        headline = s["headline"][:80] + "..." if len(s["headline"]) > 80 else s["headline"]
+        date_str = s["published_at"].strftime("%m-%d %H:%M")
+        headline = s["headline"][:60]
         lines.append(
-            f"- [{date_str}] {s['ticker']} ({s['category']}, {s['sentiment']}, "
-            f"confidence: {s['confidence']}): {headline}"
+            f"{date_str} {s['ticker']} {s['category']}/{s['sentiment']}/{s['confidence']}: {headline}"
         )
 
     return "\n".join(lines)
@@ -204,11 +207,10 @@ def tool_get_decision_history(days: int = 30) -> str:
 
     lines = []
     for d in decisions:
-        outcome_7d = f"{d['outcome_7d']:+.2f}%" if d.get("outcome_7d") is not None else "pending"
-        outcome_30d = f"{d['outcome_30d']:+.2f}%" if d.get("outcome_30d") is not None else "pending"
+        outcome_7d = f"{d['outcome_7d']:+.1f}%" if d.get("outcome_7d") is not None else "-"
+        outcome_30d = f"{d['outcome_30d']:+.1f}%" if d.get("outcome_30d") is not None else "-"
         lines.append(
-            f"- [{d['date']}] {d['action'].upper()} {d['ticker']}: "
-            f"7d={outcome_7d}, 30d={outcome_30d} — {d['reasoning'][:80]}"
+            f"{d['date']} {d['action'].upper()} {d['ticker']} 7d:{outcome_7d} 30d:{outcome_30d} {d['reasoning'][:60]}"
         )
 
     return "\n".join(lines)
@@ -308,14 +310,11 @@ def tool_get_strategy_rules() -> str:
 
     lines = []
     for r in rules:
+        evidence = f" | {r['supporting_evidence'][:80]}" if r.get("supporting_evidence") else ""
         lines.append(
-            f"Rule {r['id']} ({r['direction']}, confidence: {r['confidence']}): "
-            f"{r['rule_text']}"
+            f"#{r['id']} {r['direction']}/{r['category']} conf:{r['confidence']}: "
+            f"{r['rule_text']}{evidence}"
         )
-        if r.get("supporting_evidence"):
-            lines.append(f"  Evidence: {r['supporting_evidence']}")
-        lines.append(f"  Category: {r['category']}")
-        lines.append("")
     return "\n".join(lines)
 
 
@@ -328,9 +327,9 @@ def tool_get_strategy_history(n: int = 5) -> str:
 
     lines = []
     for m in memos:
-        lines.append(f"[{m['session_date']}] ({m['memo_type']}):")
-        lines.append(f"  {m['content']}")
-        lines.append("")
+        # Truncate memo content to avoid bloating context
+        content = m['content'][:200] + "..." if len(m['content']) > 200 else m['content']
+        lines.append(f"[{m['session_date']}] {m['memo_type']}: {content}")
     return "\n".join(lines)
 
 
@@ -340,221 +339,126 @@ TOOL_DEFINITIONS = [
     {
         "type": "web_search_20250305",
         "name": "web_search",
-        "max_uses": 10,
+        "max_uses": 6,
     },
     {
         "name": "get_market_snapshot",
-        "description": (
-            "Get current market state including sector performance, "
-            "major indices, top gainers/losers, and unusual volume stocks. "
-            "Use this to identify sectors or stocks worth researching."
-        ),
+        "description": "Current market: sectors, indices, movers, unusual volume.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_portfolio_state",
-        "description": (
-            "Get current portfolio positions, open orders, cash balance, "
-            "and buying power. Use this to understand current holdings "
-            "and available capital."
-        ),
+        "description": "Positions, open orders, cash, buying power.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_active_theses",
-        "description": (
-            "Get all active trade theses, optionally filtered by ticker. "
-            "Returns thesis details including direction, confidence, "
-            "entry/exit triggers, and invalidation criteria."
-        ),
+        "description": "Active trade theses with direction, triggers, invalidation.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "Filter to specific ticker (optional)",
-                },
+                "ticker": {"type": "string", "description": "Filter by ticker"},
             },
             "required": [],
         },
     },
     {
         "name": "create_thesis",
-        "description": (
-            "Create a new trade thesis. Will reject if ticker already has an active "
-            "thesis or is in the portfolio."
-        ),
+        "description": "Create trade thesis. Rejects if ticker has active thesis or is held.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"},
-                "direction": {
-                    "type": "string",
-                    "enum": ["long", "short", "avoid"],
-                    "description": "Trade direction",
-                },
-                "thesis": {
-                    "type": "string",
-                    "description": "Core reasoning for the trade",
-                },
-                "entry_trigger": {
-                    "type": "string",
-                    "description": "Specific entry conditions (price levels, events)",
-                },
-                "exit_trigger": {
-                    "type": "string",
-                    "description": "Target or stop conditions",
-                },
-                "invalidation": {
-                    "type": "string",
-                    "description": "What would prove the thesis wrong",
-                },
-                "confidence": {
-                    "type": "string",
-                    "enum": ["high", "medium", "low"],
-                    "description": "Confidence level",
-                },
+                "ticker": {"type": "string"},
+                "direction": {"type": "string", "enum": ["long", "short", "avoid"]},
+                "thesis": {"type": "string", "description": "Core reasoning"},
+                "entry_trigger": {"type": "string", "description": "Entry conditions"},
+                "exit_trigger": {"type": "string", "description": "Exit conditions"},
+                "invalidation": {"type": "string", "description": "What proves thesis wrong"},
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             },
             "required": [
-                "ticker",
-                "direction",
-                "thesis",
-                "entry_trigger",
-                "exit_trigger",
-                "invalidation",
-                "confidence",
+                "ticker", "direction", "thesis",
+                "entry_trigger", "exit_trigger", "invalidation", "confidence",
             ],
         },
     },
     {
         "name": "update_thesis",
-        "description": (
-            "Update an existing thesis with new information. "
-            "Only provide fields you want to change."
-        ),
+        "description": "Update thesis fields. Only provide fields to change.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "thesis_id": {"type": "integer", "description": "ID of thesis to update"},
-                "thesis": {"type": "string", "description": "Updated reasoning"},
-                "entry_trigger": {"type": "string", "description": "Updated entry trigger"},
-                "exit_trigger": {"type": "string", "description": "Updated exit trigger"},
-                "invalidation": {"type": "string", "description": "Updated invalidation criteria"},
-                "confidence": {
-                    "type": "string",
-                    "enum": ["high", "medium", "low"],
-                    "description": "Updated confidence level",
-                },
+                "thesis_id": {"type": "integer"},
+                "thesis": {"type": "string"},
+                "entry_trigger": {"type": "string"},
+                "exit_trigger": {"type": "string"},
+                "invalidation": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             },
             "required": ["thesis_id"],
         },
     },
     {
         "name": "close_thesis",
-        "description": (
-            "Close a thesis that is no longer valid. "
-            "Use 'invalidated' if the invalidation criteria were met, "
-            "'expired' if the thesis aged out without action, "
-            "'executed' if it was acted upon."
-        ),
+        "description": "Close thesis as invalidated, expired, or executed.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "thesis_id": {"type": "integer", "description": "ID of thesis to close"},
-                "status": {
-                    "type": "string",
-                    "enum": ["invalidated", "expired", "executed"],
-                    "description": "Reason for closure",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Detailed explanation for closure",
-                },
+                "thesis_id": {"type": "integer"},
+                "status": {"type": "string", "enum": ["invalidated", "expired", "executed"]},
+                "reason": {"type": "string"},
             },
             "required": ["thesis_id", "status", "reason"],
         },
     },
     {
         "name": "get_news_signals",
-        "description": (
-            "Get recent ticker-specific news signals including headlines, "
-            "sentiment (bullish/bearish/neutral), category (news/earnings/product), "
-            "and confidence scores. Optionally filter by ticker."
-        ),
+        "description": "Recent ticker news signals: headlines, sentiment, category, confidence.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "Filter to a specific ticker (optional)",
-                },
-                "days": {
-                    "type": "integer",
-                    "description": "Look back period in days (default: 7)",
-                },
+                "ticker": {"type": "string", "description": "Filter by ticker"},
+                "days": {"type": "integer", "description": "Lookback days (default: 7)"},
             },
             "required": [],
         },
     },
     {
         "name": "get_macro_context",
-        "description": (
-            "Get recent macro economic signals including Fed policy, "
-            "trade news, geopolitical events, and sector trends."
-        ),
+        "description": "Macro signals: Fed, trade, geopolitical, sector trends.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Look back period in days (default: 7)",
-                },
+                "days": {"type": "integer", "description": "Lookback days (default: 7)"},
             },
             "required": [],
         },
     },
     {
         "name": "get_signal_attribution",
-        "description": (
-            "Get signal attribution scores showing which signal types "
-            "(news categories, macro categories, theses) have been "
-            "historically predictive based on decision outcomes."
-        ),
+        "description": "Win rates by signal type from historical outcomes.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_decision_history",
-        "description": (
-            "Get recent trading decisions with their outcomes (7d and 30d P&L). "
-            "Use this to review what trades were made and how they performed."
-        ),
+        "description": "Recent decisions with 7d/30d P&L outcomes.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Look back period in days (default: 30)",
-                },
+                "days": {"type": "integer", "description": "Lookback days (default: 30)"},
             },
             "required": [],
         },
     },
     {
         "name": "write_playbook",
-        "description": (
-            "Write today's trading playbook. This is the primary output of "
-            "the strategist session — it tells the executor what to do."
-        ),
+        "description": "Write today's playbook for the executor. REQUIRED every session.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "market_outlook": {
-                    "type": "string",
-                    "description": "Brief market outlook for today",
-                },
+                "market_outlook": {"type": "string"},
                 "priority_actions": {
                     "type": "array",
-                    "description": "Ordered list of priority trades",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -568,49 +472,29 @@ TOOL_DEFINITIONS = [
                         "required": ["ticker", "action", "reasoning", "confidence"],
                     },
                 },
-                "watch_list": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Tickers to monitor for signals",
-                },
-                "risk_notes": {
-                    "type": "string",
-                    "description": "Risk factors and warnings",
-                },
+                "watch_list": {"type": "array", "items": {"type": "string"}},
+                "risk_notes": {"type": "string"},
             },
             "required": ["market_outlook", "priority_actions", "watch_list", "risk_notes"],
         },
     },
     {
         "name": "get_strategy_identity",
-        "description": (
-            "Get the system's evolving strategy identity — who it is as a trader, "
-            "risk posture, sector biases, and preferred/avoided signal types. "
-            "Returns null if no identity has been established yet (first session)."
-        ),
+        "description": "Trading identity: risk posture, sector biases, signal preferences.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_strategy_rules",
-        "description": (
-            "Get all active strategy rules — accumulated lessons from past performance. "
-            "Rules are either constraints (don't do X) or preferences (favor X)."
-        ),
+        "description": "Active strategy rules (constraints and preferences).",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_strategy_history",
-        "description": (
-            "Get recent strategy reflection memos — session-by-session reasoning "
-            "about what the system learned and how its strategy evolved."
-        ),
+        "description": "Recent strategy reflection memos.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "n": {
-                    "type": "integer",
-                    "description": "Number of recent memos to retrieve (default: 5)",
-                },
+                "n": {"type": "integer", "description": "Count (default: 5)"},
             },
             "required": [],
         },

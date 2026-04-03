@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
-from .tools import TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session
+from .tools import (
+    TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session,
+    tool_get_portfolio_state, tool_get_active_theses,
+    tool_get_decision_history, tool_get_signal_attribution,
+    tool_get_strategy_identity, tool_get_strategy_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,13 +277,44 @@ def run_strategist_loop(
     if attribution_constraints:
         base_prompt = base_prompt + "\n\n" + attribution_constraints
 
-    initial_message = """Begin your strategist session. Start by:
-1. Getting the current portfolio state and active theses
-2. Reviewing recent decision history and outcomes
-3. Reviewing each active thesis and determining if updates are needed
-4. Exploring market conditions for new opportunities
-5. Creating 2-4 new theses based on your analysis
-6. Writing today's playbook using the write_playbook tool
+    # Pre-seed context to eliminate 3-5 tool round-trips on early turns
+    context_parts = []
+    try:
+        context_parts.append(f"=== Portfolio ===\n{tool_get_portfolio_state()}")
+    except Exception:
+        context_parts.append("=== Portfolio ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Active Theses ===\n{tool_get_active_theses()}")
+    except Exception:
+        context_parts.append("=== Active Theses ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Decision History ===\n{tool_get_decision_history()}")
+    except Exception:
+        context_parts.append("=== Decision History ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Signal Attribution ===\n{tool_get_signal_attribution()}")
+    except Exception:
+        context_parts.append("=== Signal Attribution ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Strategy Identity ===\n{tool_get_strategy_identity()}")
+    except Exception:
+        context_parts.append("=== Strategy Identity ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Strategy Rules ===\n{tool_get_strategy_rules()}")
+    except Exception:
+        context_parts.append("=== Strategy Rules ===\n(unavailable)")
+
+    pre_seeded = "\n\n".join(context_parts)
+
+    initial_message = f"""Here is the current state (pre-loaded to save round-trips):
+
+{pre_seeded}
+
+Now proceed with your strategist session:
+1. Review the data above — do NOT re-fetch portfolio, theses, decisions, attribution, identity, or rules
+2. Explore market conditions for new opportunities (use web_search, get_market_snapshot, get_news_signals)
+3. Update or close stale theses, create 2-4 new ones
+4. Write today's playbook using the write_playbook tool
 
 When you've completed your work, provide a summary of your findings and actions."""
 
