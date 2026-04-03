@@ -649,3 +649,47 @@ class TestPerStageResume:
         mock_pipeline.assert_called_once()
         # No pipeline_error since the pipeline itself succeeded
         assert result.pipeline_error is None
+
+
+class TestStrategistMemoPersistence:
+    def test_strategist_summary_written_as_memo(self):
+        """After Stage 2 completes, the summary should be saved as a strategy memo."""
+        mock_ideation_result = MagicMock()
+        mock_ideation_result.final_summary = "Strategist reasoning about today's decisions"
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.insert_strategy_memo") as mock_memo, \
+             patch("v2.session.get_current_strategy_state", return_value={"id": 1}):
+
+            run_session(dry_run=True)
+
+        mock_memo.assert_called_once()
+        assert "strategist_notes" in str(mock_memo.call_args)
+        assert "Strategist reasoning" in str(mock_memo.call_args)
+
+    def test_strategist_memo_not_written_on_failure(self):
+        """If Stage 2 fails, no memo should be written."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", side_effect=Exception("Opus down")), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.insert_strategy_memo") as mock_memo:
+
+            run_session(dry_run=True)
+
+        mock_memo.assert_not_called()
