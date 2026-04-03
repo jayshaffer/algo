@@ -81,9 +81,10 @@ class TestBackfillOutcomes:
 
         # Should call get_price_on_date with trading day offset (March 24),
         # not calendar offset (March 20, which is a Friday but wrong date)
-        call_args = mock_price.call_args
-        assert call_args[0][1] == "AAPL"
-        assert call_args[0][2] == date(2026, 3, 24)
+        # Find the AAPL call (not the SPY benchmark calls)
+        aapl_calls = [c for c in mock_price.call_args_list if c[0][1] == "AAPL"]
+        assert len(aapl_calls) == 1
+        assert aapl_calls[0][0][2] == date(2026, 3, 24)
 
 
 class TestBackfillNoPrice:

@@ -39,13 +39,13 @@ class TestBuildAttributionConstraints:
             from v2.attribution import build_attribution_constraints
             result = build_attribution_constraints(min_samples=5)
 
-        assert "STRONG (positive avg return)" in result
+        assert "STRONG (outperforms market)" in result
         assert "news_signal:earnings" in result
-        assert "avg 7d return" in result
+        assert "avg alpha" in result
 
-        assert "WEAK (negative avg return)" in result
+        assert "WEAK (underperforms market)" in result
         assert "macro_signal:fed" in result
-        assert "-1.00% avg 7d return" in result
+        assert "-1.00% avg alpha" in result
 
         assert "INSUFFICIENT DATA" in result
         assert "news_signal:rumor (n=3)" in result
@@ -116,7 +116,7 @@ class TestBuildAttributionConstraints:
         assert "news_signal:above_strong" in result
 
         # -0.51 IS < -0.5, so should be WEAK
-        assert "WEAK (negative avg return)" in result
+        assert "WEAK (underperforms market)" in result
         assert "news_signal:below_weak" in result
 
 
@@ -249,17 +249,17 @@ class TestGetAttributionSummary:
             from v2.attribution import get_attribution_summary
             result = get_attribution_summary()
 
-        assert "Signal Attribution:" in result
-        assert "Profitable signal types (positive avg 7d return):" in result
+        assert "Signal Attribution" in result
+        assert "Outperforming signals (positive alpha vs SPY):" in result
         assert "news_signal:earnings" in result
-        assert "70% win rate" in result
-        assert "+2.50% avg 7d return" in result
+        assert "70% beat-market rate" in result
+        assert "+2.50% avg 7d alpha" in result
         assert "n=20" in result
 
-        assert "Unprofitable signal types (negative avg 7d return):" in result
+        assert "Underperforming signals (negative alpha vs SPY):" in result
         assert "macro_signal:fed" in result
-        assert "30% win rate" in result
-        assert "-1.00% avg 7d return" in result
+        assert "30% beat-market rate" in result
+        assert "-1.00% avg 7d alpha" in result
         assert "n=15" in result
 
 
@@ -356,7 +356,7 @@ class TestExpectedValueConstraints:
             from v2.attribution import build_attribution_constraints
             result = build_attribution_constraints(min_samples=5)
 
-        assert "avg return" in result.lower() or "expected value" in result.lower() or "avg 7d" in result.lower()
+        assert "avg alpha" in result.lower() or "alpha" in result.lower()
 
 
 class TestAttributionByDirection:
