@@ -47,13 +47,10 @@ class ExecutorInput:
     market_outlook: str
     risk_notes: str
     current_prices: dict[str, Decimal] = None
-    cooldown_tickers: dict[str, str] = None
 
     def __post_init__(self):
         if self.current_prices is None:
             self.current_prices = {}
-        if self.cooldown_tickers is None:
-            self.cooldown_tickers = {}
 
 
 @dataclass
@@ -103,7 +100,6 @@ INPUTS (as JSON object):
 6. market_outlook — current market conditions summary
 7. risk_notes — risk warnings and constraints
 8. current_prices — latest ask prices for relevant tickers (use these for dollar-based sizing)
-9. cooldown_tickers — tickers with active trading restrictions. Do NOT propose actions that violate these cooldowns.
 
 RULES:
 - For each playbook action: execute, adjust, or skip (with reason)
@@ -153,7 +149,6 @@ def get_trading_decisions(
         "market_outlook": executor_input.market_outlook,
         "risk_notes": executor_input.risk_notes,
         "current_prices": {k: str(v) for k, v in executor_input.current_prices.items()},
-        "cooldown_tickers": executor_input.cooldown_tickers,
     }
     input_json = json.dumps(input_data, default=str)
 

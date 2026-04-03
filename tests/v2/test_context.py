@@ -7,10 +7,8 @@ from unittest.mock import patch
 import pytest
 
 
-@patch("v2.context.get_ticker_cooldowns", return_value={})
-@patch("v2.context.format_cooldown_map", return_value={})
 class TestBuildExecutorInput:
-    def test_returns_executor_input(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_returns_executor_input(self, mock_db, mock_cursor):
         mock_cursor.fetchone.side_effect = [
             {"id": 1, "market_outlook": "Bullish", "risk_notes": "Fed", "priority_actions": [], "watch_list": []},
         ]
@@ -40,7 +38,7 @@ class TestBuildExecutorInput:
         assert result.current_prices["AAPL"] == Decimal("150.00")
         assert result.current_prices["MSFT"] == Decimal("150.00")
 
-    def test_no_playbook_returns_empty_actions(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_no_playbook_returns_empty_actions(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
         mock_cursor.fetchall.side_effect = [
             # positions
@@ -59,7 +57,7 @@ class TestBuildExecutorInput:
         assert result.playbook_actions == []
         assert "No playbook" in result.market_outlook
 
-    def test_attribution_summary_built(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_attribution_summary_built(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
         mock_cursor.fetchall.side_effect = [
             # positions
@@ -82,7 +80,7 @@ class TestBuildExecutorInput:
         assert result.attribution_summary["news_signal:earnings"]["win_rate_7d"] == 0.65
         assert result.attribution_summary["news_signal:earnings"]["sample_size"] == 10
 
-    def test_recent_outcomes_limited_to_10(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_recent_outcomes_limited_to_10(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
         decisions = [
             {"date": date(2026, 1, i + 1), "ticker": "AAPL", "action": "buy",
@@ -105,7 +103,7 @@ class TestBuildExecutorInput:
 
         assert len(result.recent_outcomes) == 10
 
-    def test_recent_outcomes_filters_none_outcome(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_recent_outcomes_filters_none_outcome(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = None
         decisions = [
             {"date": date(2026, 1, 1), "ticker": "AAPL", "action": "buy", "outcome_7d": Decimal("1.5")},
@@ -127,7 +125,7 @@ class TestBuildExecutorInput:
         tickers = [o["ticker"] for o in result.recent_outcomes]
         assert "MSFT" not in tickers
 
-    def test_playbook_action_defaults(self, mock_format, mock_cooldowns, mock_db, mock_cursor):
+    def test_playbook_action_defaults(self, mock_db, mock_cursor):
         """Test that missing optional fields get default values."""
         mock_cursor.fetchone.side_effect = [
             {"id": 1, "market_outlook": "Neutral", "risk_notes": "", "priority_actions": [], "watch_list": []},
