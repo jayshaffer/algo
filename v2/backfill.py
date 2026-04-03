@@ -94,7 +94,7 @@ def calculate_outcome(
     exit_price: Decimal
 ) -> Decimal:
     """Calculate P&L percentage for a decision."""
-    if entry_price == 0:
+    if entry_price <= 0 or exit_price <= 0:
         return Decimal(0)
 
     price_change_pct = ((exit_price - entry_price) / entry_price) * 100
@@ -167,7 +167,7 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
             spy_prices[decision_date] = get_price_on_date(client, BENCHMARK_TICKER, decision_date)
         spy_entry = spy_prices.get(decision_date)
         spy_exit = get_price_on_date(client, BENCHMARK_TICKER, exit_date)
-        if spy_entry and spy_exit and spy_entry > 0:
+        if spy_entry and spy_exit and spy_entry > 0 and spy_exit > 0:
             benchmark = ((spy_exit - spy_entry) / spy_entry) * 100
 
         alpha_str = f" alpha={outcome - benchmark:+.2f}%" if benchmark is not None else ""

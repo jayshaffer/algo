@@ -365,6 +365,10 @@ def run_trading_session(
     signals_used = format_decisions_for_logging(response)
 
     for i, decision in enumerate(response.decisions):
+        # Skip logging hold decisions — they pollute the database with unfillable outcomes
+        if decision.action == "hold":
+            continue
+
         try:
             # Prefer filled price from order, fall back to latest quote
             result = order_results.get(i)
@@ -373,11 +377,20 @@ def run_trading_session(
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
                 continue
+
+            # Use filled quantity when available (handles partial fills)
+            if result and result.filled_qty is not None:
+                logged_qty = Decimal(str(result.filled_qty))
+            elif decision.quantity:
+                logged_qty = Decimal(str(decision.quantity))
+            else:
+                logged_qty = None
+
             decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
                 action=decision.action,
-                quantity=Decimal(decision.quantity) if decision.quantity else None,
+                quantity=logged_qty,
                 price=price,
                 reasoning=decision.reasoning,
                 signals_used=signals_used,

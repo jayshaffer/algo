@@ -308,7 +308,11 @@ def upsert_open_order(order_id, ticker, side, order_type, qty, filled_qty, limit
 
 def get_open_orders() -> list:
     with get_cursor() as cur:
-        cur.execute("SELECT * FROM open_orders ORDER BY submitted_at DESC")
+        cur.execute("""
+            SELECT * FROM open_orders
+            WHERE status IN ('new', 'accepted', 'pending_new', 'partially_filled')
+            ORDER BY submitted_at DESC
+        """)
         return cur.fetchall()
 
 

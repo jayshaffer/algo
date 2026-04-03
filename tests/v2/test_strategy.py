@@ -155,15 +155,20 @@ class TestToolWriteStrategyMemo:
 class TestToolGetSessionSummary:
     @patch("v2.strategy.get_attribution_summary")
     @patch("v2.strategy.get_recent_decisions")
-    def test_returns_summary_with_decisions(self, mock_decisions, mock_attr):
+    def test_returns_summary_with_decisions(self, mock_decisions, mock_attr, mock_db, mock_cursor):
         from v2.strategy import tool_get_session_summary
         mock_decisions.return_value = [make_decision_row()]
         mock_attr.return_value = "Attribution data here"
+        # Signal linkage query
+        mock_cursor.fetchall.return_value = [
+            {"decision_id": 1, "signal_type": "news_signal", "signal_category": "earnings"},
+        ]
 
         result = tool_get_session_summary()
         assert "Decisions" in result
         assert "AAPL" in result
         assert "Attribution" in result
+        assert "news_signal:earnings" in result
 
     @patch("v2.strategy.get_attribution_summary")
     @patch("v2.strategy.get_recent_decisions")

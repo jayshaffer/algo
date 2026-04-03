@@ -63,7 +63,10 @@ class TestRunTradingSession:
                 decisions=[decision], thesis_invalidations=[],
                 market_summary="Active", risk_assessment="Low",
             )
-            mock_exec.return_value = MagicMock(success=True, order_id="123", error=None)
+            mock_exec.return_value = MagicMock(
+                success=True, order_id="123", error=None,
+                filled_qty=Decimal("2.5"), filled_avg_price=Decimal("150"),
+            )
 
             result = run_trading_session(dry_run=True)
 
@@ -72,6 +75,8 @@ class TestRunTradingSession:
         call_kwargs = mock_insert.call_args
         assert call_kwargs.kwargs.get("playbook_action_id") == 1 or \
                (len(call_kwargs.args) > 9 and call_kwargs.args[9] == 1)
+        # Verify filled_qty is used (not requested quantity)
+        assert call_kwargs.kwargs.get("quantity") == Decimal("2.5")
 
     def test_session_with_no_decisions(self, mock_db, mock_cursor):
         with patch("v2.trader.sync_positions_from_alpaca", return_value=0), \

@@ -11,6 +11,7 @@ class TestBuildExecutorInput:
     def test_returns_executor_input(self, mock_db, mock_cursor):
         mock_cursor.fetchone.side_effect = [
             {"id": 1, "market_outlook": "Bullish", "risk_notes": "Fed", "priority_actions": [], "watch_list": []},
+            None,  # get_current_strategy_state
         ]
         mock_cursor.fetchall.side_effect = [
             # playbook_actions
@@ -21,6 +22,10 @@ class TestBuildExecutorInput:
             # recent decisions
             [],
             # attribution
+            [],
+            # strategy_rules
+            [],
+            # account_snapshots
             [],
         ]
 
@@ -47,6 +52,10 @@ class TestBuildExecutorInput:
             [],
             # attribution
             [],
+            # strategy_rules
+            [],
+            # account_snapshots
+            [],
         ]
 
         from v2.context import build_executor_input
@@ -69,6 +78,10 @@ class TestBuildExecutorInput:
                 {"category": "news_signal:earnings", "win_rate_7d": Decimal("0.65"), "sample_size": 10},
                 {"category": "macro_signal:fed", "win_rate_7d": Decimal("0.40"), "sample_size": 5},
             ],
+            # strategy_rules
+            [],
+            # account_snapshots
+            [],
         ]
 
         from v2.context import build_executor_input
@@ -94,6 +107,10 @@ class TestBuildExecutorInput:
             decisions,
             # attribution
             [],
+            # strategy_rules
+            [],
+            # account_snapshots
+            [],
         ]
 
         from v2.context import build_executor_input
@@ -114,6 +131,8 @@ class TestBuildExecutorInput:
             [],  # positions
             decisions,
             [],  # attribution
+            [],  # strategy_rules
+            [],  # account_snapshots
         ]
 
         from v2.context import build_executor_input
@@ -129,6 +148,7 @@ class TestBuildExecutorInput:
         """Test that missing optional fields get default values."""
         mock_cursor.fetchone.side_effect = [
             {"id": 1, "market_outlook": "Neutral", "risk_notes": "", "priority_actions": [], "watch_list": []},
+            None,  # get_current_strategy_state
         ]
         mock_cursor.fetchall.side_effect = [
             # playbook_actions - minimal fields
@@ -138,6 +158,10 @@ class TestBuildExecutorInput:
             # recent decisions
             [],
             # attribution
+            [],
+            # strategy_rules
+            [],
+            # account_snapshots
             [],
         ]
 

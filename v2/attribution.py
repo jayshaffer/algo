@@ -82,9 +82,13 @@ def get_attribution_summary() -> str:
     if not rows:
         return "Signal Attribution:\n- No attribution data yet"
 
+    min_samples = 3
+    sufficient = [r for r in rows if r["sample_size"] >= min_samples]
+    insufficient = [r for r in rows if r["sample_size"] < min_samples]
+
     lines = ["Signal Attribution (alpha vs SPY benchmark):"]
-    outperforming = [r for r in rows if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) > 0]
-    underperforming = [r for r in rows if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) <= 0]
+    outperforming = [r for r in sufficient if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) > 0]
+    underperforming = [r for r in sufficient if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) <= 0]
 
     if outperforming:
         lines.append("Outperforming signals (positive alpha vs SPY):")
@@ -99,6 +103,10 @@ def get_attribution_summary() -> str:
             avg = float(r.get("avg_outcome_7d") or 0)
             wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
             lines.append(f"  - {r['category']}: {avg:+.2f}% avg 7d alpha, {wr:.0f}% beat-market rate (n={r['sample_size']})")
+
+    if insufficient:
+        names = [f"{r['category']} (n={r['sample_size']})" for r in insufficient]
+        lines.append(f"Insufficient data (<{min_samples} samples): {', '.join(names)}")
 
     return "\n".join(lines)
 
