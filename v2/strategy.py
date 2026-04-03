@@ -344,27 +344,58 @@ def _count_actions(messages: list[dict]) -> tuple[int, int, bool, bool]:
 DEFAULT_REFLECTION_MODEL = "claude-sonnet-4-6"
 
 
+def _format_trading_context(trading_result) -> str:
+    """Format TradingSessionResult into a context block for the reflection agent."""
+    if not trading_result:
+        return ""
+    lines = [
+        "TODAY'S TRADING SESSION:",
+        f"  Decisions made: {trading_result.decisions_made}",
+        f"  Trades executed: {trading_result.trades_executed}",
+        f"  Trades failed: {trading_result.trades_failed}",
+        f"  Total buy value: ${float(trading_result.total_buy_value):,.2f}",
+        f"  Total sell value: ${float(trading_result.total_sell_value):,.2f}",
+    ]
+    if trading_result.market_summary:
+        lines.append(f"  Executor's market summary: {trading_result.market_summary}")
+    if trading_result.risk_assessment:
+        lines.append(f"  Executor's risk assessment: {trading_result.risk_assessment}")
+    if trading_result.errors:
+        lines.append(f"  Errors ({len(trading_result.errors)}):")
+        for err in trading_result.errors[:5]:
+            lines.append(f"    - {err}")
+    return "\n".join(lines)
+
+
 def run_strategy_reflection(
     model: str = DEFAULT_REFLECTION_MODEL,
     max_turns: int = 10,
+    trading_result=None,
 ) -> StrategyReflectionResult:
     """Run the strategy reflection stage (Stage 4)."""
     logger.info("Starting strategy reflection (model=%s, max_turns=%d)", model, max_turns)
 
     client = get_claude_client()
 
+    trading_context = _format_trading_context(trading_result)
+    initial_parts = []
+    if trading_context:
+        initial_parts.append(trading_context)
+        initial_parts.append("")
+    initial_parts.append(
+        "Begin your strategy reflection. Start by:\n"
+        "1. Getting the current strategy identity and rules\n"
+        "2. Getting the session summary (recent decisions and attribution)\n"
+        "3. Getting recent strategy memos for context\n"
+        "4. Analyzing what happened and making any necessary updates\n"
+        "5. Writing a reflection memo\n"
+    )
+
     result = run_agentic_loop(
         client=client,
         model=model,
         system=STRATEGY_REFLECTION_SYSTEM,
-        initial_message=(
-            "Begin your strategy reflection. Start by:\n"
-            "1. Getting the current strategy identity and rules\n"
-            "2. Getting the session summary (recent decisions and attribution)\n"
-            "3. Getting recent strategy memos for context\n"
-            "4. Analyzing what happened and making any necessary updates\n"
-            "5. Writing a reflection memo\n"
-        ),
+        initial_message="\n".join(initial_parts),
         tools=STRATEGY_TOOL_DEFINITIONS,
         tool_handlers=STRATEGY_TOOL_HANDLERS,
         max_turns=max_turns,

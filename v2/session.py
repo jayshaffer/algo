@@ -253,7 +253,11 @@ def run_session(
             except Exception:
                 pass
         try:
-            result.strategy_result = run_strategy_reflection(model=DEFAULT_REFLECTION_MODEL, max_turns=10)
+            result.strategy_result = run_strategy_reflection(
+                model=DEFAULT_REFLECTION_MODEL,
+                max_turns=10,
+                trading_result=result.trading_result,
+            )
             if session_id:
                 try:
                     complete_session_stage(session_id, "strategy")
