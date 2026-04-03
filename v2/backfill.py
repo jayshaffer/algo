@@ -148,17 +148,8 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
         exit_price = get_price_on_date(client, ticker, exit_date)
 
         if exit_price is None:
-            outcome = Decimal("-100")
-            if dry_run:
-                print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — assuming -100% [DRY RUN]")
-            else:
-                try:
-                    update_outcome(decision_id, days, outcome)
-                    print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — recorded -100%")
-                    stats["outcomes_filled"] += 1
-                except Exception as e:
-                    print(f"  [{decision_id}] Error updating: {e}")
-                    stats["errors"] += 1
+            print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — skipping")
+            stats["skipped_no_price"] += 1
             continue
 
         outcome = calculate_outcome(action, entry_price, exit_price)
