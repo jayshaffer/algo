@@ -376,3 +376,47 @@ class TestStrategyToolDefinitions:
         assert "get_strategy_identity" in TOOL_HANDLERS
         assert "get_strategy_rules" in TOOL_HANDLERS
         assert "get_strategy_history" in TOOL_HANDLERS
+
+
+class TestGetStrategyHistoryTruncation:
+    @patch("v2.tools.get_recent_strategy_memos")
+    def test_recent_memos_not_truncated(self, mock_get):
+        """Last 2 memos should be returned in full."""
+        from v2.tools import tool_get_strategy_history
+        long_content = "A" * 2000
+        mock_get.return_value = [
+            make_strategy_memo_row(content=long_content, session_date=date(2026, 4, 2)),
+            make_strategy_memo_row(content=long_content, session_date=date(2026, 4, 1)),
+        ]
+        result = tool_get_strategy_history(n=5)
+        assert long_content in result
+        assert result.count("...") == 0
+
+    @patch("v2.tools.get_recent_strategy_memos")
+    def test_older_memos_truncated_to_300(self, mock_get):
+        """Memos beyond position 2 should be truncated to 300 chars."""
+        from v2.tools import tool_get_strategy_history
+        long_content = "B" * 2000
+        mock_get.return_value = [
+            make_strategy_memo_row(content="recent1", session_date=date(2026, 4, 2)),
+            make_strategy_memo_row(content="recent2", session_date=date(2026, 4, 1)),
+            make_strategy_memo_row(content=long_content, session_date=date(2026, 3, 31)),
+        ]
+        result = tool_get_strategy_history(n=5)
+        lines = result.split("\n")
+        assert "B" * 300 in lines[2]
+        assert "B" * 301 not in lines[2]
+        assert lines[2].endswith("...")
+
+    @patch("v2.tools.get_recent_strategy_memos")
+    def test_short_older_memos_not_truncated(self, mock_get):
+        """Short older memos (<300 chars) should not get '...' appended."""
+        from v2.tools import tool_get_strategy_history
+        mock_get.return_value = [
+            make_strategy_memo_row(content="recent", session_date=date(2026, 4, 2)),
+            make_strategy_memo_row(content="recent", session_date=date(2026, 4, 1)),
+            make_strategy_memo_row(content="short old memo", session_date=date(2026, 3, 31)),
+        ]
+        result = tool_get_strategy_history(n=5)
+        assert "short old memo" in result
+        assert "..." not in result.split("\n")[2]

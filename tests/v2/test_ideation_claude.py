@@ -180,3 +180,36 @@ class TestSystemPrompts:
         assert "get_strategy_identity" in CLAUDE_STRATEGIST_SYSTEM
         assert "get_strategy_rules" in CLAUDE_STRATEGIST_SYSTEM
         assert "get_strategy_history" in CLAUDE_STRATEGIST_SYSTEM
+
+
+class TestStrategistPreSeedMemos:
+    def test_strategy_history_in_preseed(self):
+        """Strategy memos should appear in the pre-seeded initial message."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+        mock_result.cache_creation_input_tokens = 0
+        mock_result.cache_read_input_tokens = 0
+
+        with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
+             patch("v2.ideation_claude.reset_session"), \
+             patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.tool_get_portfolio_state", return_value="portfolio"), \
+             patch("v2.ideation_claude.tool_get_active_theses", return_value="theses"), \
+             patch("v2.ideation_claude.tool_get_decision_history", return_value="decisions"), \
+             patch("v2.ideation_claude.tool_get_signal_attribution", return_value="attribution"), \
+             patch("v2.ideation_claude.tool_get_strategy_identity", return_value="identity"), \
+             patch("v2.ideation_claude.tool_get_strategy_rules", return_value="rules"), \
+             patch("v2.ideation_claude.tool_get_strategy_history", return_value="memo content here"):
+            mock_loop.return_value = mock_result
+
+            run_strategist_loop(model="claude-opus-4-6", max_turns=1)
+
+        call_kwargs = mock_loop.call_args
+        initial_msg = call_kwargs.kwargs.get("initial_message", "")
+        assert "Strategy History" in initial_msg
+        assert "memo content here" in initial_msg

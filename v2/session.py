@@ -35,6 +35,7 @@ from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 from .database.trading_db import (
     get_session_for_date, insert_session_record, complete_session, fail_session,
     insert_session_stage, complete_session_stage, fail_session_stage, get_completed_stages,
+    insert_strategy_memo, get_current_strategy_state, get_playbook,
 )
 
 logger = logging.getLogger("session")
@@ -178,6 +179,19 @@ def run_session(
                 max_turns=max_turns,
                 attribution_constraints=attribution_constraints,
             )
+            # Persist strategist reasoning for the reflection agent
+            try:
+                if result.strategist_result and result.strategist_result.final_summary:
+                    state = get_current_strategy_state()
+                    insert_strategy_memo(
+                        session_date=today,
+                        memo_type='strategist_notes',
+                        content=result.strategist_result.final_summary,
+                        strategy_state_id=state['id'] if state else None,
+                    )
+                    logger.info("Strategist summary saved as memo")
+            except Exception as e:
+                logger.warning("Could not save strategist memo: %s", e)
             if session_id:
                 try:
                     complete_session_stage(session_id, "strategist")
@@ -193,6 +207,13 @@ def run_session(
             logger.error("Strategist failed: %s — continuing with existing playbook", e)
 
     # Stage 3: Trading session
+    # Skip if strategist failed and no playbook exists (executor depends on playbook)
+    if not skip_executor and "executor" not in completed_stages and result.strategist_error:
+        if get_playbook(today) is None:
+            logger.warning("Strategist failed and no playbook exists for %s — skipping executor", today)
+            skip_executor = True
+            result.skipped_executor = True
+
     if skip_executor or "executor" in completed_stages:
         logger.info("[Stage 3] Trading executor — SKIPPED%s",
                      " (completed in prior run)" if "executor" in completed_stages else "")

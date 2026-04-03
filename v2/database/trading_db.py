@@ -532,12 +532,13 @@ def get_active_strategy_rules() -> list:
         return cur.fetchall()
 
 
-def retire_strategy_rule(rule_id) -> bool:
+def retire_strategy_rule(rule_id, reason=None) -> bool:
     with get_cursor() as cur:
         cur.execute("""
-            UPDATE strategy_rules SET status = 'retired', retired_at = NOW()
+            UPDATE strategy_rules
+            SET status = 'retired', retired_at = NOW(), retirement_reason = %s
             WHERE id = %s AND status = 'active'
-        """, (rule_id,))
+        """, (reason, rule_id))
         return cur.rowcount > 0
 
 

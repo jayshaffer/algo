@@ -11,6 +11,7 @@ from .tools import (
     tool_get_portfolio_state, tool_get_active_theses,
     tool_get_decision_history, tool_get_signal_attribution,
     tool_get_strategy_identity, tool_get_strategy_rules,
+    tool_get_strategy_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,10 @@ def run_strategist_loop(
         context_parts.append(f"=== Strategy Rules ===\n{tool_get_strategy_rules()}")
     except Exception:
         context_parts.append("=== Strategy Rules ===\n(unavailable)")
+    try:
+        context_parts.append(f"=== Strategy History ===\n{tool_get_strategy_history()}")
+    except Exception:
+        context_parts.append("=== Strategy History ===\n(unavailable)")
 
     pre_seeded = "\n\n".join(context_parts)
 
@@ -311,7 +316,7 @@ def run_strategist_loop(
 {pre_seeded}
 
 Now proceed with your strategist session:
-1. Review the data above — do NOT re-fetch portfolio, theses, decisions, attribution, identity, or rules
+1. Review the data above — do NOT re-fetch portfolio, theses, decisions, attribution, identity, rules, or strategy history
 2. Explore market conditions for new opportunities (use web_search, get_market_snapshot, get_news_signals)
 3. Update or close stale theses, create 2-4 new ones
 4. Write today's playbook using the write_playbook tool

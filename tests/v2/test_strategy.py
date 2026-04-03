@@ -41,7 +41,10 @@ class TestToolUpdateStrategyIdentity:
     @patch("v2.strategy.get_current_strategy_state")
     def test_updates_existing_identity(self, mock_get, mock_clear, mock_insert):
         from v2.strategy import tool_update_strategy_identity
-        mock_get.return_value = make_strategy_state_row(version=2)
+        from datetime import timedelta
+        mock_get.return_value = make_strategy_state_row(
+            version=2, created_at=datetime.now() - timedelta(days=5),
+        )
         mock_insert.return_value = 3
 
         result = tool_update_strategy_identity(
@@ -106,6 +109,14 @@ class TestToolRetireRule:
         mock_retire.return_value = False
         result = tool_retire_rule(rule_id=999, reason="test")
         assert "not found" in result.lower() or "Error" in result
+
+    @patch("v2.strategy.retire_strategy_rule")
+    def test_passes_reason_to_db(self, mock_retire):
+        """retire_rule should pass the reason to the database function."""
+        from v2.strategy import tool_retire_rule
+        mock_retire.return_value = True
+        tool_retire_rule(rule_id=5, reason="Superseded by structural enforcement")
+        mock_retire.assert_called_once_with(rule_id=5, reason="Superseded by structural enforcement")
 
 
 class TestToolWriteStrategyMemo:
@@ -310,3 +321,54 @@ class TestRunStrategyReflection:
         assert result.rules_retired == 1
         assert result.identity_updated is True
         assert result.memo_written is True
+
+
+class TestIdentityUpdateGuard:
+    @patch("v2.strategy.insert_strategy_state")
+    @patch("v2.strategy.clear_current_strategy_state")
+    @patch("v2.strategy.get_current_strategy_state")
+    def test_warns_if_recently_updated(self, mock_get, mock_clear, mock_insert):
+        """Should return warning if identity was updated within 3 days."""
+        from v2.strategy import tool_update_strategy_identity
+        from datetime import timezone
+        mock_get.return_value = make_strategy_state_row(
+            version=5,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        result = tool_update_strategy_identity(
+            identity_text="New identity",
+            risk_posture="aggressive",
+            sector_biases={},
+            preferred_signals=[],
+            avoided_signals=[],
+        )
+
+        assert "Warning" in result
+        mock_clear.assert_not_called()
+        mock_insert.assert_not_called()
+
+    @patch("v2.strategy.insert_strategy_state")
+    @patch("v2.strategy.clear_current_strategy_state")
+    @patch("v2.strategy.get_current_strategy_state")
+    def test_allows_update_if_not_recent(self, mock_get, mock_clear, mock_insert):
+        """Should allow update if identity hasn't been updated in >3 days."""
+        from v2.strategy import tool_update_strategy_identity
+        from datetime import timedelta, timezone
+        mock_get.return_value = make_strategy_state_row(
+            version=5,
+            created_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        mock_insert.return_value = 6
+
+        result = tool_update_strategy_identity(
+            identity_text="New identity",
+            risk_posture="moderate",
+            sector_biases={},
+            preferred_signals=[],
+            avoided_signals=[],
+        )
+
+        assert "version 6" in result
+        mock_clear.assert_called_once()
+        mock_insert.assert_called_once()

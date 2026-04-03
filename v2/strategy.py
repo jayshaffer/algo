@@ -64,7 +64,24 @@ You are NOT making trades. You are reflecting on performance and shaping who thi
 2. **First session**: If no identity exists yet, bootstrap one from attribution data and today's results
 3. **Concise memos**: Memos should be 2-4 paragraphs, focused on actionable observations
 4. **Always write a memo**: Even if nothing changed, document why
-5. **Don't over-rotate**: A single bad session doesn't warrant major strategy changes. Look for patterns across multiple sessions."""
+5. **Don't over-rotate**: A single bad session doesn't warrant major strategy changes. Look for patterns across multiple sessions.
+
+## Identity vs. Memos
+
+The strategy identity describes WHO this system is as a trader — its style, risk philosophy, signal preferences, and core beliefs. It should be stable across sessions and NOT reference specific session numbers, individual trades, or recent events.
+
+Session-specific observations belong in memos, not the identity.
+
+Only update the identity when the system's fundamental character has genuinely shifted (e.g., from momentum trader to value trader, or from aggressive to conservative). Cosmetic updates ("in its 36th session") are not identity changes.
+
+A good identity reads like a bio. A bad identity reads like a session log.
+
+## Rule Management
+
+Before proposing a new rule:
+1. Check if an existing active rule covers the same pattern
+2. If so, update the existing rule's confidence, scope, or evidence rather than creating a new one
+3. Only create a new rule if the pattern is genuinely distinct from all existing rules"""
 
 
 # --- Write Tool Handlers ---
@@ -79,6 +96,16 @@ def tool_update_strategy_identity(
     """Update the system's strategy identity (creates new versioned row)."""
     logger.info("Updating strategy identity")
     current = get_current_strategy_state()
+
+    # Soft guard: warn if updated within last 3 days
+    if current and (date.today() - current["created_at"].date()).days < 3:
+        return (
+            f"Warning: Identity was updated within the last 3 days "
+            f"(v{current['version']} on {current['created_at'].date()}). "
+            f"Consider writing a memo instead unless the system's fundamental "
+            f"character has changed. To proceed anyway, call update_strategy_identity again."
+        )
+
     new_version = (current["version"] + 1) if current else 1
 
     clear_current_strategy_state()
@@ -115,7 +142,7 @@ def tool_propose_rule(
 def tool_retire_rule(rule_id: int, reason: str) -> str:
     """Retire a strategy rule."""
     logger.info(f"Retiring rule {rule_id}: {reason}")
-    success = retire_strategy_rule(rule_id=rule_id)
+    success = retire_strategy_rule(rule_id=rule_id, reason=reason)
     if success:
         return f"Retired rule ID {rule_id}. Reason: {reason}"
     return f"Error: Rule ID {rule_id} not found or already retired"
