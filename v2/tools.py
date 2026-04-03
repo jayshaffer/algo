@@ -318,17 +318,19 @@ def tool_get_strategy_rules() -> str:
     return "\n".join(lines)
 
 
-def tool_get_strategy_history(n: int = 5) -> str:
-    """Get recent strategy memos."""
+def tool_get_strategy_history(n: int = 5, full_recent: int = 2) -> str:
+    """Get recent strategy memos. Last `full_recent` shown in full, older truncated to 300 chars."""
     logger.info(f"Getting strategy history (last {n})")
     memos = get_recent_strategy_memos(n=n)
     if not memos:
         return "No strategy memos yet. This is the first session."
 
     lines = []
-    for m in memos:
-        # Truncate memo content to avoid bloating context
-        content = m['content'][:200] + "..." if len(m['content']) > 200 else m['content']
+    for i, m in enumerate(memos):
+        if i < full_recent:
+            content = m['content']
+        else:
+            content = m['content'][:300] + "..." if len(m['content']) > 300 else m['content']
         lines.append(f"[{m['session_date']}] {m['memo_type']}: {content}")
     return "\n".join(lines)
 
