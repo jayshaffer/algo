@@ -109,6 +109,58 @@ def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
     return result
 
 
+_TRUNCATION_THRESHOLD = 300  # chars; tool results longer than this get truncated
+_KEEP_RECENT_EXCHANGES = 3  # number of recent assistant+user pairs to keep intact
+
+
+def _truncate_old_tool_results(messages: list[dict]) -> list[dict]:
+    """Truncate tool results from older exchanges to reduce context growth.
+
+    Keeps the most recent _KEEP_RECENT_EXCHANGES pairs intact.
+    For older user messages containing tool_result blocks, truncates
+    the content string to _TRUNCATION_THRESHOLD characters.
+    """
+    # Find cutoff: keep last N user messages with tool results untouched
+    tool_result_indices = [
+        i for i, m in enumerate(messages)
+        if m["role"] == "user" and isinstance(m.get("content"), list)
+        and any(
+            isinstance(item, dict) and item.get("type") == "tool_result"
+            for item in m["content"]
+        )
+    ]
+
+    if len(tool_result_indices) <= _KEEP_RECENT_EXCHANGES:
+        return messages
+
+    # Indices to truncate (all but the last N)
+    truncate_set = set(tool_result_indices[:-_KEEP_RECENT_EXCHANGES])
+
+    result = []
+    for i, msg in enumerate(messages):
+        if i not in truncate_set:
+            result.append(msg)
+            continue
+
+        new_content = []
+        for item in msg["content"]:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "tool_result"
+                and isinstance(item.get("content"), str)
+                and len(item["content"]) > _TRUNCATION_THRESHOLD
+            ):
+                new_content.append({
+                    **item,
+                    "content": item["content"][:_TRUNCATION_THRESHOLD] + "...[truncated]",
+                })
+            else:
+                new_content.append(item)
+        result.append({**msg, "content": new_content})
+
+    return result
+
+
 def run_agentic_loop(
     client: anthropic.Anthropic,
     model: str,
@@ -137,13 +189,16 @@ def run_agentic_loop(
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
 
+        # Truncate old tool results to reduce context growth
+        pruned = _truncate_old_tool_results(messages)
+
         response = _call_with_retry(
             client,
             model=model,
-            max_tokens=4096,
+            max_tokens=4096 if turn == 0 else 2048,
             system=cached_system,
             tools=cached_tools,
-            messages=_messages_with_cache_breakpoint(messages),
+            messages=_messages_with_cache_breakpoint(pruned),
         )
 
         # Track token usage

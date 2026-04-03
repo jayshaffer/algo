@@ -38,6 +38,32 @@ function shortOrderId(id) {
   return id.length > 12 ? id.slice(0, 8) + "..." : id;
 }
 
+function computeTWR(snapshots) {
+  // Time-weighted return: chains daily sub-period returns, excluding deposit effects.
+  // Each sub-period: return = V_end / (V_start + deposit) where deposit is new cash in.
+  // Returns array of cumulative % returns aligned to each snapshot.
+  if (!snapshots || snapshots.length === 0) return [];
+
+  var returns = [0];
+  var cumulativeGrowth = 1.0;
+
+  for (var i = 1; i < snapshots.length; i++) {
+    var prevValue = snapshots[i - 1].portfolio_value;
+    var prevDep = snapshots[i - 1].cumulative_deposits || snapshots[i - 1].portfolio_value;
+    var currDep = snapshots[i].cumulative_deposits || prevDep;
+    var deposit = currDep - prevDep;
+
+    var startCapital = prevValue + deposit;
+    if (startCapital > 0) {
+      cumulativeGrowth *= snapshots[i].portfolio_value / startCapital;
+    }
+
+    returns.push((cumulativeGrowth - 1) * 100);
+  }
+
+  return returns;
+}
+
 // === Data Fetching ===
 
 async function fetchJSON(file) {
@@ -86,17 +112,14 @@ function renderSummary(s, snapshots, benchmark) {
 
   document.getElementById("cash-value").textContent = formatCurrency(s.cash);
 
-  // vs S&P: portfolio return minus SPY return
+  // vs S&P: TWR portfolio return minus SPY return
   var vsSp = document.getElementById("vs-sp");
   if (snapshots && snapshots.length > 1 && benchmark && benchmark.length > 0) {
-    var baseDeposits = snapshots[0].cumulative_deposits || snapshots[0].portfolio_value;
-    var nowDeposits = snapshots[snapshots.length - 1].cumulative_deposits || baseDeposits;
-    var portfolioNow = snapshots[snapshots.length - 1].portfolio_value;
-    var portfolioReturn = ((portfolioNow - nowDeposits) / baseDeposits) * 100;
+    var twrReturns = computeTWR(snapshots);
+    var portfolioReturn = twrReturns[twrReturns.length - 1];
 
     var spyMap = {};
     benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
-    // Find first/last available benchmark close (dates may not align on weekends)
     var spyStart = null;
     for (var i = 0; i < snapshots.length; i++) {
       if (spyMap[snapshots[i].date] != null) { spyStart = spyMap[snapshots[i].date]; break; }
@@ -127,15 +150,13 @@ function renderEquityCurve(snapshots, benchmark) {
 
   var labels = snapshots.map(function (s) { return s.date; });
 
-  // Normalize portfolio to % return
-  var baseValue = snapshots[0].portfolio_value;
-  var portfolioReturns = snapshots.map(function (s) {
-    return ((s.portfolio_value - baseValue) / baseValue) * 100;
+  var portfolioValues = snapshots.map(function (s) {
+    return s.portfolio_value;
   });
 
   var datasets = [{
     label: "Portfolio",
-    data: portfolioReturns,
+    data: portfolioValues,
     borderColor: "#00d4aa",
     backgroundColor: "rgba(0, 212, 170, 0.08)",
     fill: true,
@@ -145,25 +166,24 @@ function renderEquityCurve(snapshots, benchmark) {
     borderWidth: 2,
   }];
 
-  // Add SPY benchmark if available
+  // Add SPY benchmark if available, normalized to portfolio's starting value
   if (benchmark && benchmark.length > 0) {
-    // Build a date->close map for SPY
     var spyMap = {};
     benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
 
-    // Find SPY base value matching the first snapshot date
     var spyBase = spyMap[labels[0]];
 
     if (spyBase) {
-      var spyReturns = labels.map(function (date) {
+      var baseValue = snapshots[0].portfolio_value;
+      var spyNormalized = labels.map(function (date) {
         var close = spyMap[date];
         if (close == null) return null;
-        return ((close - spyBase) / spyBase) * 100;
+        return (close / spyBase) * baseValue;
       });
 
       datasets.push({
         label: "S&P 500",
-        data: spyReturns,
+        data: spyNormalized,
         borderColor: "#5a6a7a",
         borderDash: [6, 3],
         backgroundColor: "transparent",
@@ -189,7 +209,7 @@ function renderEquityCurve(snapshots, benchmark) {
         tooltip: {
           callbacks: {
             label: function (ctx) {
-              return "Portfolio: " + formatCurrency(ctx.parsed.y);
+              return ctx.dataset.label + ": " + formatCurrency(ctx.parsed.y);
             },
           },
         },
@@ -223,13 +243,8 @@ function renderBenchmark(snapshots, benchmark) {
 
   var labels = snapshots.map(function (s) { return s.date; });
 
-  // Normalize portfolio to % return, adjusted for cash deposits/withdrawals
-  // Return = (portfolio_value - cumulative_deposits) / first_deposits * 100
-  var baseDeposits = snapshots[0].cumulative_deposits || snapshots[0].portfolio_value;
-  var portfolioReturns = snapshots.map(function (s) {
-    var deposits = s.cumulative_deposits || baseDeposits;
-    return ((s.portfolio_value - deposits) / baseDeposits) * 100;
-  });
+  // Time-weighted portfolio returns (excludes deposit effects)
+  var portfolioReturns = computeTWR(snapshots);
 
   // Build a date->close map for SPY
   var spyMap = {};
@@ -386,7 +401,7 @@ function renderTheses(theses) {
 document.addEventListener("DOMContentLoaded", function () {
   fetchAllData().then(function (data) {
     renderSummary(data.summary, data.snapshots, data.benchmark);
-    renderEquityCurve(data.snapshots);
+    renderEquityCurve(data.snapshots, data.benchmark);
     renderBenchmark(data.snapshots, data.benchmark);
     renderPositions(data.positions);
     renderDecisions(data.decisions);
