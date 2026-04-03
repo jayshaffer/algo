@@ -683,6 +683,7 @@ class TestStrategistMemoPersistence:
              patch("v2.session.build_attribution_constraints", return_value=""), \
              patch("v2.session.run_pipeline"), \
              patch("v2.session.run_strategist_loop", side_effect=Exception("Opus down")), \
+             patch("v2.session.get_playbook", return_value=None), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_twitter_stage"), \
@@ -693,3 +694,43 @@ class TestStrategistMemoPersistence:
             run_session(dry_run=True)
 
         mock_memo.assert_not_called()
+
+
+class TestExecutorPlaybookDependency:
+    def test_executor_skipped_when_strategist_fails_and_no_playbook(self):
+        """Stage 3 should be skipped if Stage 2 failed and no playbook exists."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", side_effect=Exception("Opus down")), \
+             patch("v2.session.get_playbook", return_value=None), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        mock_trade.assert_not_called()
+        assert result.skipped_executor is True
+        assert result.strategist_error == "Opus down"
+
+    def test_executor_runs_when_strategist_fails_but_playbook_exists(self):
+        """Stage 3 should run if Stage 2 failed but a prior playbook exists."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", side_effect=Exception("Opus down")), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        mock_trade.assert_called_once()
