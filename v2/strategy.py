@@ -74,7 +74,14 @@ Session-specific observations belong in memos, not the identity.
 
 Only update the identity when the system's fundamental character has genuinely shifted (e.g., from momentum trader to value trader, or from aggressive to conservative). Cosmetic updates ("in its 36th session") are not identity changes.
 
-A good identity reads like a bio. A bad identity reads like a session log."""
+A good identity reads like a bio. A bad identity reads like a session log.
+
+## Rule Management
+
+Before proposing a new rule:
+1. Check if an existing active rule covers the same pattern
+2. If so, update the existing rule's confidence, scope, or evidence rather than creating a new one
+3. Only create a new rule if the pattern is genuinely distinct from all existing rules"""
 
 
 # --- Write Tool Handlers ---
@@ -135,7 +142,7 @@ def tool_propose_rule(
 def tool_retire_rule(rule_id: int, reason: str) -> str:
     """Retire a strategy rule."""
     logger.info(f"Retiring rule {rule_id}: {reason}")
-    success = retire_strategy_rule(rule_id=rule_id)
+    success = retire_strategy_rule(rule_id=rule_id, reason=reason)
     if success:
         return f"Retired rule ID {rule_id}. Reason: {reason}"
     return f"Error: Rule ID {rule_id} not found or already retired"

@@ -216,6 +216,7 @@ def make_strategy_rule_row(**kwargs):
         "status": "active",
         "created_at": datetime.now(),
         "retired_at": None,
+        "retirement_reason": None,
     }
     defaults.update(kwargs)
     return defaults

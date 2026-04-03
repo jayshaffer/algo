@@ -110,6 +110,14 @@ class TestToolRetireRule:
         result = tool_retire_rule(rule_id=999, reason="test")
         assert "not found" in result.lower() or "Error" in result
 
+    @patch("v2.strategy.retire_strategy_rule")
+    def test_passes_reason_to_db(self, mock_retire):
+        """retire_rule should pass the reason to the database function."""
+        from v2.strategy import tool_retire_rule
+        mock_retire.return_value = True
+        tool_retire_rule(rule_id=5, reason="Superseded by structural enforcement")
+        mock_retire.assert_called_once_with(rule_id=5, reason="Superseded by structural enforcement")
+
 
 class TestToolWriteStrategyMemo:
     @patch("v2.strategy.insert_strategy_memo")
