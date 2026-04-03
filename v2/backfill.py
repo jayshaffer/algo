@@ -105,16 +105,20 @@ def calculate_outcome(
         return -price_change_pct
 
 
-def update_outcome(decision_id: int, days: int, outcome: Decimal):
-    """Update the outcome column for a decision."""
+BENCHMARK_TICKER = "SPY"
+
+
+def update_outcome(decision_id: int, days: int, outcome: Decimal, benchmark: Decimal = None):
+    """Update the outcome and benchmark columns for a decision."""
     outcome_col = f"outcome_{days}d"
+    benchmark_col = f"benchmark_{days}d"
 
     with get_cursor() as cur:
         cur.execute(f"""
             UPDATE decisions
-            SET {outcome_col} = %s
+            SET {outcome_col} = %s, {benchmark_col} = %s
             WHERE id = %s
-        """, (outcome, decision_id))
+        """, (outcome, benchmark, decision_id))
 
 
 def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
@@ -137,6 +141,9 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
 
     client = get_data_client()
 
+    # Pre-fetch SPY entry prices for benchmark computation
+    spy_prices: dict[date, Decimal] = {}
+
     for decision in decisions:
         decision_id = decision["id"]
         ticker = decision["ticker"]
@@ -148,27 +155,30 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
         exit_price = get_price_on_date(client, ticker, exit_date)
 
         if exit_price is None:
-            outcome = Decimal("-100")
-            if dry_run:
-                print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — assuming -100% [DRY RUN]")
-            else:
-                try:
-                    update_outcome(decision_id, days, outcome)
-                    print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — recorded -100%")
-                    stats["outcomes_filled"] += 1
-                except Exception as e:
-                    print(f"  [{decision_id}] Error updating: {e}")
-                    stats["errors"] += 1
+            print(f"  [{decision_id}] {ticker}: No price data for {exit_date} — skipping")
+            stats["skipped_no_price"] += 1
             continue
 
         outcome = calculate_outcome(action, entry_price, exit_price)
 
+        # Compute SPY benchmark for the same window
+        benchmark = None
+        if decision_date not in spy_prices:
+            spy_prices[decision_date] = get_price_on_date(client, BENCHMARK_TICKER, decision_date)
+        spy_entry = spy_prices.get(decision_date)
+        spy_exit = get_price_on_date(client, BENCHMARK_TICKER, exit_date)
+        if spy_entry and spy_exit and spy_entry > 0:
+            benchmark = ((spy_exit - spy_entry) / spy_entry) * 100
+
+        alpha_str = f" alpha={outcome - benchmark:+.2f}%" if benchmark is not None else ""
+
         if dry_run:
-            print(f"  [{decision_id}] {ticker} {action}: ${entry_price} -> ${exit_price} = {outcome:+.2f}% [DRY RUN]")
+            print(f"  [{decision_id}] {ticker} {action}: {outcome:+.2f}% (SPY {benchmark:+.2f}%{alpha_str}) [DRY RUN]" if benchmark is not None
+                  else f"  [{decision_id}] {ticker} {action}: {outcome:+.2f}% (no benchmark) [DRY RUN]")
         else:
             try:
-                update_outcome(decision_id, days, outcome)
-                print(f"  [{decision_id}] {ticker} {action}: ${entry_price} -> ${exit_price} = {outcome:+.2f}%")
+                update_outcome(decision_id, days, outcome, benchmark)
+                print(f"  [{decision_id}] {ticker} {action}: {outcome:+.2f}%{alpha_str}")
                 stats["outcomes_filled"] += 1
             except Exception as e:
                 print(f"  [{decision_id}] Error updating: {e}")

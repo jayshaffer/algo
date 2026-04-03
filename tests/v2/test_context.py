@@ -439,7 +439,7 @@ class TestGetAttributionContext:
         ]
         from v2.context import get_attribution_context
         result = get_attribution_context()
-        assert "Profitable" in result
+        assert "Outperforming" in result
         assert "news_signal:earnings" in result
 
 

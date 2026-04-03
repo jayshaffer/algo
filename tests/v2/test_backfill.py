@@ -81,9 +81,10 @@ class TestBackfillOutcomes:
 
         # Should call get_price_on_date with trading day offset (March 24),
         # not calendar offset (March 20, which is a Friday but wrong date)
-        call_args = mock_price.call_args
-        assert call_args[0][1] == "AAPL"
-        assert call_args[0][2] == date(2026, 3, 24)
+        # Find the AAPL call (not the SPY benchmark calls)
+        aapl_calls = [c for c in mock_price.call_args_list if c[0][1] == "AAPL"]
+        assert len(aapl_calls) == 1
+        assert aapl_calls[0][0][2] == date(2026, 3, 24)
 
 
 class TestBackfillNoPrice:
@@ -91,7 +92,7 @@ class TestBackfillNoPrice:
     @patch("v2.backfill.get_decisions_needing_backfill")
     @patch("v2.backfill.get_price_on_date")
     @patch("v2.backfill.update_outcome")
-    def test_no_price_records_sentinel(self, mock_update, mock_get_price, mock_get_decisions, mock_client):
+    def test_no_price_skips_decision(self, mock_update, mock_get_price, mock_get_decisions, mock_client):
         mock_client.return_value = MagicMock()
         mock_get_decisions.return_value = [
             {"id": 1, "date": date(2026, 1, 1), "ticker": "DELIST",
@@ -101,11 +102,8 @@ class TestBackfillNoPrice:
 
         stats = backfill_outcomes(days=7)
 
-        mock_update.assert_called_once()
-        args = mock_update.call_args[0]
-        assert args[0] == 1  # decision_id
-        assert args[1] == 7  # days
-        assert args[2] == Decimal("-100")  # sentinel
+        mock_update.assert_not_called()
+        assert stats["skipped_no_price"] == 1
 
     @patch("v2.backfill.get_data_client")
     @patch("v2.backfill.get_decisions_needing_backfill")
