@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
+from .context import get_equity_summary
 from .tools import (
     TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session,
     tool_get_portfolio_state, tool_get_active_theses,
@@ -308,6 +309,12 @@ def run_strategist_loop(
         context_parts.append(f"=== Strategy History ===\n{tool_get_strategy_history()}")
     except Exception:
         context_parts.append("=== Strategy History ===\n(unavailable)")
+    try:
+        equity = get_equity_summary(days=30)
+        if equity:
+            context_parts.append(f"=== Account History ===\n{equity}")
+    except Exception:
+        pass
 
     pre_seeded = "\n\n".join(context_parts)
 

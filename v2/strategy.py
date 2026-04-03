@@ -163,18 +163,43 @@ def tool_write_strategy_memo(memo_type: str, content: str) -> str:
 
 
 def tool_get_session_summary(days: int = 30) -> str:
-    """Get today's session summary — recent decisions, outcomes, attribution."""
+    """Get today's session summary — recent decisions, outcomes, attribution, signal linkage."""
     logger.info("Getting session summary")
     lines = []
 
     decisions = get_recent_decisions(days=days)
     if decisions:
+        # Fetch signal linkage for these decisions
+        from .database.connection import get_cursor
+        decision_ids = [d["id"] for d in decisions[:10]]
+        signal_map: dict[int, list[str]] = {}
+        if decision_ids:
+            with get_cursor() as cur:
+                cur.execute("""
+                    SELECT ds.decision_id, ds.signal_type,
+                           COALESCE(ns.category, ms.category, '') AS signal_category
+                    FROM decision_signals ds
+                    LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
+                    LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
+                    WHERE ds.decision_id = ANY(%s)
+                """, (decision_ids,))
+                for row in cur.fetchall():
+                    did = row["decision_id"]
+                    label = f"{row['signal_type']}"
+                    if row["signal_category"]:
+                        label += f":{row['signal_category']}"
+                    signal_map.setdefault(did, []).append(label)
+
         lines.append(f"Decisions ({len(decisions)}):")
         for d in decisions[:10]:
             outcome_7d = f"{d['outcome_7d']:+.1f}%" if d.get("outcome_7d") is not None else "-"
             outcome_30d = f"{d['outcome_30d']:+.1f}%" if d.get("outcome_30d") is not None else "-"
+            off_pb = " [OFF-PLAYBOOK]" if d.get("is_off_playbook") else ""
+            signals = signal_map.get(d["id"], [])
+            signal_str = f" signals=[{', '.join(signals)}]" if signals else " signals=[]"
             lines.append(
-                f"  {d['date']} {d['action'].upper()} {d['ticker']} 7d:{outcome_7d} 30d:{outcome_30d}"
+                f"  {d['date']} {d['action'].upper()} {d['ticker']} "
+                f"7d:{outcome_7d} 30d:{outcome_30d}{off_pb}{signal_str}"
             )
     else:
         lines.append("No recent decisions.")

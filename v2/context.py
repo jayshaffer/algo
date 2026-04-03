@@ -17,6 +17,8 @@ from .database.trading_db import (
     get_playbook_actions,
     get_pending_playbook_actions,
     get_signal_attribution,
+    get_current_strategy_state,
+    get_active_strategy_rules,
 )
 from .attribution import get_attribution_summary
 from .agent import ExecutorInput, PlaybookAction
@@ -336,6 +338,36 @@ def get_attribution_context() -> str:
     return get_attribution_summary()
 
 
+def get_equity_summary(days: int = 30) -> str:
+    """Build equity curve summary from account snapshots."""
+    snapshots = get_account_snapshots(days=days)
+    if not snapshots:
+        return ""
+
+    lines = ["Account History:"]
+    latest = snapshots[0]
+    lines.append(f"  Current: ${float(latest['portfolio_value']):,.2f} (cash: ${float(latest['cash']):,.2f})")
+
+    if len(snapshots) >= 2:
+        oldest = snapshots[-1]
+        pv_now = float(latest["portfolio_value"])
+        pv_then = float(oldest["portfolio_value"])
+        if pv_then > 0:
+            change_pct = ((pv_now - pv_then) / pv_then) * 100
+            lines.append(f"  {days}d change: {change_pct:+.1f}% (from ${pv_then:,.2f})")
+
+    # Peak and drawdown
+    peak_val = max(float(s["portfolio_value"]) for s in snapshots)
+    current_val = float(latest["portfolio_value"])
+    if peak_val > 0:
+        drawdown = ((current_val - peak_val) / peak_val) * 100
+        if drawdown < -0.5:
+            peak_snap = next(s for s in snapshots if float(s["portfolio_value"]) == peak_val)
+            lines.append(f"  Drawdown from peak: {drawdown:.1f}% (peak ${peak_val:,.2f} on {peak_snap['date']})")
+
+    return "\n".join(lines)
+
+
 def build_trading_context(account_info: dict, playbook_date: date = None) -> str:
     """
     Build complete compressed context for trading agent.
@@ -416,6 +448,35 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         if price:
             current_prices[ticker] = price
 
+    # Fetch strategy context for executor
+    try:
+        state = get_current_strategy_state()
+        if state:
+            strategy_identity = (
+                f"Identity: {state['identity_text']}\n"
+                f"Risk Posture: {state['risk_posture']}"
+            )
+        else:
+            strategy_identity = ""
+    except Exception:
+        strategy_identity = ""
+    try:
+        rules = get_active_strategy_rules()
+        if rules:
+            rule_lines = []
+            for r in rules:
+                rule_lines.append(f"#{r['id']} {r['direction']}/{r['category']}: {r['rule_text']}")
+            strategy_rules = "\n".join(rule_lines)
+        else:
+            strategy_rules = ""
+    except Exception:
+        strategy_rules = ""
+
+    try:
+        equity_summary = get_equity_summary(days=30)
+    except Exception:
+        equity_summary = ""
+
     return ExecutorInput(
         playbook_actions=actions,
         positions=[dict(p) for p in positions],
@@ -425,4 +486,7 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         market_outlook=playbook.get("market_outlook", "") if playbook else "No playbook available",
         risk_notes=playbook.get("risk_notes", "") if playbook else "",
         current_prices=current_prices,
+        strategy_identity=strategy_identity,
+        strategy_rules=strategy_rules,
+        equity_summary=equity_summary,
     )

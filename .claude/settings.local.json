@@ -55,7 +55,8 @@
       "Bash(set:*)",
       "Bash(cp:*)",
       "Bash(git:*)",
-      "Bash(cat /home/jay/dev/algo/db/init/*.sql)"
+      "Bash(cat /home/jay/dev/algo/db/init/*.sql)",
+      "Bash(gh pr:*)"
     ]
   }
 }

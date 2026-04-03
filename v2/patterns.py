@@ -104,6 +104,7 @@ def analyze_sentiment_performance(days: int = 90) -> list[SentimentPerformance]:
             WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
               AND d.action IN ('buy', 'sell')
               AND ns.sentiment IS NOT NULL
+              AND d.outcome_7d IS NOT NULL
             GROUP BY ns.sentiment
             ORDER BY avg_outcome_7d DESC NULLS LAST
         """, (days,))
@@ -135,6 +136,7 @@ def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
             FROM decisions
             WHERE date > CURRENT_DATE - INTERVAL '%s days'
               AND action IN ('buy', 'sell')
+              AND outcome_7d IS NOT NULL
             GROUP BY ticker
             ORDER BY total_pnl_7d DESC NULLS LAST
         """, (days,))
@@ -169,6 +171,7 @@ def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation
             WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
               AND d.action IN ('buy', 'sell')
               AND ns.confidence IS NOT NULL
+              AND d.outcome_7d IS NOT NULL
             GROUP BY ns.confidence
             ORDER BY
                 CASE ns.confidence
