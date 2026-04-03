@@ -4,86 +4,95 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Alpaca Learning Platform - an agentic trading system that uses a local LLM (Ollama) to integrate with the Alpaca trading API, learn from past behavior, and make trading decisions.
+Alpaca Learning Platform - an agentic trading system that uses Claude (via Anthropic API) to integrate with the Alpaca trading API, learn from past behavior, and make trading decisions.
 
-**Status:** Active development - core trading infrastructure implemented
+**Status:** Active development — `v2/` is the current active codebase.
+
+## Codebase Layout
+
+- **`v2/`** — Current active codebase. All new work goes here.
+- **`trading/`** — Legacy v1 module. Mostly sunset; individual pieces are pulled into the v2 pipeline as needed. Do not add new features here.
+- **`tests/`** — Test suite covering both v1 and v2.
+- **`dashboard/`** — Legacy v1 dashboard (Flask on port 3000). v2 dashboard lives in `v2/dashboard/`.
 
 ## Project Goals
 
 - Prove whether agentic trading can find an edge
-- Local LLM (qwen2.5:14b via Ollama) makes trading decisions
-- Daily automation after market close
-- Learning system that journals behavior and outcomes
-- Single Alpaca account with adjustable day-to-day strategy
-- Local web dashboard for strategy visibility and reasoning
+- Claude (Haiku for execution, Sonnet/Opus for ideation & reflection) makes trading decisions
+- Daily automated session after market close
+- Learning system that journals behavior, computes signal attribution, and reflects on strategy
+- Single Alpaca account with an evolving day-to-day strategy
+- Public dashboard published to GitHub Pages
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose Stack                      │
-├──────────────┬──────────────┬───────────────┬───────────────┤
-│   Ollama     │  PostgreSQL  │   Trading     │   Dashboard   │
-│  (qwen2.5)     │   (pgvector) │   Agent       │   (Flask)     │
-│  :11434      │   :5432      │               │   :3000       │
-└──────────────┴──────────────┴───────────────┴───────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      Docker Compose Stack                        │
+├───────────────┬───────────────┬───────────────┬──────────────────┤
+│  PostgreSQL   │   Claude API  │   Trading     │   Dashboard      │
+│  (pgvector)   │  (Anthropic)  │   Agent (v2)  │   (v2/dashboard) │
+│  :5432        │               │               │                  │
+└───────────────┴───────────────┴───────────────┴──────────────────┘
 ```
 
-- **LLM:** Ollama with qwen2.5:14b (GPU accelerated)
-- **Database:** PostgreSQL 16 + pgvector for RAG
+- **LLM:** Claude via Anthropic API (Haiku for execution, larger models for ideation/reflection)
+- **Database:** PostgreSQL 16 + pgvector
 - **API:** Alpaca Trading API (read/write)
-- **Dashboard:** Flask web app on port 3000
+- **Dashboard:** Published to GitHub Pages
 
-## Key Concepts
+## v2 Daily Session (`v2/session.py`)
 
-### Trading Session (`trader.py`)
-Daily workflow:
-1. Sync positions/orders from Alpaca
-2. Take account snapshot
-3. Build compressed context
-4. Get decisions from LLM
-5. Validate and execute trades
-6. Log decisions to database
+The session orchestrator runs stages sequentially. Each stage is independent — failures don't block subsequent stages.
 
-### Thesis Engine (`ideation.py`)
-Generates and manages trade ideas using RAG:
-- Retrieves relevant documents for each ticker
-- Reviews existing theses against fresh data
-- Generates new theses grounded in retrieved documents
-- Every thesis must cite [DOC-ID] sources
+| Stage | Module | Purpose |
+|-------|--------|---------|
+| 0 | `backfill.py`, `attribution.py` | Learning refresh: backfill decision outcomes, compute signal attribution |
+| 1 | `pipeline.py` | News pipeline: fetch from Alpaca, classify with Haiku, store signals |
+| 2 | `ideation_claude.py` | Strategist: thesis management + playbook generation (agentic loop with tools) |
+| 3 | `trader.py` | Executor: decisions from playbook + order execution |
+| 4 | `strategy.py` | Reflection: update strategy identity, rules, and write session memo |
+| 5 | `twitter.py`, `bluesky.py` | Social posting |
+| 6 | `dashboard_publish.py` | Public dashboard publish |
 
-### RAG System (`retrieval.py`, `ingest.py`)
+### Key v2 Modules
 
-The ideation engine uses Retrieval-Augmented Generation to ground theses in fresh documents rather than stale model knowledge.
+- **`agent.py`** — Executor LLM integration. Gets structured trading decisions from Claude Haiku.
+- **`claude_client.py`** — Claude API client with tool handling and agentic loop support.
+- **`context.py`** — Context builder. Aggregates positions, signals, theses, playbook, and attribution into compressed LLM context.
+- **`ideation_claude.py`** — Strategist stage. Agentic loop where Claude manages theses and generates playbooks using database tools.
+- **`strategy.py`** — Post-session reflection. Claude reviews outcomes, updates trading identity, proposes/retires rules, writes memos.
+- **`attribution.py`** — Computes which signal types are predictive by joining decisions with their source signals.
+- **`patterns.py`** — Pattern analysis: signal performance, sentiment performance metrics.
+- **`tools.py`** — Tool definitions and handlers for the agentic loops (portfolio state, theses, history, attribution, etc.).
+- **`risk.py`** — Risk management and position sizing.
+- **`executor.py`** — Alpaca API integration (orders, positions, account info).
+- **`learn.py`** — Learning loop orchestrator (backfill + attribution + pattern reports).
 
-**Document Sources:**
-- Alpaca News API (free with trading account)
-- SEC EDGAR (10-K, 10-Q, 8-K filings)
+### Strategy Persistence (Run-to-Run Memory)
 
-**Retrieval modes:**
-- `retrieve_by_ticker(ticker)` - Get recent docs for a specific company
-- `retrieve_by_query(query)` - Semantic search across all documents
-- `retrieve_for_ideation(tickers, themes)` - Combined retrieval for ideation
-
-**Time decay scoring:**
-Documents lose 50% relevance after 30 days: `score = similarity * exp(-age/30)`
-
-**Citation requirement:**
-The LLM must cite `[DOC-ID]` for every claim. Theses without citations are flagged.
-
-**Ingestion schedule:**
-```bash
-# Run daily at 6am ET before market open
-docker compose exec trading python -m trading.ingest_scheduler
-```
+The strategist maintains continuity between sessions via:
+- **Strategy identity** — An evolving description of who the system is as a trader, updated by the reflection stage
+- **Strategy rules** — Evidence-based rules proposed/retired based on attribution data
+- **Strategy memos** — Session-by-session reflection notes (the system's journal)
+- **Theses** — Persistent trade ideas with entry/exit triggers, carried forward across sessions
+- **Playbook** — Generated actions derived from theses, consumed by the executor
+- **Signal attribution** — Historical scores showing which signal types are predictive
 
 ### Database Schema
-- `documents` - RAG document store with pgvector embeddings
-- `news_signals` - Ticker-specific news
-- `macro_signals` - Macro/political news affecting sectors
-- `positions` - Current portfolio holdings
-- `decisions` - Trading decisions with reasoning and outcomes
-- `theses` - Trade ideas with entry/exit triggers
+- `news_signals` — Ticker-specific news with category classification
+- `macro_signals` — Macro/political news affecting sectors
+- `positions` — Current portfolio holdings (synced from Alpaca)
+- `decisions` — Trading decisions with reasoning, outcomes, and P&L
+- `decision_signals` — FK join table linking decisions to their source signals
+- `theses` — Trade ideas with entry/exit triggers and status
+- `playbooks` / `playbook_actions` — Structured actions generated by the strategist
+- `signal_attribution` — Computed scores for signal type predictiveness
+- `strategy_state` — Current trading identity
+- `strategy_rules` — Active and retired trading rules
+- `strategy_memos` — Session reflection notes
+- `account_snapshots` — Daily account value snapshots
+- `sessions` / `session_stages` — Session tracking and stage completion
 
 ## Commands
 
@@ -91,23 +100,26 @@ docker compose exec trading python -m trading.ingest_scheduler
 # Start the stack
 docker compose up -d
 
-# Run document ingestion
-docker compose exec trading python -m trading.ingest_scheduler
+# Run full daily session
+docker compose exec trading python -m v2.session
 
-# Run ideation with RAG
-docker compose exec trading python -m trading.ideation
+# Run individual stages
+docker compose exec trading python -m v2.session --stage pipeline
+docker compose exec trading python -m v2.session --stage ideation
+docker compose exec trading python -m v2.session --stage trading --dry-run
+docker compose exec trading python -m v2.session --stage strategy
 
-# Run trading session (dry run)
-docker compose exec trading python -m trading.trader --dry-run
+# Run learning loop standalone
+docker compose exec trading python -m v2.learn
 
-# View dashboard
-open http://localhost:3000
+# View public dashboard
+# Published via GitHub Pages by stage 6
 ```
 
 ## Environment Variables
 
 Required in `.env`:
-- `APCA_API_KEY_ID` - Alpaca API key
-- `APCA_API_SECRET_KEY` - Alpaca API secret
-- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` - Database credentials
-- `OLLAMA_URL` - Ollama endpoint (default: http://ollama:11434)
+- `APCA_API_KEY_ID` — Alpaca API key
+- `APCA_API_SECRET_KEY` — Alpaca API secret
+- `ANTHROPIC_API_KEY` — Anthropic API key for Claude
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — Database credentials
