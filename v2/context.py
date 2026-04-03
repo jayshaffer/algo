@@ -20,6 +20,7 @@ from .database.trading_db import (
 )
 from .attribution import get_attribution_summary
 from .agent import ExecutorInput, PlaybookAction
+from .cooldown import get_ticker_cooldowns, format_cooldown_map
 
 
 def get_portfolio_context(account_info: dict) -> str:
@@ -389,6 +390,13 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         for row in playbook_actions_rows
     ]
 
+    # Compute cooldowns and filter blocked playbook actions
+    cooldowns = get_ticker_cooldowns()
+    if cooldowns:
+        actions = [a for a in actions if not (a.ticker in cooldowns
+                   and a.action == cooldowns[a.ticker].proposed_action)]
+    cooldown_map = format_cooldown_map(cooldowns)
+
     positions = get_positions()
     recent = get_recent_decisions(days=30)
     attribution_rows = get_signal_attribution()
@@ -425,4 +433,5 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         market_outlook=playbook.get("market_outlook", "") if playbook else "No playbook available",
         risk_notes=playbook.get("risk_notes", "") if playbook else "",
         current_prices=current_prices,
+        cooldown_tickers=cooldown_map,
     )

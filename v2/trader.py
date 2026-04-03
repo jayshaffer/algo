@@ -7,6 +7,7 @@ from datetime import datetime, date
 from decimal import Decimal
 
 from .context import build_executor_input
+from .cooldown import get_ticker_cooldowns, check_cooldown
 from .executor import (
     get_account_info,
     take_account_snapshot,
@@ -228,12 +229,21 @@ def run_trading_session(
     total_buy_value = Decimal(0)
     total_sell_value = Decimal(0)
     max_trades_per_session = 10
+    cooldowns = get_ticker_cooldowns()
 
     order_ids = {}
     order_results = {}
     for i, decision in enumerate(response.decisions):
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
+            continue
+
+        # Cooldown check (safety net for off-playbook decisions)
+        is_blocked, cooldown_reason = check_cooldown(decision.ticker, decision.action, cooldowns)
+        if is_blocked:
+            errors.append(f"{decision.ticker} cooldown: {cooldown_reason}")
+            logger.warning("%s: COOLDOWN - %s", decision.ticker, cooldown_reason)
+            trades_failed += 1
             continue
 
         if trades_executed >= max_trades_per_session:
