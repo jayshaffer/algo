@@ -13,6 +13,8 @@ from tests.v2.conftest import (
     make_decision_row,
 )
 
+from v2.strategy import run_strategy_reflection
+
 
 class TestStrategyReflectionResult:
     def test_dataclass_fields(self):
@@ -271,7 +273,8 @@ class TestCountActions:
 class TestRunStrategyReflection:
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_returns_reflection_result(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_returns_reflection_result(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection, StrategyReflectionResult
         from v2.claude_client import AgenticLoopResult
 
@@ -294,7 +297,8 @@ class TestRunStrategyReflection:
 
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_passes_system_prompt_and_tools(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_passes_system_prompt_and_tools(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection, STRATEGY_REFLECTION_SYSTEM, STRATEGY_TOOL_DEFINITIONS, STRATEGY_TOOL_HANDLERS
         from v2.claude_client import AgenticLoopResult
 
@@ -317,7 +321,8 @@ class TestRunStrategyReflection:
 
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_counts_actions_from_messages(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_counts_actions_from_messages(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection
         from v2.claude_client import AgenticLoopResult
 
@@ -397,6 +402,61 @@ class TestRetirementCap:
         assert "retired" in r2.lower()
         r3 = tool_retire_rule(rule_id=3, reason="Also bad")
         assert "limit" in r3.lower() or "maximum" in r3.lower()
+
+
+class TestReflectionFormationInjection:
+    def test_formation_context_in_reflection_system_prompt(self):
+        """Formation context should appear in reflection system prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+
+        with patch("v2.strategy.get_claude_client", return_value=MagicMock()), \
+             patch("v2.strategy.reset_session"), \
+             patch("v2.strategy.run_agentic_loop") as mock_loop, \
+             patch("v2.strategy.build_formation_context",
+                   return_value="## FORMATION MODE ACTIVE\nBe exploratory"):
+            mock_loop.return_value = mock_result
+
+            run_strategy_reflection(model="claude-haiku-4-5-20251001", max_turns=3)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "reflection" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE ACTIVE" in system_prompt
+
+    def test_no_formation_context_when_graduated(self):
+        """Empty formation context should not alter the reflection prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+
+        with patch("v2.strategy.get_claude_client", return_value=MagicMock()), \
+             patch("v2.strategy.reset_session"), \
+             patch("v2.strategy.run_agentic_loop") as mock_loop, \
+             patch("v2.strategy.build_formation_context", return_value=""):
+            mock_loop.return_value = mock_result
+
+            run_strategy_reflection(model="claude-haiku-4-5-20251001", max_turns=3)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "reflection" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE" not in system_prompt
 
 
 class TestIdentityUpdateGuard:

@@ -11,6 +11,7 @@ from datetime import date
 from typing import Optional
 
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
+from .formation import build_formation_context
 from .tools import tool_get_strategy_identity, tool_get_strategy_rules, tool_get_strategy_history
 from .attribution import get_attribution_summary
 from .database.trading_db import (
@@ -433,10 +434,15 @@ def run_strategy_reflection(
         "5. Writing a reflection memo\n"
     )
 
+    system_prompt = STRATEGY_REFLECTION_SYSTEM
+    formation_context = build_formation_context()
+    if formation_context:
+        system_prompt = system_prompt + "\n\n" + formation_context
+
     result = run_agentic_loop(
         client=client,
         model=model,
-        system=STRATEGY_REFLECTION_SYSTEM,
+        system=system_prompt,
         initial_message="\n".join(initial_parts),
         tools=STRATEGY_TOOL_DEFINITIONS,
         tool_handlers=STRATEGY_TOOL_HANDLERS,
