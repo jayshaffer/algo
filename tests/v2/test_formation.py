@@ -54,7 +54,7 @@ class TestIsFormationMode:
         assert is_formation_mode() is True
 
 
-from v2.formation import get_orphan_positions
+from v2.formation import get_orphan_positions, build_formation_context
 
 
 class TestGetOrphanPositions:
@@ -108,3 +108,49 @@ class TestGetOrphanPositions:
         mock_theses.return_value = []
         orphans = get_orphan_positions()
         assert len(orphans) == 0
+
+
+class TestBuildFormationContext:
+
+    @patch("v2.formation.get_orphan_positions")
+    @patch("v2.formation.is_formation_mode")
+    def test_returns_empty_when_not_formation(self, mock_formation, mock_orphans):
+        mock_formation.return_value = False
+        mock_orphans.return_value = []
+        ctx = build_formation_context()
+        assert ctx == ""
+
+    @patch("v2.formation.get_orphan_positions")
+    @patch("v2.formation.is_formation_mode")
+    def test_formation_with_orphans(self, mock_formation, mock_orphans):
+        mock_formation.return_value = True
+        mock_orphans.return_value = [
+            {"ticker": "AAPL", "shares": 10, "avg_cost": 150.0},
+            {"ticker": "NVDA", "shares": 10, "avg_cost": 800.0},
+        ]
+        ctx = build_formation_context()
+        assert "FORMATION MODE" in ctx
+        assert "AAPL" in ctx
+        assert "NVDA" in ctx
+        assert "adopt_thesis" in ctx
+
+    @patch("v2.formation.get_orphan_positions")
+    @patch("v2.formation.is_formation_mode")
+    def test_formation_without_orphans(self, mock_formation, mock_orphans):
+        mock_formation.return_value = True
+        mock_orphans.return_value = []
+        ctx = build_formation_context()
+        assert "FORMATION MODE" in ctx
+        assert "adopt_thesis" not in ctx
+
+    @patch("v2.formation.get_orphan_positions")
+    @patch("v2.formation.is_formation_mode")
+    def test_not_formation_but_orphans_still_flagged(self, mock_formation, mock_orphans):
+        """Even outside formation mode, orphan positions should be flagged."""
+        mock_formation.return_value = False
+        mock_orphans.return_value = [
+            {"ticker": "AAPL", "shares": 10, "avg_cost": 150.0},
+        ]
+        ctx = build_formation_context()
+        assert "AAPL" in ctx
+        assert "FORMATION MODE" not in ctx
