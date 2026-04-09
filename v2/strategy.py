@@ -27,6 +27,15 @@ from .database.trading_db import (
 
 logger = logging.getLogger(__name__)
 
+MIN_RULE_TENURE_DAYS = 5
+MAX_RETIREMENTS_PER_SESSION = 2
+_session_retirements: list[int] = []
+
+
+def reset_session():
+    """Reset per-session counters. Called at start of strategy reflection."""
+    _session_retirements.clear()
+
 
 @dataclass
 class StrategyReflectionResult:
@@ -81,7 +90,13 @@ A good identity reads like a bio. A bad identity reads like a session log.
 Before proposing a new rule:
 1. Check if an existing active rule covers the same pattern
 2. If so, update the existing rule's confidence, scope, or evidence rather than creating a new one
-3. Only create a new rule if the pattern is genuinely distinct from all existing rules"""
+3. Only create a new rule if the pattern is genuinely distinct from all existing rules
+
+## Rule Tenure
+
+Rules have a minimum tenure of 5 days. You cannot retire a rule until it has been active for at least 5 sessions. This prevents oscillation (propose → retire → re-propose). If a new rule seems wrong, write a memo instead and revisit next session.
+
+You can retire at most 2 rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
 
 
 # --- Write Tool Handlers ---
@@ -140,12 +155,38 @@ def tool_propose_rule(
 
 
 def tool_retire_rule(rule_id: int, reason: str) -> str:
-    """Retire a strategy rule."""
+    """Retire a strategy rule (with tenure guard and session cap)."""
+    from .database.trading_db import get_strategy_rule
+
+    rule = get_strategy_rule(rule_id)
+    if not rule:
+        return f"Error: Rule ID {rule_id} not found"
+    if rule["status"] != "active":
+        return f"Error: Rule ID {rule_id} is already {rule['status']}"
+
+    # Tenure guard: rules must be active for minimum days
+    age_days = (date.today() - rule["created_at"].date()).days
+    if age_days < MIN_RULE_TENURE_DAYS:
+        remaining = MIN_RULE_TENURE_DAYS - age_days
+        return (
+            f"Rule ID {rule_id} is too new to retire ({age_days}d old, "
+            f"minimum tenure is {MIN_RULE_TENURE_DAYS}d). "
+            f"Wait {remaining} more day(s) or write a memo noting your concern."
+        )
+
+    # Session cap: limit retirements per session
+    if len(_session_retirements) >= MAX_RETIREMENTS_PER_SESSION:
+        return (
+            f"Retirement limit reached ({MAX_RETIREMENTS_PER_SESSION} per session). "
+            f"Write a memo noting that rule {rule_id} should be reviewed next session."
+        )
+
     logger.info(f"Retiring rule {rule_id}: {reason}")
     success = retire_strategy_rule(rule_id=rule_id, reason=reason)
     if success:
+        _session_retirements.append(rule_id)
         return f"Retired rule ID {rule_id}. Reason: {reason}"
-    return f"Error: Rule ID {rule_id} not found or already retired"
+    return f"Error: Failed to retire rule ID {rule_id}"
 
 
 def tool_write_strategy_memo(memo_type: str, content: str) -> str:
@@ -374,6 +415,7 @@ def run_strategy_reflection(
 ) -> StrategyReflectionResult:
     """Run the strategy reflection stage (Stage 4)."""
     logger.info("Starting strategy reflection (model=%s, max_turns=%d)", model, max_turns)
+    reset_session()
 
     client = get_claude_client()
 

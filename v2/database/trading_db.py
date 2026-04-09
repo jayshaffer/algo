@@ -536,6 +536,13 @@ def get_active_strategy_rules() -> list:
         return cur.fetchall()
 
 
+def get_strategy_rule(rule_id: int) -> dict | None:
+    """Fetch a single strategy rule by ID."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM strategy_rules WHERE id = %s", (rule_id,))
+        return cur.fetchone()
+
+
 def retire_strategy_rule(rule_id, reason=None) -> bool:
     with get_cursor() as cur:
         cur.execute("""

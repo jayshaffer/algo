@@ -97,24 +97,40 @@ class TestToolProposeRule:
 
 class TestToolRetireRule:
     @patch("v2.strategy.retire_strategy_rule")
-    def test_retires_existing_rule(self, mock_retire):
-        from v2.strategy import tool_retire_rule
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_retires_existing_rule(self, mock_get_rule, mock_retire):
+        from datetime import datetime, timedelta
+        from v2.strategy import tool_retire_rule, reset_session
+        mock_get_rule.return_value = {
+            "id": 1, "status": "active",
+            "created_at": datetime.now() - timedelta(days=10),
+        }
         mock_retire.return_value = True
+        reset_session()
         result = tool_retire_rule(rule_id=1, reason="No longer predictive")
         assert "Retired" in result
 
     @patch("v2.strategy.retire_strategy_rule")
-    def test_handles_not_found(self, mock_retire):
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_handles_not_found(self, mock_get_rule, mock_retire):
         from v2.strategy import tool_retire_rule
+        mock_get_rule.return_value = None
         mock_retire.return_value = False
         result = tool_retire_rule(rule_id=999, reason="test")
         assert "not found" in result.lower() or "Error" in result
 
     @patch("v2.strategy.retire_strategy_rule")
-    def test_passes_reason_to_db(self, mock_retire):
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_passes_reason_to_db(self, mock_get_rule, mock_retire):
         """retire_rule should pass the reason to the database function."""
-        from v2.strategy import tool_retire_rule
+        from datetime import datetime, timedelta
+        from v2.strategy import tool_retire_rule, reset_session
+        mock_get_rule.return_value = {
+            "id": 5, "status": "active",
+            "created_at": datetime.now() - timedelta(days=10),
+        }
         mock_retire.return_value = True
+        reset_session()
         tool_retire_rule(rule_id=5, reason="Superseded by structural enforcement")
         mock_retire.assert_called_once_with(rule_id=5, reason="Superseded by structural enforcement")
 
@@ -326,6 +342,61 @@ class TestRunStrategyReflection:
         assert result.rules_retired == 1
         assert result.identity_updated is True
         assert result.memo_written is True
+
+
+class TestRuleTenureGuard:
+    def test_cannot_retire_rule_before_min_tenure(self, mock_db):
+        """Rules must be active for at least 5 days before retirement."""
+        from datetime import datetime, timedelta
+        mock_db.fetchone.return_value = {
+            "id": 1, "rule_text": "Test rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=2),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        from v2.strategy import tool_retire_rule
+        result = tool_retire_rule(rule_id=1, reason="Not working")
+        assert "too new" in result.lower() or "minimum tenure" in result.lower()
+
+    def test_can_retire_rule_after_min_tenure(self, mock_db):
+        """Rules active for >= 5 days can be retired normally."""
+        from datetime import datetime, timedelta
+        mock_db.fetchone.return_value = {
+            "id": 1, "rule_text": "Old rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=6),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        mock_db.rowcount = 1
+        from v2.strategy import tool_retire_rule, reset_session
+        reset_session()
+        result = tool_retire_rule(rule_id=1, reason="Data no longer supports it")
+        assert "retired" in result.lower()
+
+
+class TestRetirementCap:
+    def test_max_retirements_per_session(self, mock_db):
+        """At most 2 rules can be retired per session to prevent mass purges."""
+        from datetime import datetime, timedelta
+        old_rule = {
+            "id": 1, "rule_text": "Old rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=30),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        mock_db.fetchone.return_value = old_rule
+        mock_db.rowcount = 1
+        from v2.strategy import tool_retire_rule, reset_session
+        reset_session()
+        r1 = tool_retire_rule(rule_id=1, reason="Data changed")
+        assert "retired" in r1.lower()
+        r2 = tool_retire_rule(rule_id=2, reason="No longer valid")
+        assert "retired" in r2.lower()
+        r3 = tool_retire_rule(rule_id=3, reason="Also bad")
+        assert "limit" in r3.lower() or "maximum" in r3.lower()
 
 
 class TestIdentityUpdateGuard:
