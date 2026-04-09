@@ -347,6 +347,8 @@ _SIGNAL_TYPE_TABLES = {
 def validate_signal_refs(signal_refs: list[dict]) -> list[dict]:
     """Validate signal refs against the database, stripping invalid ones.
 
+    Batches queries by signal type (one query per type) to avoid N+1 behaviour.
+
     Args:
         signal_refs: List of {"type": str, "id": int} dicts from LLM output
 
@@ -358,21 +360,30 @@ def validate_signal_refs(signal_refs: list[dict]) -> list[dict]:
 
     from .database.connection import get_cursor
 
-    valid = []
+    # Group refs by signal type, dropping any with unknown types up-front
+    by_type: dict[str, list[dict]] = {}
     for ref in signal_refs:
         sig_type = ref.get("type", "")
-        sig_id = ref.get("id")
-
-        table = _SIGNAL_TYPE_TABLES.get(sig_type)
-        if not table:
+        if not _SIGNAL_TYPE_TABLES.get(sig_type):
             logger.warning("Stripping signal ref with unknown type: %s", sig_type)
             continue
+        by_type.setdefault(sig_type, []).append(ref)
 
+    valid = []
+    for sig_type, refs in by_type.items():
+        table = _SIGNAL_TYPE_TABLES[sig_type]
+        ids = [r["id"] for r in refs if r.get("id") is not None]
+        if not ids:
+            continue
         with get_cursor() as cur:
-            cur.execute(f"SELECT id FROM {table} WHERE id = %s", (sig_id,))
-            if cur.fetchone():
+            cur.execute(f"SELECT id FROM {table} WHERE id = ANY(%s)", (ids,))
+            found_ids = {row["id"] for row in cur.fetchall()}
+        for ref in refs:
+            if ref.get("id") in found_ids:
                 valid.append(ref)
             else:
-                logger.warning("Stripping signal ref %s:%s — not found in DB", sig_type, sig_id)
+                logger.warning(
+                    "Stripping signal ref %s:%s — not found in DB", sig_type, ref.get("id")
+                )
 
     return valid

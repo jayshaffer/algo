@@ -206,7 +206,7 @@ class TestFormatDecisionsForLogging:
 class TestValidateSignalRefs:
     def test_valid_news_signal_passes(self, mock_db, mock_cursor):
         """Existing news_signal ID should pass validation."""
-        mock_cursor.fetchone.return_value = {"id": 5}
+        mock_cursor.fetchall.return_value = [{"id": 5}]
 
         from v2.agent import validate_signal_refs
         valid = validate_signal_refs([{"type": "news_signal", "id": 5}])
@@ -214,7 +214,7 @@ class TestValidateSignalRefs:
 
     def test_invalid_signal_id_stripped(self, mock_db, mock_cursor):
         """Non-existent signal ID should be stripped."""
-        mock_cursor.fetchone.return_value = None
+        mock_cursor.fetchall.return_value = []
 
         from v2.agent import validate_signal_refs
         valid = validate_signal_refs([{"type": "news_signal", "id": 99999}])
@@ -227,15 +227,8 @@ class TestValidateSignalRefs:
         assert valid == []
 
     def test_mixed_valid_and_invalid(self, mock_db, mock_cursor):
-        """Should keep valid refs and strip invalid ones."""
-        call_count = [0]
-        def mock_fetchone():
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return {"id": 1}
-            return None
-
-        mock_cursor.fetchone.side_effect = mock_fetchone
+        """Should keep valid refs and strip invalid ones (batched)."""
+        mock_cursor.fetchall.return_value = [{"id": 1}]
 
         from v2.agent import validate_signal_refs
         refs = [
@@ -252,7 +245,7 @@ class TestValidateSignalRefs:
 
     def test_thesis_type_validated(self, mock_db, mock_cursor):
         """thesis signal type should also be validated."""
-        mock_cursor.fetchone.return_value = {"id": 3}
+        mock_cursor.fetchall.return_value = [{"id": 3}]
 
         from v2.agent import validate_signal_refs
         valid = validate_signal_refs([{"type": "thesis", "id": 3}])
@@ -346,3 +339,40 @@ class TestValidateDecisionPendingSells:
             positions=positions, portfolio_value=Decimal("10000"),
         )
         assert is_valid
+
+
+class TestValidateSignalRefsBatch:
+    def test_batch_validates_in_single_query_per_type(self, mock_db):
+        """Should batch-validate all refs of same type in one query, not N+1."""
+        refs = [
+            {"type": "news_signal", "id": 1},
+            {"type": "news_signal", "id": 2},
+            {"type": "news_signal", "id": 99},  # doesn't exist
+            {"type": "thesis", "id": 5},
+        ]
+        # news_signals query returns ids 1 and 2 (not 99)
+        # theses query returns id 5
+        mock_db.fetchall.side_effect = [
+            [{"id": 1}, {"id": 2}],  # news_signals batch
+            [{"id": 5}],              # theses batch
+        ]
+
+        from v2.agent import validate_signal_refs
+        result = validate_signal_refs(refs)
+
+        assert len(result) == 3  # 1, 2, and 5 valid; 99 stripped
+        # Should have made exactly 2 queries (one per signal type), not 4
+        assert mock_db.execute.call_count == 2
+
+    def test_returns_empty_for_empty_input(self, mock_db):
+        from v2.agent import validate_signal_refs
+        result = validate_signal_refs([])
+        assert result == []
+        assert mock_db.execute.call_count == 0
+
+    def test_strips_unknown_signal_types(self, mock_db):
+        refs = [{"type": "unknown_type", "id": 1}]
+        from v2.agent import validate_signal_refs
+        result = validate_signal_refs(refs)
+        assert result == []
+        assert mock_db.execute.call_count == 0
