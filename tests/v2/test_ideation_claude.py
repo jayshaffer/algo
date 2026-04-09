@@ -33,7 +33,8 @@ class TestStrategistAttributionConstraints:
         with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
              patch("v2.ideation_claude.reset_session"), \
              patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
-             patch("v2.ideation_claude.extract_final_text", return_value="Summary"):
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
             mock_loop.return_value = mock_result
 
             result = run_strategist_loop(
@@ -68,7 +69,8 @@ class TestStrategistAttributionConstraints:
         with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
              patch("v2.ideation_claude.reset_session"), \
              patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
-             patch("v2.ideation_claude.extract_final_text", return_value="Summary"):
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
             mock_loop.return_value = mock_result
 
             result = run_strategist_loop(
@@ -94,7 +96,8 @@ class TestStrategistSession:
         with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
              patch("v2.ideation_claude.reset_session"), \
              patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
-             patch("v2.ideation_claude.extract_final_text", return_value="Summary"):
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
             mock_loop.return_value = mock_result
 
             # These should NOT be imported or called:
@@ -120,7 +123,8 @@ class TestStrategistSession:
         with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
              patch("v2.ideation_claude.reset_session"), \
              patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
-             patch("v2.ideation_claude.extract_final_text", return_value="Summary"):
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
             mock_loop.return_value = mock_result
 
             run_strategist_session(
@@ -198,6 +202,7 @@ class TestStrategistPreSeedMemos:
              patch("v2.ideation_claude.reset_session"), \
              patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
              patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""), \
              patch("v2.ideation_claude.tool_get_portfolio_state", return_value="portfolio"), \
              patch("v2.ideation_claude.tool_get_active_theses", return_value="theses"), \
              patch("v2.ideation_claude.tool_get_decision_history", return_value="decisions"), \
@@ -213,3 +218,64 @@ class TestStrategistPreSeedMemos:
         initial_msg = call_kwargs.kwargs.get("initial_message", "")
         assert "Strategy History" in initial_msg
         assert "memo content here" in initial_msg
+
+
+class TestFormationInjection:
+    def test_formation_context_appended_to_system_prompt(self):
+        """Formation context should appear in strategist system prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+        mock_result.cache_creation_input_tokens = 0
+        mock_result.cache_read_input_tokens = 0
+
+        with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
+             patch("v2.ideation_claude.reset_session"), \
+             patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context",
+                   return_value="## FORMATION MODE ACTIVE\nTest formation context"):
+            mock_loop.return_value = mock_result
+
+            run_strategist_loop(model="claude-opus-4-6", max_turns=1)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "strategist" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE ACTIVE" in system_prompt
+
+    def test_no_formation_context_when_graduated(self):
+        """Empty formation context should not alter the system prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+        mock_result.cache_creation_input_tokens = 0
+        mock_result.cache_read_input_tokens = 0
+
+        with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
+             patch("v2.ideation_claude.reset_session"), \
+             patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
+            mock_loop.return_value = mock_result
+
+            run_strategist_loop(model="claude-opus-4-6", max_turns=1)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "strategist" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE" not in system_prompt

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
 from .context import get_equity_summary
+from .formation import build_formation_context
 from .tools import (
     TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session,
     tool_get_portfolio_state, tool_get_active_theses,
@@ -278,6 +279,10 @@ def run_strategist_loop(
     base_prompt = system_prompt or CLAUDE_SESSION_STRATEGIST_SYSTEM
     if attribution_constraints:
         base_prompt = base_prompt + "\n\n" + attribution_constraints
+
+    formation_context = build_formation_context()
+    if formation_context:
+        base_prompt = base_prompt + "\n\n" + formation_context
 
     # Pre-seed context to eliminate 3-5 tool round-trips on early turns
     context_parts = []
