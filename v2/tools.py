@@ -126,6 +126,47 @@ def tool_create_thesis(
     return f"Created thesis ID {thesis_id} for {ticker} ({direction}, {confidence} confidence)"
 
 
+def tool_adopt_thesis(
+    ticker: str,
+    direction: str,
+    thesis: str,
+    exit_trigger: str,
+    invalidation: str,
+    confidence: str,
+) -> str:
+    """Adopt an existing portfolio position by creating a thesis for it.
+
+    Unlike create_thesis, this REQUIRES the ticker to already be in the portfolio.
+    Used to bring orphan positions under thesis management.
+    """
+    logger.info(f"Adopting thesis for existing position {ticker} ({direction})")
+
+    existing = get_active_theses(ticker=ticker)
+    if existing:
+        return (
+            f"Error: Active thesis already exists for {ticker} "
+            f"(ID {existing[0]['id']}). Update it instead."
+        )
+
+    positions = {p["ticker"] for p in get_positions()}
+    if ticker not in positions:
+        return f"Error: {ticker} is not in the portfolio. Use create_thesis for new ideas."
+
+    thesis_id = insert_thesis(
+        ticker=ticker,
+        direction=direction,
+        thesis=thesis,
+        entry_trigger="Already held — adopted into thesis management",
+        exit_trigger=exit_trigger,
+        invalidation=invalidation,
+        confidence=confidence,
+        source="adoption",
+    )
+
+    logger.info(f"Adopted position {ticker} as thesis ID {thesis_id}")
+    return f"Created thesis ID {thesis_id} for {ticker} (adopted existing position, {direction}, {confidence} confidence)"
+
+
 def tool_update_thesis(
     thesis_id: int,
     thesis: Optional[str] = None,
@@ -385,6 +426,22 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "adopt_thesis",
+        "description": "Adopt an existing portfolio position by creating a thesis. Use for orphan positions (held but no thesis). REQUIRES ticker to be in portfolio.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "direction": {"type": "string", "enum": ["long", "short", "avoid"]},
+                "thesis": {"type": "string", "description": "Why you believe in this position"},
+                "exit_trigger": {"type": "string", "description": "When to exit"},
+                "invalidation": {"type": "string", "description": "What proves thesis wrong"},
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            },
+            "required": ["ticker", "direction", "thesis", "exit_trigger", "invalidation", "confidence"],
+        },
+    },
+    {
         "name": "update_thesis",
         "description": "Update thesis fields. Only provide fields to change.",
         "input_schema": {
@@ -509,6 +566,7 @@ TOOL_HANDLERS = {
     "get_portfolio_state": tool_get_portfolio_state,
     "get_active_theses": tool_get_active_theses,
     "create_thesis": tool_create_thesis,
+    "adopt_thesis": tool_adopt_thesis,
     "update_thesis": tool_update_thesis,
     "close_thesis": tool_close_thesis,
     "get_news_signals": tool_get_news_signals,
