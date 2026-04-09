@@ -27,7 +27,7 @@ from .agent import (
     ExecutorDecision,
     DEFAULT_EXECUTOR_MODEL,
 )
-from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders, get_previous_snapshot
+from .database.trading_db import insert_decision, check_decision_exists, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders, get_previous_snapshot
 
 logger = logging.getLogger("trader")
 
@@ -405,6 +405,13 @@ def run_trading_session(
             if price is None:
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
+                continue
+
+            # Skip duplicate decisions (same ticker+action already logged today)
+            existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
+            if existing_id:
+                logger.warning("%s: duplicate %s decision — already logged as ID %d",
+                               decision.ticker, decision.action, existing_id)
                 continue
 
             # Use filled quantity when available (handles partial fills)

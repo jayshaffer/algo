@@ -153,6 +153,22 @@ def insert_decision(decision_date, ticker, action, quantity, price, reasoning, s
         return cur.fetchone()["id"]
 
 
+def check_decision_exists(decision_date, ticker: str, action: str) -> int | None:
+    """Check if a buy/sell decision already exists for this ticker today.
+
+    Returns the existing decision ID if found, None otherwise.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id FROM decisions
+            WHERE date = %s AND ticker = %s AND action = %s
+              AND action IN ('buy', 'sell')
+            LIMIT 1
+        """, (decision_date, ticker, action))
+        row = cur.fetchone()
+        return row["id"] if row else None
+
+
 def get_recent_decisions(days=30) -> list:
     with get_cursor() as cur:
         cur.execute("""

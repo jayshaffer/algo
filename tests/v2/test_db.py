@@ -859,6 +859,24 @@ class TestStrategyMemos:
         assert "ORDER BY" in sql
 
 
+class TestDecisionDedup:
+    def test_check_decision_exists(self, mock_db, mock_cursor):
+        """Should find existing decision for same ticker+action+date."""
+        from datetime import date
+        mock_cursor.fetchone.return_value = {"id": 42}
+        from v2.database.trading_db import check_decision_exists
+        result = check_decision_exists(date.today(), "AAPL", "buy")
+        assert result == 42
+
+    def test_check_decision_not_found(self, mock_db, mock_cursor):
+        """Should return None when no matching decision exists."""
+        from datetime import date
+        mock_cursor.fetchone.return_value = None
+        from v2.database.trading_db import check_decision_exists
+        result = check_decision_exists(date.today(), "AAPL", "buy")
+        assert result is None
+
+
 class TestNewsSignalDedup:
     """Verify batch inserts use ON CONFLICT for deduplication."""
 
