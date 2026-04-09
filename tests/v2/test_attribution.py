@@ -378,15 +378,61 @@ class TestAttributionByDirection:
         sql = mock_cursor.execute.call_args[0][0]
         assert "d.action" in sql
 
-    def test_attribution_categories_include_direction(self, mock_db, mock_cursor):
-        """Verify the CASE expression appends ':buy' or ':sell' via d.action."""
+    def test_attribution_filters_by_action_not_group_by(self, mock_db, mock_cursor):
+        """Verify d.action is used in the WHERE filter but NOT concatenated into the category key.
+
+        The collapsed 2-part category design groups across buy/sell to increase sample sizes.
+        Action direction is still enforced via the WHERE clause filter.
+        """
         from v2.attribution import compute_signal_attribution
         mock_cursor.fetchall.return_value = []
         with patch("v2.attribution.upsert_signal_attribution"):
             compute_signal_attribution()
         sql = mock_cursor.execute.call_args[0][0]
-        # Each CASE branch should concatenate d.action
-        assert "|| ':' || d.action" in sql
+        # d.action should appear in the WHERE filter
+        assert "d.action IN ('buy', 'sell')" in sql
+        # But NOT appended to the category key
+        assert "|| ':' || d.action" not in sql
+
+
+class TestCollapsedCategories:
+    @pytest.fixture(autouse=True)
+    def _patch_attribution_cursor(self, mock_cursor):
+        """Patch get_cursor in the attribution module where it's imported."""
+        @contextmanager
+        def _get_cursor():
+            yield mock_cursor
+
+        with patch("v2.attribution.get_cursor", _get_cursor):
+            yield
+
+    def test_categories_exclude_sentiment_and_action(self, mock_db, mock_cursor):
+        """Verify the SQL CASE statement does NOT include sentiment or action in the category key.
+
+        The category should be 2-part: e.g. 'news_signal:earnings', not
+        'news_signal:earnings:bullish:buy'. Low-N 4-part keys are statistically useless.
+        """
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        # Should NOT concatenate sentiment
+        assert "ns.sentiment" not in sql
+        assert "ms.sentiment" not in sql
+        # Should NOT concatenate action into category key
+        assert "|| ':' || d.action" not in sql
+
+    def test_thesis_category_has_no_action_suffix(self, mock_db, mock_cursor):
+        """Verify the ELSE branch produces just ds.signal_type, not ds.signal_type || ':' || d.action."""
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        # The ELSE branch should be just the signal_type with no action suffix
+        assert "ELSE ds.signal_type" in sql
+        assert "ELSE ds.signal_type || ':' || d.action" not in sql
 
 
 class TestAttributionTimeWindow:

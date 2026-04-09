@@ -13,7 +13,11 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
     Uses alpha (outcome - benchmark) instead of raw returns so attribution
     reflects signal quality independent of market conditions.
 
-    Groups by composite category (signal_type + news category for news signals).
+    Groups by 2-part category key (signal_type:subcategory), e.g.:
+      - news_signal:earnings
+      - macro_signal:geopolitical
+      - thesis
+    Sentiment and action are excluded from the key to prevent low-N fragmentation.
     JOINs through decision_signals FK — not time-window JOINs.
     Upserts results into signal_attribution table.
     """
@@ -28,13 +32,9 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                     CASE
                         WHEN ds.signal_type = 'news_signal' THEN
                             'news_signal:' || COALESCE(ns.category, 'unknown')
-                            || ':' || COALESCE(ns.sentiment, 'neutral')
-                            || ':' || d.action
                         WHEN ds.signal_type = 'macro_signal' THEN
                             'macro_signal:' || COALESCE(ms.category, 'unknown')
-                            || ':' || COALESCE(ms.sentiment, 'neutral')
-                            || ':' || d.action
-                        ELSE ds.signal_type || ':' || d.action
+                        ELSE ds.signal_type
                     END AS category,
                     d.outcome_7d,
                     d.outcome_30d,
