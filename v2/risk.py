@@ -21,6 +21,29 @@ SECTOR_MAP = {
 }
 
 MAX_SECTOR_PCT = Decimal("0.40")
+MAX_DAILY_LOSS_PCT = Decimal("0.03")  # 3% daily loss limit
+
+
+def check_daily_loss_limit(
+    current_value: Decimal,
+    previous_value: Decimal | None,
+    max_loss_pct: Decimal = MAX_DAILY_LOSS_PCT,
+) -> str | None:
+    """Check if daily loss exceeds threshold.
+
+    Returns warning string if limit breached, None if OK.
+    """
+    if previous_value is None or previous_value <= 0:
+        return None
+
+    change_pct = (current_value - previous_value) / previous_value
+    if change_pct < -max_loss_pct:
+        return (
+            f"CIRCUIT BREAKER: Daily loss {change_pct:.2%} exceeds "
+            f"{-max_loss_pct:.1%} limit (${current_value:,.2f} vs "
+            f"prior ${previous_value:,.2f}). Trading halted."
+        )
+    return None
 
 
 def check_sector_concentration(

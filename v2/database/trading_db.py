@@ -121,6 +121,18 @@ def get_account_snapshots(days=30) -> list:
         return cur.fetchall()
 
 
+def get_previous_snapshot() -> dict | None:
+    """Get the most recent account snapshot before today."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM account_snapshots
+            WHERE date < CURRENT_DATE
+            ORDER BY date DESC
+            LIMIT 1
+        """)
+        return cur.fetchone()
+
+
 # --- Decisions ---
 
 def insert_decision(decision_date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id=None, is_off_playbook=False, order_id=None) -> int:

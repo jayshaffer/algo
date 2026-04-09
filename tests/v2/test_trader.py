@@ -384,6 +384,30 @@ class TestBuyingPowerRefresh:
         assert call_count[0] >= 2
 
 
+class TestCircuitBreaker:
+    def test_halts_trading_on_daily_loss(self, mock_db, mock_cursor):
+        """Trading should halt if daily loss exceeds 3%."""
+        with patch("v2.trader.get_account_info") as mock_acct, \
+             patch("v2.trader.sync_positions_from_alpaca", return_value=3), \
+             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
+             patch("v2.trader.is_market_open", return_value=True), \
+             patch("v2.trader.take_account_snapshot", return_value=1), \
+             patch("v2.trader.get_previous_snapshot") as mock_prev:
+            mock_acct.return_value = {
+                "portfolio_value": Decimal("950"),
+                "buying_power": Decimal("500"),
+            }
+            mock_prev.return_value = {
+                "portfolio_value": Decimal("1000"),
+                "date": "2026-04-07",
+            }
+            from v2.trader import run_trading_session
+            result = run_trading_session(dry_run=False)
+
+        assert result.trades_executed == 0
+        assert any("CIRCUIT BREAKER" in e for e in result.errors)
+
+
 class TestTradingSessionResult:
     def test_has_required_fields(self):
         result = TradingSessionResult(

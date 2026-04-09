@@ -27,7 +27,7 @@ from .agent import (
     ExecutorDecision,
     DEFAULT_EXECUTOR_MODEL,
 )
-from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
+from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders, get_previous_snapshot
 
 logger = logging.getLogger("trader")
 
@@ -152,6 +152,33 @@ def run_trading_session(
             total_sell_value=Decimal(0),
             errors=errors,
         )
+
+    # Circuit breaker — halt trading if daily loss exceeds threshold
+    from .risk import check_daily_loss_limit
+    try:
+        prev_snapshot = get_previous_snapshot()
+        if prev_snapshot:
+            loss_warning = check_daily_loss_limit(
+                current_value=account_info["portfolio_value"],
+                previous_value=prev_snapshot["portfolio_value"],
+            )
+            if loss_warning:
+                logger.error(loss_warning)
+                errors.append(loss_warning)
+                return TradingSessionResult(
+                    timestamp=timestamp,
+                    account_snapshot_id=0,
+                    positions_synced=positions_synced,
+                    orders_synced=orders_synced,
+                    decisions_made=0,
+                    trades_executed=0,
+                    trades_failed=0,
+                    total_buy_value=Decimal(0),
+                    total_sell_value=Decimal(0),
+                    errors=errors,
+                )
+    except Exception as e:
+        logger.warning("Circuit breaker check failed: %s — continuing", e)
 
     # Step 3: Build executor input (structured, not string)
     logger.info("[Step 3] Building executor input")
