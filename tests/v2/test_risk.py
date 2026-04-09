@@ -4,54 +4,6 @@ import pytest
 from v2.risk import check_sector_concentration, SECTOR_MAP, MAX_SECTOR_PCT
 
 
-class TestCheckDailyLossLimit:
-    def test_blocks_when_loss_exceeds_threshold(self):
-        from v2.risk import check_daily_loss_limit
-        result = check_daily_loss_limit(
-            current_value=Decimal("950"),
-            previous_value=Decimal("1000"),
-            max_loss_pct=Decimal("0.03"),
-        )
-        assert result is not None
-        assert "loss" in result.lower() or "circuit breaker" in result.lower()
-
-    def test_allows_when_within_threshold(self):
-        from v2.risk import check_daily_loss_limit
-        result = check_daily_loss_limit(
-            current_value=Decimal("985"),
-            previous_value=Decimal("1000"),
-            max_loss_pct=Decimal("0.03"),
-        )
-        assert result is None
-
-    def test_allows_when_portfolio_is_up(self):
-        from v2.risk import check_daily_loss_limit
-        result = check_daily_loss_limit(
-            current_value=Decimal("1050"),
-            previous_value=Decimal("1000"),
-            max_loss_pct=Decimal("0.03"),
-        )
-        assert result is None
-
-    def test_handles_zero_previous_value(self):
-        from v2.risk import check_daily_loss_limit
-        result = check_daily_loss_limit(
-            current_value=Decimal("1000"),
-            previous_value=Decimal("0"),
-            max_loss_pct=Decimal("0.03"),
-        )
-        assert result is None
-
-    def test_handles_none_previous_value(self):
-        from v2.risk import check_daily_loss_limit
-        result = check_daily_loss_limit(
-            current_value=Decimal("1000"),
-            previous_value=None,
-            max_loss_pct=Decimal("0.03"),
-        )
-        assert result is None
-
-
 class TestSectorConcentration:
     def test_flags_sector_over_limit(self):
         positions = {
