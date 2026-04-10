@@ -89,6 +89,26 @@ def take_account_snapshot() -> int:
     )
 
 
+def get_live_available_qty(ticker: str) -> Optional[Decimal]:
+    """Return Alpaca's live qty_available for a ticker, or None if not held.
+
+    qty_available = held_qty - qty locked by pending sell orders. This is the
+    true ceiling for a new sell submission; checking it immediately before
+    submit prevents 'Insufficient available shares' failures from stale DB
+    state or untracked open orders.
+    """
+    from alpaca.common.exceptions import APIError
+    client = get_trading_client()
+    try:
+        pos = client.get_open_position(ticker)
+    except APIError as e:
+        msg = str(e).lower()
+        if "position does not exist" in msg or "not found" in msg or "404" in msg:
+            return None
+        raise
+    return Decimal(pos.qty_available)
+
+
 def sync_positions_from_alpaca() -> int:
     """Sync positions from Alpaca to local database."""
     client = get_trading_client()

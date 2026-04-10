@@ -7,7 +7,7 @@ from datetime import datetime
 
 from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
 from .context import get_equity_summary
-from .formation import build_formation_context
+from .formation import build_formation_context, get_orphan_positions
 from .tools import (
     TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session,
     tool_get_portfolio_state, tool_get_active_theses,
@@ -89,14 +89,16 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
 - Use `web_search` to research current market conditions and companies
 - Use `get_market_snapshot` to see sector performance and movers
 - Use thesis tools to manage trade ideas
+- Use `adopt_thesis` to attach a thesis to any held position that lacks one (orphan positions). Every held position MUST have an active thesis — otherwise exits can't be reasoned about and outcomes can't be learned from.
 - Use `write_playbook` to write {date_ref} plan (REQUIRED — always write a playbook)
 
 ## Critical Rules
 1. **Always write a playbook** — the executor depends on it
-2. **Quality theses only** — specific entry/exit triggers, not vague ideas
-3. **Learn from attribution** — weight signal types that have been predictive
-4. **No duplicate theses** — check existing before creating
-5. **Fractional shares supported** — the executor can buy/sell fractional shares. Size playbook actions by dollar amount (e.g. "$500 of AMZN" → max_quantity: 2.5 at ~$200/share) rather than forcing round lots."""
+2. **No orphan positions** — if a held position has no active thesis, adopt one via `adopt_thesis` before writing the playbook
+3. **Quality theses only** — specific entry/exit triggers, not vague ideas
+4. **Learn from attribution** — weight signal types that have been predictive
+5. **No duplicate theses** — check existing before creating
+6. **Fractional shares supported** — the executor can buy/sell fractional shares. Size playbook actions by dollar amount (e.g. "$500 of AMZN" → max_quantity: 2.5 at ~$200/share) rather than forcing round lots."""
 
 CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
     timing="after market close",
@@ -323,15 +325,47 @@ def run_strategist_loop(
 
     pre_seeded = "\n\n".join(context_parts)
 
+    # Surface orphan positions directly in the initial message so the strategist
+    # can't miss them. These are positions currently held with no active thesis —
+    # they need adoption or the system can't reason about exits or learn from outcomes.
+    orphans = []
+    try:
+        orphans = get_orphan_positions()
+    except Exception:
+        logger.exception("Failed to fetch orphan positions for initial message")
+
+    if orphans:
+        orphan_lines = "\n".join(
+            f"- {p['ticker']}: {p['shares']} shares @ ${float(p['avg_cost']):.2f} avg"
+            for p in orphans
+        )
+        orphan_block = f"""
+=== ORPHAN POSITIONS (no active thesis) ===
+{orphan_lines}
+
+These are held positions with no thesis attached. For EACH orphan, call the \
+`adopt_thesis` tool to attach a direction, rationale, and exit/invalidation \
+triggers. Do this BEFORE writing the playbook — orphans without theses cannot \
+be reasoned about or learned from."""
+        pre_seeded = pre_seeded + "\n\n" + orphan_block
+        adopt_step = (
+            "2. Adopt every orphan position listed above via `adopt_thesis` — "
+            "this is a prerequisite for the playbook.\n"
+        )
+        step_offset = 1
+    else:
+        adopt_step = ""
+        step_offset = 0
+
     initial_message = f"""Here is the current state (pre-loaded to save round-trips):
 
 {pre_seeded}
 
 Now proceed with your strategist session:
 1. Review the data above — do NOT re-fetch portfolio, theses, decisions, attribution, identity, rules, or strategy history
-2. Explore market conditions for new opportunities (use web_search, get_market_snapshot, get_news_signals)
-3. Update or close stale theses, create 2-4 new ones
-4. Write today's playbook using the write_playbook tool
+{adopt_step}{2 + step_offset}. Explore market conditions for new opportunities (use web_search, get_market_snapshot, get_news_signals)
+{3 + step_offset}. Update or close stale theses, create 2-4 new ones
+{4 + step_offset}. Write today's playbook using the write_playbook tool
 
 When you've completed your work, provide a summary of your findings and actions."""
 

@@ -96,6 +96,37 @@ tasks:
       - docker compose exec trading python -m v2.entertainment {{.CLI_ARGS}}
 
   # ---------------------------------------------------------------------------
+  # Paper trading
+  # ---------------------------------------------------------------------------
+  paper:up:
+    desc: Start all services including paper trading
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml up -d
+
+  paper:down:
+    desc: Stop all services including paper trading
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml down
+
+  paper:session:
+    desc: Run full daily session on paper trading
+    deps: [paper:up]
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --skip-twitter --skip-bluesky --skip-dashboard {{.CLI_ARGS}} --force
+
+  paper:session:dry-run:
+    desc: Dry-run the full daily session on paper trading
+    deps: [paper:up]
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --dry-run --skip-twitter --skip-bluesky --skip-dashboard {{.CLI_ARGS}}
+
+  paper:dashboard:
+    desc: Open paper trading dashboard (port 3001)
+    deps: [paper:up]
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml logs -f dashboard-paper
+
+  # ---------------------------------------------------------------------------
   # Dev
   # ---------------------------------------------------------------------------
   test:

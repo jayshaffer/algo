@@ -1,0 +1,45 @@
+services:
+  db-paper:
+    image: postgres:16
+    env_file:
+      - .env.paper
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data_paper:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U algo -d trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  trading-paper:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_started
+      db-paper:
+        condition: service_healthy
+    env_file:
+      - .env.paper
+    volumes:
+      - ./trading:/app/trading:ro
+      - ./v2:/app/v2:ro
+      - ./dashboard:/app/dashboard:ro
+      - ./public_dashboard:/app/public_dashboard:ro
+      - ./logs_paper:/app/logs
+    command: ["sleep", "infinity"]
+
+  dashboard-paper:
+    build: ./dashboard
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      db-paper:
+        condition: service_healthy
+    env_file:
+      - .env.paper
+
+volumes:
+  postgres_data_paper:
