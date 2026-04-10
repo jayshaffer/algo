@@ -13,6 +13,8 @@ from tests.v2.conftest import (
     make_decision_row,
 )
 
+from v2.strategy import run_strategy_reflection
+
 
 class TestStrategyReflectionResult:
     def test_dataclass_fields(self):
@@ -97,24 +99,40 @@ class TestToolProposeRule:
 
 class TestToolRetireRule:
     @patch("v2.strategy.retire_strategy_rule")
-    def test_retires_existing_rule(self, mock_retire):
-        from v2.strategy import tool_retire_rule
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_retires_existing_rule(self, mock_get_rule, mock_retire):
+        from datetime import datetime, timedelta
+        from v2.strategy import tool_retire_rule, reset_session
+        mock_get_rule.return_value = {
+            "id": 1, "status": "active",
+            "created_at": datetime.now() - timedelta(days=10),
+        }
         mock_retire.return_value = True
+        reset_session()
         result = tool_retire_rule(rule_id=1, reason="No longer predictive")
         assert "Retired" in result
 
     @patch("v2.strategy.retire_strategy_rule")
-    def test_handles_not_found(self, mock_retire):
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_handles_not_found(self, mock_get_rule, mock_retire):
         from v2.strategy import tool_retire_rule
+        mock_get_rule.return_value = None
         mock_retire.return_value = False
         result = tool_retire_rule(rule_id=999, reason="test")
         assert "not found" in result.lower() or "Error" in result
 
     @patch("v2.strategy.retire_strategy_rule")
-    def test_passes_reason_to_db(self, mock_retire):
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_passes_reason_to_db(self, mock_get_rule, mock_retire):
         """retire_rule should pass the reason to the database function."""
-        from v2.strategy import tool_retire_rule
+        from datetime import datetime, timedelta
+        from v2.strategy import tool_retire_rule, reset_session
+        mock_get_rule.return_value = {
+            "id": 5, "status": "active",
+            "created_at": datetime.now() - timedelta(days=10),
+        }
         mock_retire.return_value = True
+        reset_session()
         tool_retire_rule(rule_id=5, reason="Superseded by structural enforcement")
         mock_retire.assert_called_once_with(rule_id=5, reason="Superseded by structural enforcement")
 
@@ -255,7 +273,8 @@ class TestCountActions:
 class TestRunStrategyReflection:
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_returns_reflection_result(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_returns_reflection_result(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection, StrategyReflectionResult
         from v2.claude_client import AgenticLoopResult
 
@@ -278,7 +297,8 @@ class TestRunStrategyReflection:
 
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_passes_system_prompt_and_tools(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_passes_system_prompt_and_tools(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection, STRATEGY_REFLECTION_SYSTEM, STRATEGY_TOOL_DEFINITIONS, STRATEGY_TOOL_HANDLERS
         from v2.claude_client import AgenticLoopResult
 
@@ -301,7 +321,8 @@ class TestRunStrategyReflection:
 
     @patch("v2.strategy.get_claude_client")
     @patch("v2.strategy.run_agentic_loop")
-    def test_counts_actions_from_messages(self, mock_loop, mock_client):
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_counts_actions_from_messages(self, mock_formation, mock_loop, mock_client):
         from v2.strategy import run_strategy_reflection
         from v2.claude_client import AgenticLoopResult
 
@@ -326,6 +347,116 @@ class TestRunStrategyReflection:
         assert result.rules_retired == 1
         assert result.identity_updated is True
         assert result.memo_written is True
+
+
+class TestRuleTenureGuard:
+    def test_cannot_retire_rule_before_min_tenure(self, mock_db):
+        """Rules must be active for at least 5 days before retirement."""
+        from datetime import datetime, timedelta
+        mock_db.fetchone.return_value = {
+            "id": 1, "rule_text": "Test rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=2),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        from v2.strategy import tool_retire_rule
+        result = tool_retire_rule(rule_id=1, reason="Not working")
+        assert "too new" in result.lower() or "minimum tenure" in result.lower()
+
+    def test_can_retire_rule_after_min_tenure(self, mock_db):
+        """Rules active for >= 5 days can be retired normally."""
+        from datetime import datetime, timedelta
+        mock_db.fetchone.return_value = {
+            "id": 1, "rule_text": "Old rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=6),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        mock_db.rowcount = 1
+        from v2.strategy import tool_retire_rule, reset_session
+        reset_session()
+        result = tool_retire_rule(rule_id=1, reason="Data no longer supports it")
+        assert "retired" in result.lower()
+
+
+class TestRetirementCap:
+    def test_max_retirements_per_session(self, mock_db):
+        """At most 2 rules can be retired per session to prevent mass purges."""
+        from datetime import datetime, timedelta
+        old_rule = {
+            "id": 1, "rule_text": "Old rule", "status": "active",
+            "created_at": datetime.now() - timedelta(days=30),
+            "retirement_reason": None, "retired_at": None,
+            "category": "test", "direction": "constraint",
+            "confidence": Decimal("0.8"), "supporting_evidence": "test",
+        }
+        mock_db.fetchone.return_value = old_rule
+        mock_db.rowcount = 1
+        from v2.strategy import tool_retire_rule, reset_session
+        reset_session()
+        r1 = tool_retire_rule(rule_id=1, reason="Data changed")
+        assert "retired" in r1.lower()
+        r2 = tool_retire_rule(rule_id=2, reason="No longer valid")
+        assert "retired" in r2.lower()
+        r3 = tool_retire_rule(rule_id=3, reason="Also bad")
+        assert "limit" in r3.lower() or "maximum" in r3.lower()
+
+
+class TestReflectionFormationInjection:
+    def test_formation_context_in_reflection_system_prompt(self):
+        """Formation context should appear in reflection system prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+
+        with patch("v2.strategy.get_claude_client", return_value=MagicMock()), \
+             patch("v2.strategy.reset_session"), \
+             patch("v2.strategy.run_agentic_loop") as mock_loop, \
+             patch("v2.strategy.build_formation_context",
+                   return_value="## FORMATION MODE ACTIVE\nBe exploratory"):
+            mock_loop.return_value = mock_result
+
+            run_strategy_reflection(model="claude-haiku-4-5-20251001", max_turns=3)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "reflection" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE ACTIVE" in system_prompt
+
+    def test_no_formation_context_when_graduated(self):
+        """Empty formation context should not alter the reflection prompt."""
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+
+        with patch("v2.strategy.get_claude_client", return_value=MagicMock()), \
+             patch("v2.strategy.reset_session"), \
+             patch("v2.strategy.run_agentic_loop") as mock_loop, \
+             patch("v2.strategy.build_formation_context", return_value=""):
+            mock_loop.return_value = mock_result
+
+            run_strategy_reflection(model="claude-haiku-4-5-20251001", max_turns=3)
+
+        call_kwargs = mock_loop.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system") if call_kwargs[1] else None
+        if system_prompt is None:
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and "reflection" in arg.lower():
+                    system_prompt = arg
+                    break
+        assert "FORMATION MODE" not in system_prompt
 
 
 class TestIdentityUpdateGuard:

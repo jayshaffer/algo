@@ -56,7 +56,12 @@
       "Bash(cp:*)",
       "Bash(git:*)",
       "Bash(cat /home/jay/dev/algo/db/init/*.sql)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(crontab -l)",
+      "Bash(xargs basename:*)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(docker exec:*)"
     ]
   }
 }

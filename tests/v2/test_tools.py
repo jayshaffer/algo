@@ -10,6 +10,7 @@ from v2.tools import (
     tool_get_portfolio_state,
     tool_get_active_theses,
     tool_create_thesis,
+    tool_adopt_thesis,
     tool_update_thesis,
     tool_close_thesis,
     tool_get_news_signals,
@@ -243,17 +244,78 @@ class TestCreateThesis:
         assert "GOOG" in result
 
 
+class TestToolAdoptThesis:
+
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_active_theses")
+    @patch("v2.tools.get_positions")
+    def test_adopt_success(self, mock_positions, mock_theses, mock_insert):
+        mock_positions.return_value = [{"ticker": "AAPL"}]
+        mock_theses.return_value = []
+        mock_insert.return_value = 42
+
+        result = tool_adopt_thesis(
+            ticker="AAPL",
+            direction="long",
+            thesis="Strong ecosystem and services growth",
+            exit_trigger="Price drops below $130",
+            invalidation="iPhone sales decline 3 consecutive quarters",
+            confidence="medium",
+        )
+        assert "Created thesis ID 42" in result
+        assert "adopted" in result.lower() or "AAPL" in result
+        mock_insert.assert_called_once()
+        # Verify source is "adoption" not "claude_ideation"
+        call_kwargs = mock_insert.call_args
+        assert call_kwargs[1]["source"] == "adoption" or call_kwargs[0][-1] == "adoption"
+
+    @patch("v2.tools.get_active_theses")
+    @patch("v2.tools.get_positions")
+    def test_reject_not_in_portfolio(self, mock_positions, mock_theses):
+        mock_positions.return_value = [{"ticker": "NVDA"}]
+        mock_theses.return_value = []
+
+        result = tool_adopt_thesis(
+            ticker="TSLA",
+            direction="long",
+            thesis="EV growth",
+            exit_trigger="...",
+            invalidation="...",
+            confidence="medium",
+        )
+        assert "Error" in result
+        assert "not in the portfolio" in result
+
+    @patch("v2.tools.get_active_theses")
+    @patch("v2.tools.get_positions")
+    def test_reject_existing_thesis(self, mock_positions, mock_theses):
+        mock_positions.return_value = [{"ticker": "AAPL"}]
+        mock_theses.return_value = [{"id": 1, "ticker": "AAPL"}]
+
+        result = tool_adopt_thesis(
+            ticker="AAPL",
+            direction="long",
+            thesis="...",
+            exit_trigger="...",
+            invalidation="...",
+            confidence="medium",
+        )
+        assert "Error" in result
+        assert "already exists" in result
+
+
 # --- Tool completeness tests ---
 
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 14 handler functions."""
+        """TOOL_HANDLERS should have all 15 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
             "get_active_theses",
             "create_thesis",
+            "adopt_thesis",
             "update_thesis",
             "close_thesis",
             "get_news_signals",
@@ -268,8 +330,8 @@ class TestToolCompleteness:
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 15 entries (14 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 15
+        """TOOL_DEFINITIONS should have 16 entries (15 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 16
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -281,6 +343,7 @@ class TestToolCompleteness:
             "get_portfolio_state",
             "get_active_theses",
             "create_thesis",
+            "adopt_thesis",
             "update_thesis",
             "close_thesis",
             "get_news_signals",

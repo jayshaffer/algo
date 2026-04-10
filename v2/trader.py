@@ -17,6 +17,7 @@ from .executor import (
     calculate_position_size,
     is_market_open,
     wait_for_fill,
+    get_live_available_qty,
 )
 from .agent import (
     get_trading_decisions,
@@ -27,7 +28,7 @@ from .agent import (
     ExecutorDecision,
     DEFAULT_EXECUTOR_MODEL,
 )
-from .database.trading_db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
+from .database.trading_db import insert_decision, check_decision_exists, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
 
 logger = logging.getLogger("trader")
 
@@ -262,6 +263,42 @@ def run_trading_session(
             trades_failed += 1
             continue
 
+        # Pre-submit live Alpaca check for sells. The DB snapshot + open-order
+        # map can disagree with Alpaca (untracked orders, externally-closed
+        # positions, partial fills). Querying qty_available immediately before
+        # submit is the cheapest defense against "Insufficient available
+        # shares" failures.
+        if decision.action == "sell" and not dry_run:
+            try:
+                available = get_live_available_qty(decision.ticker)
+            except Exception as e:
+                logger.warning(
+                    "%s: live availability check failed (%s) — proceeding",
+                    decision.ticker, e,
+                )
+                available = None
+
+            if available is not None:
+                requested = Decimal(str(decision.quantity))
+                if available < requested:
+                    if available <= Decimal("0.0001"):
+                        reason = f"Alpaca reports 0 available shares (DB said {positions.get(decision.ticker, 0)})"
+                        errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
+                        logger.warning("%s: SKIP - %s", decision.ticker, reason)
+                        trades_failed += 1
+                        if decision.playbook_action_id:
+                            try:
+                                from .database.trading_db import update_playbook_action_status
+                                update_playbook_action_status(decision.playbook_action_id, "skipped")
+                            except Exception:
+                                pass
+                        continue
+                    logger.info(
+                        "%s: trimming sell from %s to %s (Alpaca available)",
+                        decision.ticker, requested, available,
+                    )
+                    decision.quantity = float(available)
+
         # Execute trade
         logger.info("%s: %s %.4g @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
 
@@ -325,15 +362,28 @@ def run_trading_session(
             status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
             logger.info("  %s - Success", status)
 
-            # Mark thesis as executed if trade was based on one
-            if decision.thesis_id and not dry_run:
+            # Update thesis lifecycle on fill. A thesis represents the *trade idea*
+            # for the life of the position, not just the entry fill — so:
+            #   - buy fills leave the thesis active (position is now being held)
+            #   - sell fills that flatten the position close the thesis
+            #   - partial sells leave the thesis active
+            if decision.thesis_id and not dry_run and decision.action == "sell":
                 try:
-                    close_thesis(
-                        thesis_id=decision.thesis_id,
-                        status="executed",
-                        reason=f"Trade executed: {decision.action} {decision.quantity} shares @ ${fill_price}"
-                    )
-                    logger.info("  Thesis %d marked as executed", decision.thesis_id)
+                    held_before = positions.get(decision.ticker, Decimal(0))
+                    sold = Decimal(str(decision.quantity))
+                    remaining = held_before - sold
+                    if remaining <= Decimal("0.0001"):
+                        close_thesis(
+                            thesis_id=decision.thesis_id,
+                            status="closed",
+                            reason=f"Position exited: sold {decision.quantity} shares @ ${fill_price}"
+                        )
+                        logger.info("  Thesis %d closed (position exited)", decision.thesis_id)
+                    else:
+                        logger.info(
+                            "  Thesis %d kept active (partial exit, %s shares remaining)",
+                            decision.thesis_id, remaining,
+                        )
                 except Exception as e:
                     errors.append(f"Failed to update thesis {decision.thesis_id}: {e}")
         else:
@@ -378,6 +428,13 @@ def run_trading_session(
             if price is None:
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
+                continue
+
+            # Skip duplicate decisions (same ticker+action already logged today)
+            existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
+            if existing_id:
+                logger.warning("%s: duplicate %s decision — already logged as ID %d",
+                               decision.ticker, decision.action, existing_id)
                 continue
 
             # Use filled quantity when available (handles partial fills)
