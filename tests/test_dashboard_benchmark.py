@@ -1,7 +1,8 @@
 """Tests for dashboard/benchmark.py — SPY benchmark and alpha computation."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -102,3 +103,82 @@ class TestComputeAlpha:
         assert compute_alpha(None, [{"date": "2026-01-02", "close": 500.0}]) is None
         assert compute_alpha([], None) is None
         assert compute_alpha(None, None) is None
+
+
+from dashboard.benchmark import get_spy_benchmark, _clear_cache
+
+
+class TestGetSpyBenchmark:
+    """Tests for get_spy_benchmark() with in-memory TTL cache."""
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        _clear_cache()
+        yield
+        _clear_cache()
+
+    def _make_mock_bar(self, dt_str, close):
+        bar = MagicMock()
+        bar.timestamp = datetime.strptime(dt_str, "%Y-%m-%d")
+        bar.close = close
+        return bar
+
+    @patch("dashboard.benchmark.StockHistoricalDataClient")
+    def test_fetches_from_alpaca(self, mock_client_cls):
+        bars = [
+            self._make_mock_bar("2026-01-02", 500.0),
+            self._make_mock_bar("2026-01-03", 505.0),
+        ]
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = {"SPY": bars}
+        mock_client_cls.return_value = mock_client
+
+        result = get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+
+        assert len(result) == 2
+        assert result[0] == {"date": "2026-01-02", "close": 500.0}
+        assert result[1] == {"date": "2026-01-03", "close": 505.0}
+        mock_client.get_stock_bars.assert_called_once()
+
+    @patch("dashboard.benchmark.StockHistoricalDataClient")
+    def test_cache_hit_skips_alpaca(self, mock_client_cls):
+        bars = [self._make_mock_bar("2026-01-02", 500.0)]
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = {"SPY": bars}
+        mock_client_cls.return_value = mock_client
+
+        result1 = get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+        result2 = get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+
+        assert result1 == result2
+        assert mock_client.get_stock_bars.call_count == 1
+
+    @patch("dashboard.benchmark.time")
+    @patch("dashboard.benchmark.StockHistoricalDataClient")
+    def test_cache_expires_after_ttl(self, mock_client_cls, mock_time):
+        bars = [self._make_mock_bar("2026-01-02", 500.0)]
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = {"SPY": bars}
+        mock_client_cls.return_value = mock_client
+
+        mock_time.time.return_value = 1000.0
+        get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+
+        mock_time.time.return_value = 1000.0 + 901  # Past 900s TTL
+        get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+
+        assert mock_client.get_stock_bars.call_count == 2
+
+    @patch("dashboard.benchmark.StockHistoricalDataClient")
+    def test_alpaca_error_returns_empty(self, mock_client_cls):
+        mock_client_cls.side_effect = Exception("connection refused")
+        result = get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+        assert result == []
+
+    @patch("dashboard.benchmark.StockHistoricalDataClient")
+    def test_empty_bars_returns_empty(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = {"SPY": []}
+        mock_client_cls.return_value = mock_client
+        result = get_spy_benchmark(date(2026, 1, 2), date(2026, 1, 3))
+        assert result == []
