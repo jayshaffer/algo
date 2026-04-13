@@ -126,7 +126,6 @@ def performance():
     equity_curve = get_equity_curve(days=90)
     metrics = get_performance_metrics(days=30)
 
-    # Format equity data for Chart.js
     equity_data = [
         {
             "date": str(row["date"]),
@@ -137,10 +136,19 @@ def performance():
         for row in equity_curve
     ] if equity_curve else []
 
+    benchmark_data = []
+    alpha_stats = None
+    if equity_curve:
+        dates = [row["date"] for row in equity_curve]
+        benchmark_data = get_spy_benchmark(dates[0], dates[-1])
+        alpha_stats = compute_alpha(equity_curve, benchmark_data)
+
     return render_template(
         "performance.html",
         equity_data=equity_data,
         metrics=metrics,
+        benchmark_data=benchmark_data,
+        alpha_stats=alpha_stats,
     )
 
 

@@ -7,7 +7,7 @@
 
 <!-- Performance Metrics -->
 {% if metrics %}
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
     <div class="bg-white rounded-lg shadow p-4">
         <div class="text-gray-500 text-sm">Starting Value</div>
         <div class="text-xl font-bold">${{ "%.2f"|format(metrics.start_value) }}</div>
@@ -29,6 +29,16 @@
         <div class="text-xl font-bold {% if metrics.pnl_pct > 0 %}text-green-600{% elif metrics.pnl_pct < 0 %}text-red-600{% endif %}">
             {{ "%.2f"|format(metrics.pnl_pct) }}%
         </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">vs S&P 500</div>
+        {% if alpha_stats %}
+        <div class="text-xl font-bold {% if alpha_stats.alpha > 0 %}text-green-600{% elif alpha_stats.alpha < 0 %}text-red-600{% endif %}">
+            {{ "%+.2f"|format(alpha_stats.alpha) }}%
+        </div>
+        {% else %}
+        <div class="text-xl font-bold text-gray-400">&mdash;</div>
+        {% endif %}
     </div>
 </div>
 {% else %}
@@ -64,52 +74,89 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Benchmark: Portfolio vs S&P 500 (% Return) -->
+<div class="bg-white rounded-lg shadow mt-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Portfolio vs S&P 500 (% Return)</h2>
+    </div>
+    <div class="p-4">
+        {% if equity_data and benchmark_data %}
+        <canvas id="benchmarkChart" height="100"></canvas>
+        {% else %}
+        <p class="text-gray-500">Not enough data for benchmark comparison</p>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 {% if equity_data %}
 <script>
     const equityData = {{ equity_data|tojson }};
+    const benchmarkData = {{ benchmark_data|tojson }};
 
-    // Equity Curve
+    // Build SPY date->close lookup
+    const spyMap = {};
+    benchmarkData.forEach(b => { spyMap[b.date] = b.close; });
+
+    const labels = equityData.map(d => d.date);
+
+    // --- Equity Curve with SPY overlay ---
+    const equityDatasets = [{
+        label: 'Portfolio Value',
+        data: equityData.map(d => d.portfolio_value),
+        borderColor: 'rgb(59, 130, 246)',
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        fill: true,
+        tension: 0.1
+    }];
+
+    // Normalize SPY to portfolio's starting value
+    const spyBase = spyMap[labels[0]];
+    if (spyBase && benchmarkData.length > 0) {
+        const baseValue = equityData[0].portfolio_value;
+        const spyNormalized = labels.map(date => {
+            const close = spyMap[date];
+            if (close == null) return null;
+            return (close / spyBase) * baseValue;
+        });
+        equityDatasets.push({
+            label: 'S&P 500',
+            data: spyNormalized,
+            borderColor: '#5a6a7a',
+            borderDash: [6, 3],
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.1,
+            pointRadius: 0
+        });
+    }
+
     const equityCtx = document.getElementById('equityChart').getContext('2d');
     new Chart(equityCtx, {
         type: 'line',
-        data: {
-            labels: equityData.map(d => d.date),
-            datasets: [{
-                label: 'Portfolio Value',
-                data: equityData.map(d => d.portfolio_value),
-                borderColor: 'rgb(59, 130, 246)',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        },
+        data: { labels: labels, datasets: equityDatasets },
         options: {
             responsive: true,
-            plugins: {
-                legend: { display: false }
-            },
+            plugins: { legend: { display: equityDatasets.length > 1 } },
             scales: {
                 y: {
                     beginAtZero: false,
                     ticks: {
-                        callback: function(value) {
-                            return '$' + value.toLocaleString();
-                        }
+                        callback: function(value) { return '$' + value.toLocaleString(); }
                     }
                 }
             }
         }
     });
 
-    // Allocation Chart
+    // --- Allocation Chart ---
     const allocCtx = document.getElementById('allocationChart').getContext('2d');
     new Chart(allocCtx, {
         type: 'line',
         data: {
-            labels: equityData.map(d => d.date),
+            labels: labels,
             datasets: [{
                 label: 'Cash',
                 data: equityData.map(d => d.cash),
@@ -133,14 +180,63 @@
                     beginAtZero: true,
                     stacked: true,
                     ticks: {
-                        callback: function(value) {
-                            return '$' + value.toLocaleString();
-                        }
+                        callback: function(value) { return '$' + value.toLocaleString(); }
                     }
                 }
             }
         }
     });
+
+    // --- Benchmark % Return Chart ---
+    if (benchmarkData.length > 0 && document.getElementById('benchmarkChart')) {
+        const portStart = equityData[0].portfolio_value;
+        const portfolioReturns = equityData.map(d =>
+            ((d.portfolio_value - portStart) / portStart) * 100
+        );
+
+        const spyReturns = labels.map(date => {
+            const close = spyMap[date];
+            if (close == null || !spyBase) return null;
+            return ((close - spyBase) / spyBase) * 100;
+        });
+
+        const benchCtx = document.getElementById('benchmarkChart').getContext('2d');
+        new Chart(benchCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Portfolio',
+                    data: portfolioReturns,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                    fill: true,
+                    tension: 0.1,
+                    pointRadius: 0
+                }, {
+                    label: 'S&P 500',
+                    data: spyReturns,
+                    borderColor: '#5a6a7a',
+                    borderDash: [6, 3],
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: true } },
+                scales: {
+                    y: {
+                        ticks: {
+                            callback: function(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+                        }
+                    }
+                }
+            }
+        });
+    }
 </script>
 {% endif %}
 {% endblock %}
