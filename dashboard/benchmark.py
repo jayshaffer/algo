@@ -96,7 +96,7 @@ def get_spy_benchmark(start: date, end: date) -> list[dict]:
             return []
 
         result = [
-            {"date": bar.timestamp.strftime("%Y-%m-%d"), "close": bar.close}
+            {"date": bar.timestamp.strftime("%Y-%m-%d"), "close": float(bar.close)}
             for bar in spy_bars
         ]
         _cache[key] = (now + _TTL_SECONDS, result)
