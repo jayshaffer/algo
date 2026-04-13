@@ -30,6 +30,11 @@ from tests.conftest import (
 mock_queries = MagicMock()
 sys.modules["queries"] = mock_queries
 
+mock_benchmark = MagicMock()
+mock_benchmark.get_spy_benchmark.return_value = []
+mock_benchmark.compute_alpha.return_value = None
+sys.modules["benchmark"] = mock_benchmark
+
 from dashboard.app import app  # noqa: E402
 
 
@@ -83,6 +88,10 @@ def _reset_query_mocks():
     mock_queries.get_strategy_rules.return_value = []
     mock_queries.get_strategy_memos.return_value = []
     mock_queries.get_recent_tweets.return_value = []
+    mock_benchmark.get_spy_benchmark.reset_mock()
+    mock_benchmark.compute_alpha.reset_mock()
+    mock_benchmark.get_spy_benchmark.return_value = []
+    mock_benchmark.compute_alpha.return_value = None
     yield
 
 

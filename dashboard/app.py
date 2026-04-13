@@ -25,6 +25,7 @@ from queries import (
     get_strategy_memos,
     get_recent_tweets,
 )
+from benchmark import get_spy_benchmark, compute_alpha
 
 app = Flask(__name__)
 
@@ -37,12 +38,21 @@ def portfolio():
     playbook = get_today_playbook()
     open_orders = get_open_orders()
 
+    equity_curve = get_equity_curve(days=90)
+    benchmark_data = []
+    alpha_stats = None
+    if equity_curve:
+        dates = [row["date"] for row in equity_curve]
+        benchmark_data = get_spy_benchmark(dates[0], dates[-1])
+        alpha_stats = compute_alpha(equity_curve, benchmark_data)
+
     return render_template(
         "portfolio.html",
         positions=positions,
         snapshot=snapshot,
         playbook=playbook,
         open_orders=open_orders,
+        alpha_stats=alpha_stats,
     )
 
 
