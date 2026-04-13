@@ -25,7 +25,12 @@ from queries import (
     get_strategy_memos,
     get_recent_tweets,
 )
-from benchmark import get_spy_benchmark, compute_alpha
+from benchmark import (
+    get_spy_benchmark,
+    compute_alpha,
+    get_deposit_history,
+    enrich_snapshots_with_deposits,
+)
 
 app = Flask(__name__)
 
@@ -44,7 +49,9 @@ def portfolio():
     if equity_curve:
         dates = [row["date"] for row in equity_curve]
         benchmark_data = get_spy_benchmark(dates[0], dates[-1])
-        alpha_stats = compute_alpha(equity_curve, benchmark_data)
+        deposits = get_deposit_history()
+        enriched = enrich_snapshots_with_deposits(equity_curve, deposits)
+        alpha_stats = compute_alpha(enriched, benchmark_data)
 
     return render_template(
         "portfolio.html",
@@ -141,7 +148,9 @@ def performance():
     if equity_curve:
         dates = [row["date"] for row in equity_curve]
         benchmark_data = get_spy_benchmark(dates[0], dates[-1])
-        alpha_stats = compute_alpha(equity_curve, benchmark_data)
+        deposits = get_deposit_history()
+        enriched = enrich_snapshots_with_deposits(equity_curve, deposits)
+        alpha_stats = compute_alpha(enriched, benchmark_data)
 
     return render_template(
         "performance.html",

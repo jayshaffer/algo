@@ -33,6 +33,8 @@ sys.modules["queries"] = mock_queries
 mock_benchmark = MagicMock()
 mock_benchmark.get_spy_benchmark.return_value = []
 mock_benchmark.compute_alpha.return_value = None
+mock_benchmark.get_deposit_history.return_value = []
+mock_benchmark.enrich_snapshots_with_deposits.side_effect = lambda snaps, deps: list(snaps)
 sys.modules["benchmark"] = mock_benchmark
 
 from dashboard.app import app  # noqa: E402
@@ -90,8 +92,12 @@ def _reset_query_mocks():
     mock_queries.get_recent_tweets.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
+    mock_benchmark.get_deposit_history.reset_mock()
+    mock_benchmark.enrich_snapshots_with_deposits.reset_mock()
     mock_benchmark.get_spy_benchmark.return_value = []
     mock_benchmark.compute_alpha.return_value = None
+    mock_benchmark.get_deposit_history.return_value = []
+    mock_benchmark.enrich_snapshots_with_deposits.side_effect = lambda snaps, deps: list(snaps)
     yield
 
 
