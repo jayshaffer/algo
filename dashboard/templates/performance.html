@@ -116,8 +116,8 @@
     const spyBase = spyMap[labels[0]];
     if (spyBase && benchmarkData.length > 0) {
         const baseValue = equityData[0].portfolio_value;
-        const spyNormalized = labels.map(date => {
-            const close = spyMap[date];
+        const spyNormalized = labels.map(d => {
+            const close = spyMap[d];
             if (close == null) return null;
             return (close / spyBase) * baseValue;
         });
@@ -194,8 +194,8 @@
             ((d.portfolio_value - portStart) / portStart) * 100
         );
 
-        const spyReturns = labels.map(date => {
-            const close = spyMap[date];
+        const spyReturns = labels.map(d => {
+            const close = spyMap[d];
             if (close == null || !spyBase) return null;
             return ((close - spyBase) / spyBase) * 100;
         });

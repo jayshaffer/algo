@@ -88,6 +88,22 @@ class TestComputeAlpha:
         benchmark = [{"date": "2026-01-02", "close": 500.0}]
         assert compute_alpha(snapshots, benchmark) is None
 
+    def test_flat_spy_returns_portfolio_return_as_alpha(self):
+        """When SPY is flat, alpha should equal portfolio return."""
+        snapshots = [
+            {"date": date(2026, 1, 2), "portfolio_value": Decimal("100000")},
+            {"date": date(2026, 1, 6), "portfolio_value": Decimal("103000")},
+        ]
+        benchmark = [
+            {"date": "2026-01-02", "close": 500.0},
+            {"date": "2026-01-06", "close": 500.0},
+        ]
+        result = compute_alpha(snapshots, benchmark)
+        assert result is not None
+        assert result["portfolio_return"] == pytest.approx(3.0)
+        assert result["spy_return"] == pytest.approx(0.0)
+        assert result["alpha"] == pytest.approx(3.0)
+
     def test_no_overlapping_dates_returns_none(self):
         snapshots = [
             {"date": date(2026, 1, 2), "portfolio_value": Decimal("100000")},

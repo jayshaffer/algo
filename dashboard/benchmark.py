@@ -41,7 +41,7 @@ def compute_alpha(snapshots, benchmark):
             port_end = float(snap["portfolio_value"])
             break
 
-    if spy_start is None or spy_end is None or spy_start == spy_end:
+    if spy_start is None or spy_end is None or spy_start == 0:
         return None
     if port_start is None or port_start == 0:
         return None
@@ -58,6 +58,9 @@ def compute_alpha(snapshots, benchmark):
 
 
 _TTL_SECONDS = 900  # 15 minutes
+# Cache reuse is within-day only: the key is (start, end) and both ends roll
+# forward daily as new snapshots land, so cross-day reuse is not a goal. The
+# TTL exists to prevent hammering Alpaca on repeated refreshes within a session.
 _cache: dict[tuple[date, date], tuple[float, list[dict]]] = {}
 
 
