@@ -102,6 +102,40 @@
 
     const labels = equityData.map(d => d.date);
 
+    // Find first label that has a matching SPY bar. The first snapshot date
+    // can fall on a weekend/holiday (account funded off-hours), in which case
+    // spyMap[labels[0]] is undefined — scan forward to the first trading day.
+    let spyBase = null;
+    let spyBaseIdx = -1;
+    for (let i = 0; i < labels.length; i++) {
+        if (spyMap[labels[i]] != null) {
+            spyBase = spyMap[labels[i]];
+            spyBaseIdx = i;
+            break;
+        }
+    }
+
+    // Time-weighted return (%): chains sub-period returns netting out deposit
+    // deltas. Mirrors dashboard/benchmark.py:_twr so the chart matches the card.
+    function computeTWR(snapshots) {
+        const returns = [0];
+        let growth = 1.0;
+        for (let i = 1; i < snapshots.length; i++) {
+            const prevVal = snapshots[i - 1].portfolio_value;
+            const prevDep = snapshots[i - 1].cumulative_deposits != null
+                ? snapshots[i - 1].cumulative_deposits : prevVal;
+            const currDep = snapshots[i].cumulative_deposits != null
+                ? snapshots[i].cumulative_deposits : prevDep;
+            const deposit = currDep - prevDep;
+            const startCapital = prevVal + deposit;
+            if (startCapital > 0) {
+                growth *= snapshots[i].portfolio_value / startCapital;
+            }
+            returns.push((growth - 1) * 100);
+        }
+        return returns;
+    }
+
     // --- Equity Curve with SPY overlay ---
     const equityDatasets = [{
         label: 'Portfolio Value',
@@ -112,10 +146,9 @@
         tension: 0.1
     }];
 
-    // Normalize SPY to portfolio's starting value
-    const spyBase = spyMap[labels[0]];
+    // Normalize SPY to the portfolio value at the first overlapping date
     if (spyBase && benchmarkData.length > 0) {
-        const baseValue = equityData[0].portfolio_value;
+        const baseValue = equityData[spyBaseIdx].portfolio_value;
         const spyNormalized = labels.map(d => {
             const close = spyMap[d];
             if (close == null) return null;
@@ -188,15 +221,19 @@
     });
 
     // --- Benchmark % Return Chart ---
-    if (benchmarkData.length > 0 && document.getElementById('benchmarkChart')) {
-        const portStart = equityData[0].portfolio_value;
-        const portfolioReturns = equityData.map(d =>
-            ((d.portfolio_value - portStart) / portStart) * 100
-        );
+    if (benchmarkData.length > 0 && spyBase && document.getElementById('benchmarkChart')) {
+        // Scope both series to the SPY-overlap window so the chart matches
+        // the alpha card (which computes TWR over the same window server-side).
+        // Dates before spyBaseIdx render as nulls (gap at the start of the chart).
+        const windowSnapshots = equityData.slice(spyBaseIdx);
+        const windowTwr = computeTWR(windowSnapshots);
+        const portfolioReturns = new Array(spyBaseIdx).fill(null).concat(windowTwr);
 
-        const spyReturns = labels.map(d => {
+        // SPY: % change from first overlapping close; null outside overlap window.
+        const spyReturns = labels.map((d, i) => {
+            if (i < spyBaseIdx) return null;
             const close = spyMap[d];
-            if (close == null || !spyBase) return null;
+            if (close == null) return null;
             return ((close - spyBase) / spyBase) * 100;
         });
 

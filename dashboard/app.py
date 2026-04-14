@@ -133,24 +133,26 @@ def performance():
     equity_curve = get_equity_curve(days=90)
     metrics = get_performance_metrics(days=30)
 
-    equity_data = [
-        {
-            "date": str(row["date"]),
-            "portfolio_value": float(row["portfolio_value"]),
-            "cash": float(row["cash"]),
-            "buying_power": float(row["buying_power"]),
-        }
-        for row in equity_curve
-    ] if equity_curve else []
-
     benchmark_data = []
     alpha_stats = None
+    enriched = []
     if equity_curve:
         dates = [row["date"] for row in equity_curve]
         benchmark_data = get_spy_benchmark(dates[0], dates[-1])
         deposits = get_deposit_history()
         enriched = enrich_snapshots_with_deposits(equity_curve, deposits)
         alpha_stats = compute_alpha(enriched, benchmark_data)
+
+    equity_data = [
+        {
+            "date": str(row["date"]),
+            "portfolio_value": float(row["portfolio_value"]),
+            "cash": float(row["cash"]),
+            "buying_power": float(row["buying_power"]),
+            "cumulative_deposits": float(row.get("cumulative_deposits", row["portfolio_value"])),
+        }
+        for row in enriched
+    ]
 
     return render_template(
         "performance.html",
