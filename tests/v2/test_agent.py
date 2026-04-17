@@ -20,7 +20,8 @@ class TestExecutorContracts:
             playbook_actions=[PlaybookAction(
                 id=1, ticker="AAPL", action="buy", thesis_id=1,
                 reasoning="Entry hit", confidence="high",
-                max_quantity=Decimal("5"), priority=1,
+                intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+                priority=1,
             )],
             positions=[{"ticker": "MSFT", "shares": "10"}],
             account={"cash": "50000", "buying_power": "50000"},
@@ -34,7 +35,8 @@ class TestExecutorContracts:
     def test_executor_decision_has_playbook_action_id(self):
         d = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False,
         )
         assert d.playbook_action_id == 1
@@ -43,7 +45,8 @@ class TestExecutorContracts:
     def test_off_playbook_decision(self):
         d = ExecutorDecision(
             playbook_action_id=None, ticker="NVDA", action="buy",
-            quantity=1.0, reasoning="Urgent opportunity", confidence="medium",
+            intent_type="invest_dollar", intent_magnitude=Decimal("200"),
+            reasoning="Urgent opportunity", confidence="medium",
             is_off_playbook=True,
         )
         assert d.playbook_action_id is None
@@ -52,7 +55,8 @@ class TestExecutorContracts:
     def test_signal_refs_default_to_empty_list(self):
         d = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=1.0, reasoning="Test", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("200"),
+            reasoning="Test", confidence="high",
             is_off_playbook=False,
         )
         assert d.signal_refs == []
@@ -191,7 +195,8 @@ class TestFormatDecisionsForLogging:
         response = AgentResponse(
             decisions=[ExecutorDecision(
                 playbook_action_id=1, ticker="AAPL", action="buy",
-                quantity=2.5, reasoning="Test", confidence="high",
+                intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+                reasoning="Test", confidence="high",
                 is_off_playbook=False,
             )],
             thesis_invalidations=[],

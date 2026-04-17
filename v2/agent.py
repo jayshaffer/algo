@@ -110,39 +110,48 @@ TRADING_SYSTEM_PROMPT = """You are a trading executor. You receive structured JS
 OUTPUT FORMAT: You must respond with a single JSON object and nothing else. No commentary, no markdown, no explanation outside the JSON.
 
 INPUTS (as JSON object):
-1. playbook_actions — priority-ordered actions with ticker, action, thesis_id, reasoning, confidence, max_quantity, priority
-2. positions — current portfolio holdings
+1. playbook_actions — priority-ordered actions with ticker, action, thesis_id, reasoning, confidence, intent_type, intent_magnitude, priority
+2. positions — current portfolio holdings (authoritative share counts)
 3. account — cash, buying_power, equity
 4. attribution_summary — signal performance stats for the learning loop
 5. recent_outcomes — recent decision outcomes for calibration
 6. market_outlook — current market conditions summary
 7. risk_notes — risk warnings and constraints
-8. current_prices — latest ask prices for relevant tickers (use these for dollar-based sizing)
-9. strategy_identity — the system's evolving trading identity and style (respect this)
-10. strategy_rules — active constraints and preferences from past performance (MUST follow these)
-11. equity_summary — recent account performance for position sizing context
-12. todays_decisions — decisions already executed THIS session (avoid duplicating trades or over-deploying capital to the same ticker)
+8. current_prices — latest ask prices for relevant tickers
+9. strategy_identity — the system's evolving trading identity (respect this)
+10. strategy_rules — active constraints from past performance (MUST follow)
+11. equity_summary — recent account performance
+12. todays_decisions — decisions already executed THIS session (don't duplicate)
+
+CRITICAL RULE — YOU NEVER AUTHOR SHARE QUANTITIES:
+Share counts are computed by the system from live portfolio state. You author an INTENT and a MAGNITUDE; the system divides/multiplies against the real position, current price, buying_power, and portfolio_value. This is how the system stays consistent with actual holdings even if your reasoning drifts.
+
+SELL INTENTS:
+- exit_full (magnitude: null) — sell entire position. The common case.
+- exit_partial_pct (magnitude: 0-100) — sell this percentage of held shares.
+- exit_dollar (magnitude: dollars) — sell roughly this dollar amount; clamped to held.
+- trim_to_portfolio_pct (magnitude: 0-100) — sell until position = magnitude% of portfolio; 0 if already below.
+
+BUY INTENTS:
+- invest_dollar (magnitude: dollars) — spend this many dollars; clamped by buying_power and MAX_POSITION_PCT.
+- invest_portfolio_pct (magnitude: 0-100) — spend this percentage of portfolio_value.
+- invest_buying_power_pct (magnitude: 0-100) — spend this percentage of buying_power.
+- add_to_target_pct (magnitude: 0-100) — add to existing position until it reaches magnitude% of portfolio; 0 if already at/above.
 
 RULES:
-- For each playbook action: execute, adjust, or skip (with reason)
+- For each playbook action: execute (same intent), adjust (different intent/magnitude), or skip (hold, with reason)
 - Set playbook_action_id to the action's id when executing a playbook action
 - Set is_off_playbook to true for trades not in the playbook
-- You may add trades if signals warrant, but playbook actions come first
-- Use current_prices to calculate position sizes by dollar amount (e.g., to invest $500 in a $200 stock, set quantity to 2.5)
-- Conservative sizing: 1-5% of buying power per trade
-- Never exceed available buying power
-- Fractional shares are supported -- use them to size positions precisely by dollar amount
-- Example: to invest $500 in a $200 stock, use quantity 2.5
-- Prefer dollar-based sizing over round share counts
-- If no playbook is available: hold everything, no new positions
+- If no playbook available: hold everything, no new positions
 - If uncertain: HOLD
 - Every decision MUST cite signal_refs for the learning loop
 
 JSON SCHEMA:
-{"decisions": [{"playbook_action_id": null, "ticker": "SYMBOL", "action": "buy|sell|hold", "quantity": 2.5, "reasoning": "...", "confidence": "high|medium|low", "is_off_playbook": false, "signal_refs": [{"type": "news_signal|thesis", "id": 0}], "thesis_id": null}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
+{"decisions": [{"playbook_action_id": null, "ticker": "SYMBOL", "action": "buy|sell|hold", "intent_type": "exit_full|exit_partial_pct|exit_dollar|trim_to_portfolio_pct|invest_dollar|invest_portfolio_pct|invest_buying_power_pct|add_to_target_pct|null", "intent_magnitude": 500.0, "reasoning": "...", "confidence": "high|medium|low", "is_off_playbook": false, "signal_refs": [{"type": "news_signal|thesis", "id": 0}], "thesis_id": null}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
 
-If no trades: empty decisions array, explain in market_summary.
-If no invalidations: empty thesis_invalidations array."""
+For hold decisions, set intent_type and intent_magnitude to null.
+For exit_full, set intent_magnitude to null.
+If no trades: empty decisions array, explain in market_summary."""
 
 
 def get_trading_decisions(
@@ -233,11 +242,14 @@ def get_trading_decisions(
     # Build response object
     decisions = []
     for d in data.get("decisions", []):
+        raw_mag = d.get("intent_magnitude")
+        magnitude = Decimal(str(raw_mag)) if raw_mag is not None else None
         decisions.append(ExecutorDecision(
             playbook_action_id=d.get("playbook_action_id"),
             ticker=d.get("ticker", ""),
             action=d.get("action", "hold"),
-            quantity=d.get("quantity"),
+            intent_type=d.get("intent_type"),
+            intent_magnitude=magnitude,
             reasoning=d.get("reasoning", ""),
             confidence=d.get("confidence", "low"),
             is_off_playbook=d.get("is_off_playbook", False),
