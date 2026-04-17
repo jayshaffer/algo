@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS playbook_actions (
     thesis_id INT REFERENCES theses(id),
     reasoning TEXT,
     confidence VARCHAR(10),
-    max_quantity DECIMAL,
+    intent_type VARCHAR(32),
+    intent_magnitude DECIMAL,
     priority INT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
