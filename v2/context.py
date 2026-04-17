@@ -265,6 +265,11 @@ def get_theses_context() -> str:
 
     lines = ["Active Theses:"]
 
+    # Build a ticker → position map so we can show current numeric state
+    # alongside each thesis narrative — theses themselves stay qualitative
+    # (see tool_create_thesis guidance).
+    pos_map = {p["ticker"]: p for p in get_positions()}
+
     for thesis in theses:
         ticker = thesis["ticker"]
         direction = thesis["direction"]
@@ -272,6 +277,13 @@ def get_theses_context() -> str:
         age_days = (datetime.now() - thesis["created_at"]).days
 
         lines.append(f"- {ticker} ({direction}, {confidence} confidence, {age_days}d old)")
+
+        pos = pos_map.get(ticker)
+        if pos:
+            lines.append(f"  Current: {pos['shares']} shares @ ${pos['avg_cost']:.2f} avg cost")
+        else:
+            lines.append("  Current: no position held")
+
         lines.append(f"  Thesis: {thesis['thesis']}")
 
         if thesis["entry_trigger"]:

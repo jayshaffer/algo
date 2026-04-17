@@ -411,7 +411,10 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "create_thesis",
-        "description": "Create trade thesis. Rejects if ticker has active thesis or is held.",
+        "description": (
+            "Create trade thesis. Rejects if ticker has active thesis or is held. "
+            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -447,7 +450,10 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "update_thesis",
-        "description": "Update thesis fields. Only provide fields to change.",
+        "description": (
+            "Update thesis fields. Only provide fields to change. "
+            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
