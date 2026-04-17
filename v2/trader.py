@@ -21,12 +21,16 @@ from .executor import (
 )
 from .agent import (
     get_trading_decisions,
-    validate_decision,
     validate_signal_refs,
     format_decisions_for_logging,
     AgentResponse,
     ExecutorDecision,
     DEFAULT_EXECUTOR_MODEL,
+)
+from .intents import (
+    SellIntent, BuyIntent,
+    resolve_sell_intent, resolve_buy_intent,
+    IntentError,
 )
 from .database.trading_db import insert_decision, check_decision_exists, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
 
@@ -243,7 +247,7 @@ def run_trading_session(
             logger.warning("Trade limit reached (%d trades). Skipping remaining decisions.", max_trades_per_session)
             break
 
-        # Get current price for validation
+        # Price lookup
         price = get_latest_price(decision.ticker, client=data_client)
         if price is None:
             errors.append(f"Could not get price for {decision.ticker}")
@@ -253,25 +257,63 @@ def run_trading_session(
             decision.action = "invalid"
             continue
 
-        # Validate decision
-        is_valid, reason = validate_decision(
-            decision, buying_power, price, positions, portfolio_value,
-            open_sell_orders=open_sell_orders,
-        )
-
-        if not is_valid:
-            errors.append(f"{decision.ticker} validation failed: {reason}")
-            logger.warning("%s: INVALID - %s", decision.ticker, reason)
+        # Resolve intent → concrete share count using live portfolio state.
+        # The LLM does NOT author share counts; it authors intents (e.g.
+        # exit_full, invest_dollar) and the system computes the exact Decimal
+        # from positions/account. This structurally prevents oversells and
+        # overspends regardless of LLM drift.
+        held = positions.get(decision.ticker, Decimal(0))
+        try:
+            if decision.action == "sell":
+                intent = SellIntent(
+                    type=decision.intent_type,
+                    magnitude=Decimal(str(decision.intent_magnitude)) if decision.intent_magnitude is not None else None,
+                )
+                resolved_qty = resolve_sell_intent(
+                    intent, held=held, price=price,
+                    portfolio_value=portfolio_value,
+                )
+            elif decision.action == "buy":
+                if decision.intent_magnitude is None:
+                    raise IntentError("buy intents require a magnitude")
+                intent = BuyIntent(
+                    type=decision.intent_type,
+                    magnitude=Decimal(str(decision.intent_magnitude)),
+                )
+                resolved_qty = resolve_buy_intent(
+                    intent, held=held, price=price,
+                    portfolio_value=portfolio_value,
+                    buying_power=buying_power,
+                )
+            else:
+                raise IntentError(f"unsupported action: {decision.action}")
+        except IntentError as e:
+            errors.append(f"{decision.ticker} intent error: {e}")
+            logger.warning("%s: INVALID - intent error: %s", decision.ticker, e)
             trades_failed += 1
-            decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
+            decision.reasoning = f"[REJECTED: intent error: {e}] {decision.reasoning}"
             decision.action = "invalid"
             continue
 
-        # Pre-submit live Alpaca check for sells. The DB snapshot + open-order
-        # map can disagree with Alpaca (untracked orders, externally-closed
-        # positions, partial fills). Querying qty_available immediately before
-        # submit is the cheapest defense against "Insufficient available
-        # shares" failures.
+        if resolved_qty <= Decimal("0.0001"):
+            logger.info(
+                "%s: %s resolves to zero shares (held=%s, intent=%s, magnitude=%s) — skipping",
+                decision.ticker, decision.action.upper(),
+                held, decision.intent_type, decision.intent_magnitude,
+            )
+            decision.reasoning = (
+                f"[SKIPPED: intent {decision.intent_type} resolved to 0 shares "
+                f"against held={held}] {decision.reasoning}"
+            )
+            decision.action = "invalid"
+            continue
+
+        decision.quantity = resolved_qty
+
+        # Defense-in-depth: pre-submit live Alpaca check for sells.
+        # The resolver already clamped to DB-held shares; this catches the
+        # edge case where Alpaca disagrees with our DB (untracked orders,
+        # partial fills from a prior session, externally closed positions).
         if decision.action == "sell" and not dry_run:
             try:
                 available = get_live_available_qty(decision.ticker)
@@ -282,36 +324,37 @@ def run_trading_session(
                 )
                 available = None
 
-            if available is not None:
-                requested = Decimal(str(decision.quantity))
-                if available < requested:
-                    if available <= Decimal("0.0001"):
-                        reason = f"Alpaca reports 0 available shares (DB said {positions.get(decision.ticker, 0)})"
-                        errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
-                        logger.warning("%s: SKIP - %s", decision.ticker, reason)
-                        trades_failed += 1
-                        if decision.playbook_action_id:
-                            try:
-                                from .database.trading_db import update_playbook_action_status
-                                update_playbook_action_status(decision.playbook_action_id, "skipped")
-                            except Exception:
-                                pass
-                        decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
-                        decision.action = "invalid"
-                        continue
-                    logger.info(
-                        "%s: trimming sell from %s to %s (Alpaca available)",
-                        decision.ticker, requested, available,
+            if available is not None and available < decision.quantity:
+                if available <= Decimal("0.0001"):
+                    reason = (
+                        f"Alpaca reports 0 available shares "
+                        f"(DB said {held})"
                     )
-                    decision.quantity = float(available)
+                    errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
+                    logger.warning("%s: SKIP - %s", decision.ticker, reason)
+                    trades_failed += 1
+                    if decision.playbook_action_id:
+                        try:
+                            from .database.trading_db import update_playbook_action_status
+                            update_playbook_action_status(decision.playbook_action_id, "skipped")
+                        except Exception:
+                            pass
+                    decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
+                    decision.action = "invalid"
+                    continue
+                logger.info(
+                    "%s: trimming sell from %s to %s (Alpaca available)",
+                    decision.ticker, decision.quantity, available,
+                )
+                decision.quantity = available
 
         # Execute trade
-        logger.info("%s: %s %.4g @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
+        logger.info("%s: %s %s @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
 
         result = execute_market_order(
             ticker=decision.ticker,
             side=decision.action,
-            qty=Decimal(decision.quantity),
+            qty=decision.quantity,
             dry_run=dry_run,
             simulated_price=price,
         )
@@ -342,7 +385,7 @@ def run_trading_session(
 
             # Use fill price if available, fall back to quote price
             fill_price = result.filled_avg_price if result.filled_avg_price else price
-            trade_value = fill_price * Decimal(str(decision.quantity))
+            trade_value = fill_price * decision.quantity
 
             if decision.action == "buy":
                 total_buy_value += trade_value
@@ -376,7 +419,7 @@ def run_trading_session(
             if decision.thesis_id and not dry_run and decision.action == "sell":
                 try:
                     held_before = positions.get(decision.ticker, Decimal(0))
-                    sold = Decimal(str(decision.quantity))
+                    sold = decision.quantity
                     remaining = held_before - sold
                     if remaining <= Decimal("0.0001"):
                         close_thesis(
@@ -449,7 +492,7 @@ def run_trading_session(
             if result and result.filled_qty is not None:
                 logged_qty = Decimal(str(result.filled_qty))
             elif decision.quantity:
-                logged_qty = Decimal(str(decision.quantity))
+                logged_qty = decision.quantity
             else:
                 logged_qty = None
 
