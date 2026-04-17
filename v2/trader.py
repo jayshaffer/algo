@@ -249,6 +249,8 @@ def run_trading_session(
             errors.append(f"Could not get price for {decision.ticker}")
             logger.error("%s: Could not get price", decision.ticker)
             trades_failed += 1
+            decision.reasoning = f"[REJECTED: no price available] {decision.reasoning}"
+            decision.action = "invalid"
             continue
 
         # Validate decision
@@ -261,6 +263,8 @@ def run_trading_session(
             errors.append(f"{decision.ticker} validation failed: {reason}")
             logger.warning("%s: INVALID - %s", decision.ticker, reason)
             trades_failed += 1
+            decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
+            decision.action = "invalid"
             continue
 
         # Pre-submit live Alpaca check for sells. The DB snapshot + open-order
@@ -292,6 +296,8 @@ def run_trading_session(
                                 update_playbook_action_status(decision.playbook_action_id, "skipped")
                             except Exception:
                                 pass
+                        decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
+                        decision.action = "invalid"
                         continue
                     logger.info(
                         "%s: trimming sell from %s to %s (Alpaca available)",
@@ -422,10 +428,12 @@ def run_trading_session(
             continue
 
         try:
-            # Prefer filled price from order, fall back to latest quote
+            # Prefer filled price from order, fall back to latest quote.
+            # Invalid (rejected) decisions may have no price available — that's
+            # fine, the CHECK constraint only requires price for buy/sell.
             result = order_results.get(i)
             price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker, client=data_client)
-            if price is None:
+            if price is None and decision.action in ("buy", "sell"):
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
                 continue
