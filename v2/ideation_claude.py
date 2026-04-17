@@ -98,7 +98,13 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
 3. **Quality theses only** — specific entry/exit triggers, not vague ideas
 4. **Learn from attribution** — weight signal types that have been predictive
 5. **No duplicate theses** — check existing before creating
-6. **Fractional shares supported** — the executor can buy/sell fractional shares. Size playbook actions by dollar amount (e.g. "$500 of AMZN" → max_quantity: 2.5 at ~$200/share) rather than forcing round lots."""
+6. **You author INTENTS, not share counts.** The trader resolves your intents to exact shares against live portfolio state. Never compute shares yourself — you will drift. Pick from:
+   - SELLS: exit_full (null magnitude) · exit_partial_pct (0-100) · exit_dollar (dollars) · trim_to_portfolio_pct (target % of portfolio)
+   - BUYS: invest_dollar (dollars) · invest_portfolio_pct (0-100) · invest_buying_power_pct (0-100) · add_to_target_pct (target % of portfolio, for adding to existing positions)
+
+   Example: "exit AMZN fully" → {{"action":"sell","intent_type":"exit_full","intent_magnitude":null}}
+   Example: "put $500 into AMD" → {{"action":"buy","intent_type":"invest_dollar","intent_magnitude":500}}
+   Example: "take half off SPY" → {{"action":"sell","intent_type":"exit_partial_pct","intent_magnitude":50}}"""
 
 CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
     timing="after market close",
