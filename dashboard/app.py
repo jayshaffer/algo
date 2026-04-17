@@ -25,6 +25,12 @@ from queries import (
     get_strategy_memos,
     get_recent_tweets,
 )
+from benchmark import (
+    get_spy_benchmark,
+    compute_alpha,
+    get_deposit_history,
+    enrich_snapshots_with_deposits,
+)
 
 app = Flask(__name__)
 
@@ -37,12 +43,23 @@ def portfolio():
     playbook = get_today_playbook()
     open_orders = get_open_orders()
 
+    equity_curve = get_equity_curve(days=90)
+    benchmark_data = []
+    alpha_stats = None
+    if equity_curve:
+        dates = [row["date"] for row in equity_curve]
+        benchmark_data = get_spy_benchmark(dates[0], dates[-1])
+        deposits = get_deposit_history()
+        enriched = enrich_snapshots_with_deposits(equity_curve, deposits)
+        alpha_stats = compute_alpha(enriched, benchmark_data)
+
     return render_template(
         "portfolio.html",
         positions=positions,
         snapshot=snapshot,
         playbook=playbook,
         open_orders=open_orders,
+        alpha_stats=alpha_stats,
     )
 
 
@@ -116,21 +133,33 @@ def performance():
     equity_curve = get_equity_curve(days=90)
     metrics = get_performance_metrics(days=30)
 
-    # Format equity data for Chart.js
+    benchmark_data = []
+    alpha_stats = None
+    enriched = []
+    if equity_curve:
+        dates = [row["date"] for row in equity_curve]
+        benchmark_data = get_spy_benchmark(dates[0], dates[-1])
+        deposits = get_deposit_history()
+        enriched = enrich_snapshots_with_deposits(equity_curve, deposits)
+        alpha_stats = compute_alpha(enriched, benchmark_data)
+
     equity_data = [
         {
             "date": str(row["date"]),
             "portfolio_value": float(row["portfolio_value"]),
             "cash": float(row["cash"]),
             "buying_power": float(row["buying_power"]),
+            "cumulative_deposits": float(row.get("cumulative_deposits", row["portfolio_value"])),
         }
-        for row in equity_curve
-    ] if equity_curve else []
+        for row in enriched
+    ]
 
     return render_template(
         "performance.html",
         equity_data=equity_data,
         metrics=metrics,
+        benchmark_data=benchmark_data,
+        alpha_stats=alpha_stats,
     )
 
 

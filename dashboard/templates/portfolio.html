@@ -6,7 +6,7 @@
 <h1 class="text-2xl font-bold mb-6">Portfolio Overview</h1>
 
 <!-- Account Summary -->
-<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+<div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
     <div class="bg-white rounded-lg shadow p-4">
         <div class="text-gray-500 text-sm">Portfolio Value</div>
         <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.portfolio_value|float) if snapshot else "0.00" }}</div>
@@ -22,6 +22,17 @@
     <div class="bg-white rounded-lg shadow p-4">
         <div class="text-gray-500 text-sm">Long Market Value</div>
         <div class="text-2xl font-bold">${{ "%.2f"|format(snapshot.long_market_value|float) if snapshot else "0.00" }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">vs S&P 500</div>
+        {% if alpha_stats %}
+        <div class="text-2xl font-bold {% if alpha_stats.alpha > 0 %}text-green-600{% elif alpha_stats.alpha < 0 %}text-red-600{% endif %}">
+            {{ "%+.2f"|format(alpha_stats.alpha) }}%
+        </div>
+        <div class="text-xs text-gray-400">Portfolio {{ "%.1f"|format(alpha_stats.portfolio_return) }}% vs SPY {{ "%.1f"|format(alpha_stats.spy_return) }}%</div>
+        {% else %}
+        <div class="text-2xl font-bold text-gray-400">&mdash;</div>
+        {% endif %}
     </div>
 </div>
 

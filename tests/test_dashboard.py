@@ -30,6 +30,13 @@ from tests.conftest import (
 mock_queries = MagicMock()
 sys.modules["queries"] = mock_queries
 
+mock_benchmark = MagicMock()
+mock_benchmark.get_spy_benchmark.return_value = []
+mock_benchmark.compute_alpha.return_value = None
+mock_benchmark.get_deposit_history.return_value = []
+mock_benchmark.enrich_snapshots_with_deposits.side_effect = lambda snaps, deps: list(snaps)
+sys.modules["benchmark"] = mock_benchmark
+
 from dashboard.app import app  # noqa: E402
 
 
@@ -83,6 +90,14 @@ def _reset_query_mocks():
     mock_queries.get_strategy_rules.return_value = []
     mock_queries.get_strategy_memos.return_value = []
     mock_queries.get_recent_tweets.return_value = []
+    mock_benchmark.get_spy_benchmark.reset_mock()
+    mock_benchmark.compute_alpha.reset_mock()
+    mock_benchmark.get_deposit_history.reset_mock()
+    mock_benchmark.enrich_snapshots_with_deposits.reset_mock()
+    mock_benchmark.get_spy_benchmark.return_value = []
+    mock_benchmark.compute_alpha.return_value = None
+    mock_benchmark.get_deposit_history.return_value = []
+    mock_benchmark.enrich_snapshots_with_deposits.side_effect = lambda snaps, deps: list(snaps)
     yield
 
 
@@ -161,6 +176,34 @@ class TestPortfolioPage:
         resp = client.get("/")
         assert resp.status_code == 200
         assert b"No open orders" in resp.data
+
+    def test_portfolio_computes_alpha_when_equity_data_available(self, client):
+        mock_queries.get_equity_curve.return_value = [
+            make_snapshot_row(date=date(2026, 1, 2), portfolio_value=Decimal("100000")),
+            make_snapshot_row(date=date(2026, 1, 6), portfolio_value=Decimal("105000")),
+        ]
+        mock_benchmark.get_spy_benchmark.return_value = [
+            {"date": "2026-01-02", "close": 500.0},
+            {"date": "2026-01-06", "close": 505.0},
+        ]
+        mock_benchmark.compute_alpha.return_value = {
+            "portfolio_return": 5.0,
+            "spy_return": 1.0,
+            "alpha": 4.0,
+        }
+
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"+4.00%" in resp.data
+
+    def test_portfolio_handles_empty_benchmark(self, client):
+        mock_queries.get_equity_curve.return_value = []
+        mock_benchmark.get_spy_benchmark.return_value = []
+        mock_benchmark.compute_alpha.return_value = None
+
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"mdash" in resp.data
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +456,53 @@ class TestPerformancePage:
 
     def test_performance_with_none_equity_curve(self, client):
         mock_queries.get_equity_curve.return_value = None
+        resp = client.get("/performance")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Performance page — benchmark integration
+# ---------------------------------------------------------------------------
+
+
+class TestPerformancePageBenchmark:
+    """Tests for SPY benchmark on /performance."""
+
+    def test_performance_passes_benchmark_data(self, client):
+        eq = [
+            make_snapshot_row(date=date(2026, 1, 2), portfolio_value=Decimal("100000")),
+            make_snapshot_row(date=date(2026, 1, 6), portfolio_value=Decimal("105000")),
+        ]
+        mock_queries.get_equity_curve.return_value = eq
+        mock_queries.get_performance_metrics.return_value = {
+            "start_value": 100000,
+            "end_value": 105000,
+            "pnl": 5000,
+            "pnl_pct": 5.0,
+            "start_date": date(2026, 1, 2),
+            "end_date": date(2026, 1, 6),
+        }
+        mock_benchmark.get_spy_benchmark.return_value = [
+            {"date": "2026-01-02", "close": 500.0},
+            {"date": "2026-01-06", "close": 505.0},
+        ]
+        mock_benchmark.compute_alpha.return_value = {
+            "portfolio_return": 5.0,
+            "spy_return": 1.0,
+            "alpha": 4.0,
+        }
+
+        resp = client.get("/performance")
+        assert resp.status_code == 200
+        assert b"+4.00%" in resp.data
+        assert b"S&amp;P 500" in resp.data or b"S&P 500" in resp.data
+
+    def test_performance_no_benchmark_degrades(self, client):
+        mock_queries.get_equity_curve.return_value = []
+        mock_queries.get_performance_metrics.return_value = None
+        mock_benchmark.get_spy_benchmark.return_value = []
+        mock_benchmark.compute_alpha.return_value = None
+
         resp = client.get("/performance")
         assert resp.status_code == 200
 

@@ -7,7 +7,7 @@
 
 <!-- Performance Metrics -->
 {% if metrics %}
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
     <div class="bg-white rounded-lg shadow p-4">
         <div class="text-gray-500 text-sm">Starting Value</div>
         <div class="text-xl font-bold">${{ "%.2f"|format(metrics.start_value) }}</div>
@@ -29,6 +29,16 @@
         <div class="text-xl font-bold {% if metrics.pnl_pct > 0 %}text-green-600{% elif metrics.pnl_pct < 0 %}text-red-600{% endif %}">
             {{ "%.2f"|format(metrics.pnl_pct) }}%
         </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">vs S&P 500</div>
+        {% if alpha_stats %}
+        <div class="text-xl font-bold {% if alpha_stats.alpha > 0 %}text-green-600{% elif alpha_stats.alpha < 0 %}text-red-600{% endif %}">
+            {{ "%+.2f"|format(alpha_stats.alpha) }}%
+        </div>
+        {% else %}
+        <div class="text-xl font-bold text-gray-400">&mdash;</div>
+        {% endif %}
     </div>
 </div>
 {% else %}
@@ -64,83 +74,248 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Benchmark: Portfolio vs S&P 500 (% Return) -->
+<div class="bg-white rounded-lg shadow mt-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Portfolio vs S&P 500 (% Return)</h2>
+    </div>
+    <div class="p-4">
+        {% if equity_data and benchmark_data %}
+        <canvas id="benchmarkChart" height="100"></canvas>
+        {% else %}
+        <p class="text-gray-500">Not enough data for benchmark comparison</p>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 {% if equity_data %}
 <script>
     const equityData = {{ equity_data|tojson }};
+    const benchmarkData = {{ benchmark_data|tojson }};
 
-    // Equity Curve
+    // Build SPY date->close lookup
+    const spyMap = {};
+    benchmarkData.forEach(b => { spyMap[b.date] = b.close; });
+
+    const labels = equityData.map(d => d.date);
+
+    // Find first label that has a matching SPY bar. The first snapshot date
+    // can fall on a weekend/holiday (account funded off-hours), in which case
+    // spyMap[labels[0]] is undefined — scan forward to the first trading day.
+    let spyBase = null;
+    let spyBaseIdx = -1;
+    for (let i = 0; i < labels.length; i++) {
+        if (spyMap[labels[i]] != null) {
+            spyBase = spyMap[labels[i]];
+            spyBaseIdx = i;
+            break;
+        }
+    }
+
+    // Time-weighted return (%): chains sub-period returns netting out deposit
+    // deltas. Mirrors dashboard/benchmark.py:_twr so the chart matches the card.
+    function computeTWR(snapshots) {
+        const returns = [0];
+        let growth = 1.0;
+        for (let i = 1; i < snapshots.length; i++) {
+            const prevVal = snapshots[i - 1].portfolio_value;
+            const prevDep = snapshots[i - 1].cumulative_deposits != null
+                ? snapshots[i - 1].cumulative_deposits : prevVal;
+            const currDep = snapshots[i].cumulative_deposits != null
+                ? snapshots[i].cumulative_deposits : prevDep;
+            const deposit = currDep - prevDep;
+            const startCapital = prevVal + deposit;
+            if (startCapital > 0) {
+                growth *= snapshots[i].portfolio_value / startCapital;
+            }
+            returns.push((growth - 1) * 100);
+        }
+        return returns;
+    }
+
+    const fmtDollars = v => v == null
+        ? '—'
+        : '$' + v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const dollarTooltip = {
+        callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + fmtDollars(ctx.parsed.y),
+        },
+    };
+
+    // --- Equity Curve with SPY overlay ---
+    const equityDatasets = [{
+        label: 'Portfolio Value',
+        data: equityData.map(d => d.portfolio_value),
+        borderColor: 'rgb(59, 130, 246)',
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        fill: true,
+        tension: 0.1,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        pointHoverRadius: 5,
+    }];
+
+    // Normalize SPY to the portfolio value at the first overlapping date
+    if (spyBase && benchmarkData.length > 0) {
+        const baseValue = equityData[spyBaseIdx].portfolio_value;
+        const spyNormalized = labels.map(d => {
+            const close = spyMap[d];
+            if (close == null) return null;
+            return (close / spyBase) * baseValue;
+        });
+        equityDatasets.push({
+            label: 'S&P 500',
+            data: spyNormalized,
+            borderColor: '#5a6a7a',
+            borderDash: [6, 3],
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.1,
+            pointRadius: 0,
+            pointHitRadius: 8,
+            pointHoverRadius: 5,
+        });
+    }
+
     const equityCtx = document.getElementById('equityChart').getContext('2d');
     new Chart(equityCtx, {
         type: 'line',
-        data: {
-            labels: equityData.map(d => d.date),
-            datasets: [{
-                label: 'Portfolio Value',
-                data: equityData.map(d => d.portfolio_value),
-                borderColor: 'rgb(59, 130, 246)',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        },
+        data: { labels: labels, datasets: equityDatasets },
         options: {
             responsive: true,
+            interaction: { mode: 'index', intersect: false },
             plugins: {
-                legend: { display: false }
+                legend: { display: equityDatasets.length > 1 },
+                tooltip: dollarTooltip,
             },
             scales: {
                 y: {
                     beginAtZero: false,
                     ticks: {
-                        callback: function(value) {
-                            return '$' + value.toLocaleString();
-                        }
+                        callback: function(value) { return '$' + value.toLocaleString(); }
                     }
                 }
             }
         }
     });
 
-    // Allocation Chart
+    // --- Allocation Chart ---
     const allocCtx = document.getElementById('allocationChart').getContext('2d');
     new Chart(allocCtx, {
         type: 'line',
         data: {
-            labels: equityData.map(d => d.date),
+            labels: labels,
             datasets: [{
                 label: 'Cash',
                 data: equityData.map(d => d.cash),
                 borderColor: 'rgb(34, 197, 94)',
                 backgroundColor: 'rgba(34, 197, 94, 0.1)',
                 fill: true,
-                tension: 0.1
+                tension: 0.1,
+                pointRadius: 0,
+                pointHitRadius: 8,
+                pointHoverRadius: 5,
             }, {
                 label: 'Invested',
                 data: equityData.map(d => d.portfolio_value - d.cash),
                 borderColor: 'rgb(239, 68, 68)',
                 backgroundColor: 'rgba(239, 68, 68, 0.1)',
                 fill: true,
-                tension: 0.1
+                tension: 0.1,
+                pointRadius: 0,
+                pointHitRadius: 8,
+                pointHoverRadius: 5,
             }]
         },
         options: {
             responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: dollarTooltip,
+            },
             scales: {
                 y: {
                     beginAtZero: true,
                     stacked: true,
                     ticks: {
-                        callback: function(value) {
-                            return '$' + value.toLocaleString();
-                        }
+                        callback: function(value) { return '$' + value.toLocaleString(); }
                     }
                 }
             }
         }
     });
+
+    // --- Benchmark % Return Chart ---
+    if (benchmarkData.length > 0 && spyBase && document.getElementById('benchmarkChart')) {
+        // Scope both series to the SPY-overlap window so the chart matches
+        // the alpha card (which computes TWR over the same window server-side).
+        // Dates before spyBaseIdx render as nulls (gap at the start of the chart).
+        const windowSnapshots = equityData.slice(spyBaseIdx);
+        const windowTwr = computeTWR(windowSnapshots);
+        const portfolioReturns = new Array(spyBaseIdx).fill(null).concat(windowTwr);
+
+        // SPY: % change from first overlapping close; null outside overlap window.
+        const spyReturns = labels.map((d, i) => {
+            if (i < spyBaseIdx) return null;
+            const close = spyMap[d];
+            if (close == null) return null;
+            return ((close - spyBase) / spyBase) * 100;
+        });
+
+        const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+
+        const benchCtx = document.getElementById('benchmarkChart').getContext('2d');
+        new Chart(benchCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Portfolio',
+                    data: portfolioReturns,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                    fill: true,
+                    tension: 0.1,
+                    pointRadius: 0,
+                    pointHitRadius: 8,
+                    pointHoverRadius: 5,
+                }, {
+                    label: 'S&P 500',
+                    data: spyReturns,
+                    borderColor: '#5a6a7a',
+                    borderDash: [6, 3],
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0,
+                    pointHitRadius: 8,
+                    pointHoverRadius: 5,
+                }]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.label + ': ' + (ctx.parsed.y == null ? '—' : fmtPct(ctx.parsed.y)),
+                        },
+                    },
+                },
+                scales: {
+                    y: {
+                        ticks: {
+                            callback: function(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+                        }
+                    }
+                }
+            }
+        });
+    }
 </script>
 {% endif %}
 {% endblock %}
