@@ -25,14 +25,19 @@ def _safe_int(value) -> Optional[int]:
 
 @dataclass
 class PlaybookAction:
-    """A structured action from the playbook."""
+    """A structured action from the playbook.
+
+    intent_type + intent_magnitude are the LLM-authored sizing signal.
+    The trader resolves them to exact shares at execution time via v2.intents.
+    """
     id: int
     ticker: str
     action: str
     thesis_id: int | None
     reasoning: str
     confidence: str
-    max_quantity: Decimal | None
+    intent_type: str | None
+    intent_magnitude: Decimal | None
     priority: int
 
 
@@ -61,16 +66,23 @@ class ExecutorInput:
 
 @dataclass
 class ExecutorDecision:
-    """A trading decision from the executor."""
+    """A trading decision from the executor.
+
+    intent_type + intent_magnitude are LLM-authored. quantity is set by the
+    trader after resolving the intent against live portfolio state — it is
+    NOT populated by the LLM.
+    """
     playbook_action_id: int | None
     ticker: str
     action: str
-    quantity: float | None
+    intent_type: str | None
+    intent_magnitude: Decimal | None
     reasoning: str
     confidence: str
     is_off_playbook: bool
     signal_refs: list = None
     thesis_id: int | None = None
+    quantity: Decimal | None = None  # filled in by trader.resolve
 
     def __post_init__(self):
         if self.signal_refs is None:

@@ -78,12 +78,14 @@ def make_trading_decision(**kwargs):
         "playbook_action_id": 1,
         "ticker": "AAPL",
         "action": "buy",
-        "quantity": 2.5,
+        "intent_type": "invest_dollar",
+        "intent_magnitude": Decimal("500"),
         "reasoning": "Entry trigger hit",
         "confidence": "high",
         "is_off_playbook": False,
         "signal_refs": [{"type": "news_signal", "id": 1}],
         "thesis_id": 1,
+        "quantity": None,
     }
     defaults.update(kwargs)
     return ExecutorDecision(**defaults)
@@ -181,7 +183,8 @@ def make_playbook_action_row(**kwargs):
     defaults = {
         "id": 1, "playbook_id": 1, "ticker": "AAPL", "action": "buy",
         "thesis_id": 1, "reasoning": "Entry trigger hit", "confidence": "high",
-        "max_quantity": Decimal("5"), "priority": 1, "created_at": datetime.now(),
+        "intent_type": "invest_dollar", "intent_magnitude": Decimal("500"),
+        "priority": 1, "created_at": datetime.now(),
     }
     defaults.update(kwargs)
     return defaults
