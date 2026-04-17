@@ -376,14 +376,18 @@ def get_playbook(playbook_date) -> dict | None:
 
 # --- Playbook Actions (V3) ---
 
-def insert_playbook_action(playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority) -> int:
-    """Insert a playbook action for V3 architecture."""
+def insert_playbook_action(playbook_id, ticker, action, thesis_id, reasoning,
+                           confidence, intent_type, intent_magnitude, priority) -> int:
+    """Insert a playbook action with intent-based sizing."""
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO playbook_actions (playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO playbook_actions
+                (playbook_id, ticker, action, thesis_id, reasoning,
+                 confidence, intent_type, intent_magnitude, priority)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority))
+        """, (playbook_id, ticker, action, thesis_id, reasoning,
+              confidence, intent_type, intent_magnitude, priority))
         return cur.fetchone()["id"]
 
 
