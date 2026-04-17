@@ -61,7 +61,12 @@
       "Bash(xargs basename:*)",
       "Bash(cat)",
       "Read(//tmp/**)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(netstat -tln)",
+      "Bash(docker run:*)",
+      "Bash(docker port:*)",
+      "Bash(xargs -I{} ls -la /home/jay/dev/algo/logs/{})",
+      "Bash(tee /tmp/strategist_rerun.log)"
     ]
   }
 }
