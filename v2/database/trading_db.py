@@ -142,7 +142,11 @@ def insert_decision(decision_date, ticker, action, quantity, price, reasoning, s
 
 
 def check_decision_exists(decision_date, ticker: str, action: str) -> int | None:
-    """Check if a buy/sell decision already exists for this ticker today.
+    """Check if a decision already exists for this (date, ticker, action).
+
+    Applies to any action including 'hold' so same-day duplicate rows are
+    suppressed even when the trader runs multiple times per day. The DB-level
+    unique index only covers buy/sell; this function covers the rest.
 
     Returns the existing decision ID if found, None otherwise.
     """
@@ -150,7 +154,6 @@ def check_decision_exists(decision_date, ticker: str, action: str) -> int | None
         cur.execute("""
             SELECT id FROM decisions
             WHERE date = %s AND ticker = %s AND action = %s
-              AND action IN ('buy', 'sell')
             LIMIT 1
         """, (decision_date, ticker, action))
         row = cur.fetchone()
@@ -376,14 +379,18 @@ def get_playbook(playbook_date) -> dict | None:
 
 # --- Playbook Actions (V3) ---
 
-def insert_playbook_action(playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority) -> int:
-    """Insert a playbook action for V3 architecture."""
+def insert_playbook_action(playbook_id, ticker, action, thesis_id, reasoning,
+                           confidence, intent_type, intent_magnitude, priority) -> int:
+    """Insert a playbook action with intent-based sizing."""
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO playbook_actions (playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO playbook_actions
+                (playbook_id, ticker, action, thesis_id, reasoning,
+                 confidence, intent_type, intent_magnitude, priority)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (playbook_id, ticker, action, thesis_id, reasoning, confidence, max_quantity, priority))
+        """, (playbook_id, ticker, action, thesis_id, reasoning,
+              confidence, intent_type, intent_magnitude, priority))
         return cur.fetchone()["id"]
 
 

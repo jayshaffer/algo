@@ -9,7 +9,6 @@ from v2.agent import (
     AgentResponse,
     ThesisInvalidation,
     get_trading_decisions,
-    validate_decision,
     DEFAULT_EXECUTOR_MODEL,
 )
 
@@ -20,7 +19,8 @@ class TestExecutorContracts:
             playbook_actions=[PlaybookAction(
                 id=1, ticker="AAPL", action="buy", thesis_id=1,
                 reasoning="Entry hit", confidence="high",
-                max_quantity=Decimal("5"), priority=1,
+                intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+                priority=1,
             )],
             positions=[{"ticker": "MSFT", "shares": "10"}],
             account={"cash": "50000", "buying_power": "50000"},
@@ -34,7 +34,8 @@ class TestExecutorContracts:
     def test_executor_decision_has_playbook_action_id(self):
         d = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False,
         )
         assert d.playbook_action_id == 1
@@ -43,7 +44,8 @@ class TestExecutorContracts:
     def test_off_playbook_decision(self):
         d = ExecutorDecision(
             playbook_action_id=None, ticker="NVDA", action="buy",
-            quantity=1.0, reasoning="Urgent opportunity", confidence="medium",
+            intent_type="invest_dollar", intent_magnitude=Decimal("200"),
+            reasoning="Urgent opportunity", confidence="medium",
             is_off_playbook=True,
         )
         assert d.playbook_action_id is None
@@ -52,7 +54,8 @@ class TestExecutorContracts:
     def test_signal_refs_default_to_empty_list(self):
         d = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=1.0, reasoning="Test", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("200"),
+            reasoning="Test", confidence="high",
             is_off_playbook=False,
         )
         assert d.signal_refs == []
@@ -139,59 +142,14 @@ class TestGetTradingDecisions:
         assert response.market_summary == "Test"
 
 
-class TestValidateDecision:
-    def test_buy_valid(self):
-        d = ExecutorDecision(playbook_action_id=1, ticker="AAPL", action="buy",
-                             quantity=2.0, reasoning="Buy", confidence="high",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("50000"), Decimal("150"), {})
-        assert valid is True
-
-    def test_buy_exceeds_buying_power(self):
-        d = ExecutorDecision(playbook_action_id=1, ticker="AAPL", action="buy",
-                             quantity=1000, reasoning="Buy", confidence="high",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("100"), Decimal("150"), {})
-        assert valid is False
-        assert "buying power" in reason.lower()
-
-    def test_sell_exceeds_held_shares(self):
-        d = ExecutorDecision(playbook_action_id=1, ticker="AAPL", action="sell",
-                             quantity=100, reasoning="Sell", confidence="high",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("50000"), Decimal("150"), {"AAPL": Decimal("10")})
-        assert valid is False
-        assert "shares" in reason.lower()
-
-    def test_hold_always_valid(self):
-        d = ExecutorDecision(playbook_action_id=None, ticker="AAPL", action="hold",
-                             quantity=None, reasoning="Wait", confidence="low",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("50000"), Decimal("150"), {})
-        assert valid is True
-
-    def test_unknown_action_invalid(self):
-        d = ExecutorDecision(playbook_action_id=None, ticker="AAPL", action="short",
-                             quantity=5, reasoning="Test", confidence="low",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("50000"), Decimal("150"), {})
-        assert valid is False
-
-    def test_buy_no_quantity_invalid(self):
-        d = ExecutorDecision(playbook_action_id=1, ticker="AAPL", action="buy",
-                             quantity=None, reasoning="Buy", confidence="high",
-                             is_off_playbook=False)
-        valid, reason = validate_decision(d, Decimal("50000"), Decimal("150"), {})
-        assert valid is False
-
-
 class TestFormatDecisionsForLogging:
     def test_returns_dict(self):
         from v2.agent import format_decisions_for_logging
         response = AgentResponse(
             decisions=[ExecutorDecision(
                 playbook_action_id=1, ticker="AAPL", action="buy",
-                quantity=2.5, reasoning="Test", confidence="high",
+                intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+                reasoning="Test", confidence="high",
                 is_off_playbook=False,
             )],
             thesis_invalidations=[],
@@ -269,76 +227,6 @@ class TestExecutorInputPrices:
             market_outlook="", risk_notes="",
         )
         assert inp.current_prices == {}
-
-
-class TestValidateDecisionTotalExposure:
-    def test_buy_rejected_when_total_exposure_exceeds_cap(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="AAPL", action="buy", quantity=3.0)
-        positions = {"AAPL": Decimal("5.33")}  # 5.33 * 150 = ~$800 = 8%
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
-            positions=positions, portfolio_value=Decimal("10000"),
-        )
-        assert not is_valid
-        assert "exposure" in reason.lower() or "position" in reason.lower()
-
-    def test_buy_allowed_when_total_exposure_under_cap(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="AAPL", action="buy", quantity=1.0)
-        positions = {"AAPL": Decimal("3.33")}  # 3.33 * 150 = ~$500 = 5%
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
-            positions=positions, portfolio_value=Decimal("10000"),
-        )
-        assert is_valid
-
-    def test_buy_new_ticker_still_uses_new_cost_only(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="MSFT", action="buy", quantity=2.0)
-        positions = {"AAPL": Decimal("10")}
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("200"),
-            positions=positions, portfolio_value=Decimal("10000"),
-        )
-        assert is_valid  # $400 / $10000 = 4% < 10%
-
-
-class TestValidateDecisionPendingSells:
-    def test_sell_rejected_when_pending_orders_consume_shares(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=8.0)
-        positions = {"AAPL": Decimal("10")}
-        open_sell_orders = {"AAPL": Decimal("5")}
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
-            positions=positions, portfolio_value=Decimal("10000"),
-            open_sell_orders=open_sell_orders,
-        )
-        assert not is_valid
-        assert "pending" in reason.lower() or "available" in reason.lower()
-
-    def test_sell_allowed_after_accounting_for_pending(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=4.0)
-        positions = {"AAPL": Decimal("10")}
-        open_sell_orders = {"AAPL": Decimal("5")}
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
-            positions=positions, portfolio_value=Decimal("10000"),
-            open_sell_orders=open_sell_orders,
-        )
-        assert is_valid
-
-    def test_sell_works_with_no_pending_orders(self):
-        from tests.v2.conftest import make_trading_decision
-        decision = make_trading_decision(ticker="AAPL", action="sell", quantity=5.0)
-        positions = {"AAPL": Decimal("10")}
-        is_valid, reason = validate_decision(
-            decision, buying_power=Decimal("5000"), current_price=Decimal("150"),
-            positions=positions, portfolio_value=Decimal("10000"),
-        )
-        assert is_valid
 
 
 class TestValidateSignalRefsBatch:

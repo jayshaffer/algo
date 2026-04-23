@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from .attribution import get_attribution_summary
@@ -75,11 +76,11 @@ def tool_get_active_theses(ticker: Optional[str] = None) -> str:
         )
         parts = []
         if t['entry_trigger']:
-            parts.append(f"entry:{t['entry_trigger'][:60]}")
+            parts.append(f"entry:{t['entry_trigger']}")
         if t['exit_trigger']:
-            parts.append(f"exit:{t['exit_trigger'][:60]}")
+            parts.append(f"exit:{t['exit_trigger']}")
         if t['invalidation']:
-            parts.append(f"invalidate:{t['invalidation'][:60]}")
+            parts.append(f"invalidate:{t['invalidation']}")
         if parts:
             lines.append(f"  {' | '.join(parts)}")
 
@@ -303,6 +304,8 @@ def tool_write_playbook(
 
         # Insert new playbook_actions rows
         for i, action in enumerate(priority_actions):
+            intent_type = action.get("intent_type")
+            intent_magnitude = action.get("intent_magnitude")
             insert_playbook_action(
                 playbook_id=playbook_id,
                 ticker=action.get("ticker"),
@@ -310,7 +313,8 @@ def tool_write_playbook(
                 thesis_id=action.get("thesis_id"),
                 reasoning=action.get("reasoning", ""),
                 confidence=action.get("confidence", "medium"),
-                max_quantity=action.get("max_quantity"),
+                intent_type=intent_type,
+                intent_magnitude=Decimal(str(intent_magnitude)) if intent_magnitude is not None else None,
                 priority=i + 1,
             )
 
@@ -407,7 +411,10 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "create_thesis",
-        "description": "Create trade thesis. Rejects if ticker has active thesis or is held.",
+        "description": (
+            "Create trade thesis. Rejects if ticker has active thesis or is held. "
+            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -443,7 +450,10 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "update_thesis",
-        "description": "Update thesis fields. Only provide fields to change.",
+        "description": (
+            "Update thesis fields. Only provide fields to change. "
+            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -511,7 +521,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "write_playbook",
-        "description": "Write today's playbook for the executor. REQUIRED every session.",
+        "description": (
+            "Write today's playbook for the executor. REQUIRED every session. "
+            "You author intents — NOT share counts. The trader resolves intents "
+            "to exact shares against live portfolio state at execution time."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -525,10 +539,17 @@ TOOL_DEFINITIONS = [
                             "action": {"type": "string", "enum": ["buy", "sell"]},
                             "thesis_id": {"type": "integer"},
                             "reasoning": {"type": "string"},
-                            "max_quantity": {"type": "number"},
-                            "confidence": {"type": "number"},
+                            "intent_type": {
+                                "type": "string",
+                                "enum": [
+                                    "exit_full", "exit_partial_pct", "exit_dollar", "trim_to_portfolio_pct",
+                                    "invest_dollar", "invest_portfolio_pct", "invest_buying_power_pct", "add_to_target_pct",
+                                ],
+                            },
+                            "intent_magnitude": {"type": "number"},
+                            "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
                         },
-                        "required": ["ticker", "action", "reasoning", "confidence"],
+                        "required": ["ticker", "action", "reasoning", "confidence", "intent_type"],
                     },
                 },
                 "watch_list": {"type": "array", "items": {"type": "string"}},

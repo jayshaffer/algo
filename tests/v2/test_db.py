@@ -392,7 +392,7 @@ class TestPlaybookActions:
     def test_insert_playbook_action(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = {"id": 1}
         from v2.database.trading_db import insert_playbook_action
-        result = insert_playbook_action(1, "AAPL", "buy", 1, "Entry hit", "high", Decimal("5"), 1)
+        result = insert_playbook_action(1, "AAPL", "buy", 1, "Entry hit", "high", "invest_dollar", Decimal("500"), 1)
         assert result == 1
         sql = mock_cursor.execute.call_args[0][0]
         assert "playbook_actions" in sql

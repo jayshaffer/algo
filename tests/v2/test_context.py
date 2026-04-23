@@ -175,7 +175,8 @@ class TestBuildExecutorInput:
         assert action.ticker == "TSLA"
         assert action.reasoning == ""
         assert action.confidence == "medium"
-        assert action.max_quantity is None
+        assert action.intent_type is None
+        assert action.intent_magnitude is None
         assert action.priority == 99
 
 
@@ -367,17 +368,18 @@ class TestGetThesesContext:
         assert "No active trade theses" in result
 
     def test_with_thesis(self, mock_db, mock_cursor):
-        mock_cursor.fetchall.return_value = [
-            {
-                "ticker": "AAPL", "direction": "long", "confidence": "high",
-                "thesis": "Strong earnings growth expected",
-                "entry_trigger": "Price > $150", "exit_trigger": "Price > $200",
-                "invalidation": "Earnings miss",
-                "created_at": datetime(2026, 1, 1),
-            },
-        ]
+        from unittest.mock import patch as _patch
+        thesis_row = {
+            "ticker": "AAPL", "direction": "long", "confidence": "high",
+            "thesis": "Strong earnings growth expected",
+            "entry_trigger": "Price > $150", "exit_trigger": "Price > $200",
+            "invalidation": "Earnings miss",
+            "created_at": datetime(2026, 1, 1),
+        }
         from v2.context import get_theses_context
-        result = get_theses_context()
+        with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
+             _patch("v2.context.get_positions", return_value=[]):
+            result = get_theses_context()
         assert "AAPL" in result
         assert "long" in result
         assert "high confidence" in result
@@ -387,21 +389,42 @@ class TestGetThesesContext:
         assert "Invalidation" in result
 
     def test_thesis_without_triggers(self, mock_db, mock_cursor):
-        mock_cursor.fetchall.return_value = [
-            {
-                "ticker": "GOOG", "direction": "short", "confidence": "medium",
-                "thesis": "Overvalued",
-                "entry_trigger": None, "exit_trigger": None,
-                "invalidation": None,
-                "created_at": datetime(2026, 2, 1),
-            },
-        ]
+        from unittest.mock import patch as _patch
+        thesis_row = {
+            "ticker": "GOOG", "direction": "short", "confidence": "medium",
+            "thesis": "Overvalued",
+            "entry_trigger": None, "exit_trigger": None,
+            "invalidation": None,
+            "created_at": datetime(2026, 2, 1),
+        }
         from v2.context import get_theses_context
-        result = get_theses_context()
+        with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
+             _patch("v2.context.get_positions", return_value=[]):
+            result = get_theses_context()
         assert "GOOG" in result
         assert "Entry trigger" not in result
         assert "Exit trigger" not in result
         assert "Invalidation" not in result
+
+    def test_theses_context_appends_live_position_state(self, mock_db, mock_cursor):
+        """Thesis text is narrative only; live share count is appended from positions."""
+        from unittest.mock import patch as _patch
+        thesis_row = {
+            "ticker": "AMZN", "direction": "long", "confidence": "high",
+            "thesis": "Long on consumer strength",
+            "entry_trigger": None, "exit_trigger": None, "invalidation": None,
+            "created_at": datetime(2026, 1, 1),
+        }
+        position = {"ticker": "AMZN", "shares": Decimal("1.0"), "avg_cost": Decimal("232.31")}
+
+        from v2.context import get_theses_context
+        with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
+             _patch("v2.context.get_positions", return_value=[position]):
+            result = get_theses_context()
+
+        assert "AMZN" in result
+        assert "1.0 shares" in result
+        assert "Long on consumer strength" in result
 
 
 class TestGetPlaybookContext:

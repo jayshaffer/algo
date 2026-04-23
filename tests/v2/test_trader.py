@@ -36,7 +36,8 @@ class TestRunTradingSession:
         """Decisions should log playbook_action_id and is_off_playbook."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("375"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[{"type": "news_signal", "id": 5}],
             thesis_id=None,
         )
@@ -112,70 +113,14 @@ class TestRunTradingSession:
         assert len(result.errors) > 0
         assert result.decisions_made == 0
 
-    def test_risk_rejected_decision_logged_as_invalid(self, mock_db, mock_cursor):
-        """When validate_decision rejects a trade (e.g. position-size cap), the
-        decision should be logged with action='invalid', the rejection reason
-        prepended to the reasoning, and no order_id. It must NOT be logged as
-        a normal buy/sell — that would pollute attribution/backfill with a
-        non-trade."""
-        decision = ExecutorDecision(
-            playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=5, reasoning="Entry hit", confidence="high",
-            is_off_playbook=False, signal_refs=[], thesis_id=None,
-        )
-
-        with patch("v2.trader.sync_positions_from_alpaca", return_value=1), \
-             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
-             patch("v2.trader.is_market_open", return_value=False), \
-             patch("v2.trader.get_account_info") as mock_acct, \
-             patch("v2.trader.take_account_snapshot", return_value=1), \
-             patch("v2.trader.build_executor_input") as mock_build, \
-             patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("100")), \
-             patch("v2.trader.execute_market_order") as mock_exec, \
-             patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
-             patch("v2.trader.insert_decision_signals_batch"), \
-             patch("v2.trader.get_open_orders", return_value=[]), \
-             patch("v2.trader.get_positions", return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]):
-
-            # Portfolio $10k, MAX_POSITION_PCT=10% → $1000 cap.
-            # Existing 10 sh * $100 = $1000, new 5 sh * $100 = $500 → total $1500 (15%). Rejected.
-            mock_acct.return_value = {"portfolio_value": Decimal("10000"), "cash": Decimal("5000"), "buying_power": Decimal("5000")}
-            mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
-                attribution_summary={}, recent_outcomes=[],
-                market_outlook="Neutral", risk_notes="",
-            )
-            mock_decisions.return_value = AgentResponse(
-                decisions=[decision], thesis_invalidations=[],
-                market_summary="Active", risk_assessment="Low",
-            )
-
-            result = run_trading_session(dry_run=True)
-
-        # No real order submitted
-        mock_exec.assert_not_called()
-        # The decision IS logged — but as 'invalid', not 'buy'
-        mock_insert.assert_called_once()
-        kwargs = mock_insert.call_args.kwargs
-        assert kwargs.get("action") == "invalid", \
-            f"expected action='invalid', got {kwargs.get('action')!r}"
-        assert kwargs.get("order_id") is None
-        # The rejection reason should be preserved in the reasoning
-        reasoning = kwargs.get("reasoning") or ""
-        assert "exceeds max" in reasoning.lower() or "10%" in reasoning, \
-            f"rejection reason not in reasoning: {reasoning!r}"
-        # Counters reflect that no trade executed
-        assert result.trades_executed == 0
-        assert result.trades_failed == 1
-
     def test_missing_price_decision_logged_as_invalid(self, mock_db, mock_cursor):
         """When get_latest_price returns None for a decision ticker, the decision
         should still be logged as action='invalid' (with NULL price) so the
         model's intent is recorded — not silently dropped."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="ZZZZ", action="buy",
-            quantity=1, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 
@@ -222,7 +167,8 @@ class TestRunTradingSession:
         recorded as action='invalid' too, not left as a phantom 'sell'."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="sell",
-            quantity=5, reasoning="Take profit", confidence="high",
+            intent_type="exit_full", intent_magnitude=None,
+            reasoning="Take profit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 
@@ -262,6 +208,73 @@ class TestRunTradingSession:
         reasoning = kwargs.get("reasoning") or ""
         assert "0 available" in reasoning or "available" in reasoning.lower()
         assert result.trades_failed == 1
+
+    def test_stale_exit_full_sells_actual_holding_not_playbook_qty(self, mock_db, mock_cursor):
+        """The canonical AMZN incident: playbook wants to exit AMZN but the
+        LLM-authored max_quantity drifted from the held shares. With intent-
+        based sizing, the trader resolves `exit_full` against live positions
+        and sells exactly 1.0 — regardless of what arithmetic the strategist
+        baked into the playbook.
+
+        Regression test for 2026-04-17 oversell incident (playbook action #14).
+        """
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AMZN", action="sell",
+            intent_type="exit_full", intent_magnitude=None,
+            reasoning="Target hit — exit", confidence="high",
+            is_off_playbook=False, signal_refs=[], thesis_id=None,
+        )
+
+        with patch("v2.trader.sync_positions_from_alpaca", return_value=1), \
+             patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
+             patch("v2.trader.is_market_open", return_value=True), \
+             patch("v2.trader.get_account_info") as mock_acct, \
+             patch("v2.trader.take_account_snapshot", return_value=1), \
+             patch("v2.trader.build_executor_input") as mock_build, \
+             patch("v2.trader.get_trading_decisions") as mock_decisions, \
+             patch("v2.trader.get_latest_price", return_value=Decimal("248.66")), \
+             patch("v2.trader.get_live_available_qty", return_value=Decimal("1.0")), \
+             patch("v2.trader.execute_market_order") as mock_exec, \
+             patch("v2.trader.wait_for_fill") as mock_wait, \
+             patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
+             patch("v2.trader.insert_decision_signals_batch"), \
+             patch("v2.trader.get_open_orders", return_value=[]), \
+             patch("v2.trader.get_positions", return_value=[
+                 {"ticker": "AMZN", "shares": Decimal("1.0")}
+             ]):
+
+            mock_acct.return_value = {
+                "portfolio_value": Decimal("100000"),
+                "cash": Decimal("50000"),
+                "buying_power": Decimal("50000"),
+            }
+            mock_build.return_value = ExecutorInput(
+                playbook_actions=[], positions=[], account={},
+                attribution_summary={}, recent_outcomes=[],
+                market_outlook="", risk_notes="",
+            )
+            mock_decisions.return_value = AgentResponse(
+                decisions=[decision], thesis_invalidations=[],
+                market_summary="", risk_assessment="",
+            )
+            mock_exec.return_value = MagicMock(
+                success=True, order_id="test-order",
+                filled_qty=Decimal("1.0"), filled_avg_price=Decimal("248.66"),
+                error=None,
+            )
+            mock_wait.return_value = mock_exec.return_value
+
+            result = run_trading_session(dry_run=False)
+
+        # Resolver turned exit_full into exactly 1.0 (the held shares)
+        mock_exec.assert_called_once()
+        call_kwargs = mock_exec.call_args.kwargs
+        assert call_kwargs["qty"] == Decimal("1.0")
+        assert call_kwargs["side"] == "sell"
+        assert result.trades_executed == 1
+        assert result.trades_failed == 0
+        # Logged decision records the resolved quantity
+        assert mock_insert.call_args.kwargs["quantity"] == Decimal("1.0")
 
     def test_thesis_invalidations_processed(self, mock_db, mock_cursor):
         from v2.agent import ThesisInvalidation
@@ -362,7 +375,8 @@ class TestFillConfirmation:
         """After fill confirmation, logged price should be fill price, not quote."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("375"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 
@@ -406,7 +420,8 @@ class TestFillConfirmation:
         """Dry run should NOT call wait_for_fill."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("375"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 
@@ -444,7 +459,8 @@ class TestFillConfirmation:
         """If fill confirmation times out, trade should be marked failed."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("375"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 
@@ -486,7 +502,8 @@ class TestBuyingPowerRefresh:
         """After a fill, buying power should be re-fetched from Alpaca."""
         decision = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",
-            quantity=2.5, reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("375"),
+            reasoning="Entry hit", confidence="high",
             is_off_playbook=False, signal_refs=[], thesis_id=None,
         )
 

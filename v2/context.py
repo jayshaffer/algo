@@ -265,6 +265,11 @@ def get_theses_context() -> str:
 
     lines = ["Active Theses:"]
 
+    # Build a ticker → position map so we can show current numeric state
+    # alongside each thesis narrative — theses themselves stay qualitative
+    # (see tool_create_thesis guidance).
+    pos_map = {p["ticker"]: p for p in get_positions()}
+
     for thesis in theses:
         ticker = thesis["ticker"]
         direction = thesis["direction"]
@@ -272,6 +277,13 @@ def get_theses_context() -> str:
         age_days = (datetime.now() - thesis["created_at"]).days
 
         lines.append(f"- {ticker} ({direction}, {confidence} confidence, {age_days}d old)")
+
+        pos = pos_map.get(ticker)
+        if pos:
+            lines.append(f"  Current: {pos['shares']} shares @ ${pos['avg_cost']:.2f} avg cost")
+        else:
+            lines.append("  Current: no position held")
+
         lines.append(f"  Thesis: {thesis['thesis']}")
 
         if thesis["entry_trigger"]:
@@ -318,10 +330,12 @@ def get_playbook_context(playbook_date: date) -> str:
             act = action.get("action", "?").upper()
             reasoning = action.get("reasoning", "")
             confidence = action.get("confidence", "?")
-            max_qty = action.get("max_quantity", "?")
+            intent_type = action.get("intent_type", "?")
+            intent_mag = action.get("intent_magnitude")
+            intent_desc = intent_type if intent_mag is None else f"{intent_type}={intent_mag}"
             thesis_id = action.get("thesis_id")
             thesis_note = f" (thesis #{thesis_id})" if thesis_id else ""
-            lines.append(f"- {act} {ticker}: {reasoning} [confidence: {confidence}, max qty: {max_qty}]{thesis_note}")
+            lines.append(f"- {act} {ticker}: {reasoning} [confidence: {confidence}, intent: {intent_desc}]{thesis_note}")
 
     watch = playbook.get("watch_list") or []
     if watch:
@@ -416,7 +430,9 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
             id=row["id"], ticker=row["ticker"], action=row["action"],
             thesis_id=row.get("thesis_id"), reasoning=row.get("reasoning", ""),
             confidence=row.get("confidence", "medium"),
-            max_quantity=row.get("max_quantity"), priority=row.get("priority", 99),
+            intent_type=row.get("intent_type"),
+            intent_magnitude=row.get("intent_magnitude"),
+            priority=row.get("priority", 99),
         )
         for row in playbook_actions_rows
     ]
