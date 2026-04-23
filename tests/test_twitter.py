@@ -4,7 +4,6 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-
 from trading.twitter import (
     TwitterStageResult,
     gather_tweet_context,

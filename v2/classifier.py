@@ -246,7 +246,7 @@ def classify_news_batch(
             results.extend(batch_results)
         except Exception as e:
             print(f"  Batch classification failed ({e}), falling back to individual")
-            for headline, pub_date in zip(batch_headlines, batch_dates):
+            for headline, pub_date in zip(batch_headlines, batch_dates, strict=True):
                 try:
                     results.append(classify_news(headline, pub_date))
                 except Exception:

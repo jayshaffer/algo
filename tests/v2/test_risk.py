@@ -1,7 +1,6 @@
 """Tests for portfolio risk checks."""
 from decimal import Decimal
 
-
 from v2.risk import check_sector_concentration
 
 

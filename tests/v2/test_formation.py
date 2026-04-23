@@ -2,8 +2,7 @@
 
 from unittest.mock import patch
 
-
-from v2.formation import is_formation_mode
+from v2.formation import build_formation_context, get_orphan_positions, is_formation_mode
 
 
 class TestIsFormationMode:
@@ -51,9 +50,6 @@ class TestIsFormationMode:
             {"outcome_7d": 2.0, "action": "sell"},
         ]
         assert is_formation_mode() is True
-
-
-from v2.formation import build_formation_context, get_orphan_positions
 
 
 class TestGetOrphanPositions:

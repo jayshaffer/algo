@@ -12,8 +12,6 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
-logger = logging.getLogger(__name__)
-
 from .database.trading_db import (
     delete_open_order,
     delete_position,
@@ -27,6 +25,8 @@ from .database.trading_db import (
 from .database.trading_db import (
     get_positions as db_get_positions,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

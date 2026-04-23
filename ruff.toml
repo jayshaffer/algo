@@ -18,6 +18,11 @@ select = [
     "UP",   # pyupgrade
     "SIM",  # flake8-simplify
 ]
+ignore = [
+    "E501",    # line-too-long (large existing backlog; revisit later)
+    "SIM105",  # contextlib.suppress is often less readable than try/except/pass
+    "SIM108",  # ternary vs if/else is a style preference
+]
 
 [lint.per-file-ignores]
 "tests/**" = ["B011", "F841"]  # allow assert False and unused locals in tests

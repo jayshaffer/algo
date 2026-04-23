@@ -4,13 +4,6 @@ import re
 from collections import defaultdict
 from datetime import date
 
-
-def _sanitize_text(text: str, max_len: int = 200) -> str:
-    """Sanitize text from DB before inserting into LLM prompts."""
-    text = re.sub(r'[\x00-\x1f\x7f]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text[:max_len]
-
 from .attribution import get_attribution_summary
 from .db import (
     get_active_theses,
@@ -21,6 +14,13 @@ from .db import (
     get_positions,
     get_recent_decisions,
 )
+
+
+def _sanitize_text(text: str, max_len: int = 200) -> str:
+    """Sanitize text from DB before inserting into LLM prompts."""
+    text = re.sub(r'[\x00-\x1f\x7f]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:max_len]
 
 
 def get_portfolio_context(account_info: dict) -> str:

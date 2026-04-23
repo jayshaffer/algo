@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-
 from v2.entertainment import (
     EntertainmentResult,
     gather_market_context,

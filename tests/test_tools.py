@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-
 from tests.conftest import (
     make_decision_row,
     make_news_signal_row,

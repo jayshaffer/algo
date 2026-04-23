@@ -4,7 +4,6 @@ import os
 from datetime import date
 from unittest.mock import MagicMock, patch
 
-
 from v2.bluesky import (
     _DASHBOARD_LINK_TEXT,
     _PROMPT_BUFFER,

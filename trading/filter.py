@@ -56,7 +56,7 @@ def filter_by_relevance(
 
     filtered = [
         FilteredNewsItem(item=item, relevance_score=score)
-        for item, score in zip(news_items, scores)
+        for item, score in zip(news_items, scores, strict=True)
         if score >= threshold
     ]
 

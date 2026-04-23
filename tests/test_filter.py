@@ -2,7 +2,6 @@
 
 from unittest.mock import patch
 
-
 from tests.conftest import make_news_item
 from trading.filter import (
     DEFAULT_STRATEGY_CONTEXT,

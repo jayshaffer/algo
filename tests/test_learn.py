@@ -3,7 +3,6 @@
 from datetime import datetime
 from unittest.mock import patch
 
-
 from trading.learn import (
     LearningResult,
     run_learning_loop,

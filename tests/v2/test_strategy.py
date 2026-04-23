@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-
 from tests.v2.conftest import (
     make_decision_row,
     make_strategy_state_row,

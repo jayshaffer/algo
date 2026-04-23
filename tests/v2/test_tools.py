@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
-
+from tests.v2.conftest import make_strategy_memo_row, make_strategy_rule_row, make_strategy_state_row
 from v2.tools import (
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
@@ -363,8 +363,6 @@ class TestToolCompleteness:
 
 
 # --- Strategy tool tests ---
-
-from tests.v2.conftest import make_strategy_memo_row, make_strategy_rule_row, make_strategy_state_row
 
 
 class TestGetStrategyIdentity:

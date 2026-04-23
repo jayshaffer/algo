@@ -5,7 +5,6 @@ from decimal import Decimal
 from unittest.mock import patch
 
 
-
 class TestBuildExecutorInput:
     def test_returns_executor_input(self, mock_db, mock_cursor):
         mock_cursor.fetchone.side_effect = [
@@ -355,7 +354,7 @@ class TestGetDecisionOutcomesContext:
         from v2.context import get_decision_outcomes_context
         result = get_decision_outcomes_context(days=30)
         # Should only have 5 decision lines plus the header
-        decision_lines = [l for l in result.split("\n") if l.startswith("- 2026")]
+        decision_lines = [line for line in result.split("\n") if line.startswith("- 2026")]
         assert len(decision_lines) == 5
 
 

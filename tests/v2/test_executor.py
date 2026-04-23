@@ -5,7 +5,6 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 
-
 class TestIsMarketOpen:
     @patch("v2.executor.get_trading_client")
     def test_returns_true_when_open(self, mock_client):

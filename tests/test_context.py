@@ -4,7 +4,6 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-
 from tests.conftest import (
     make_decision_row,
     make_macro_signal_row,

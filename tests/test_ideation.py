@@ -2,7 +2,6 @@
 
 from unittest.mock import patch
 
-
 from tests.conftest import make_position_row, make_thesis_row
 from trading.ideation import (
     IdeationResult,

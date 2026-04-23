@@ -4,7 +4,6 @@ import logging
 from datetime import datetime
 from unittest.mock import patch
 
-
 from tests.conftest import make_news_item
 from trading.classifier import ClassificationResult, MacroSignal, TickerSignal
 from trading.filter import FilteredNewsItem

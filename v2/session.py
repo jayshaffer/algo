@@ -215,11 +215,15 @@ def run_session(
 
     # Stage 3: Trading session
     # Skip if strategist failed and no playbook exists (executor depends on playbook)
-    if not skip_executor and "executor" not in completed_stages and result.strategist_error:
-        if get_playbook(today) is None:
-            logger.warning("Strategist failed and no playbook exists for %s — skipping executor", today)
-            skip_executor = True
-            result.skipped_executor = True
+    if (
+        not skip_executor
+        and "executor" not in completed_stages
+        and result.strategist_error
+        and get_playbook(today) is None
+    ):
+        logger.warning("Strategist failed and no playbook exists for %s — skipping executor", today)
+        skip_executor = True
+        result.skipped_executor = True
 
     if skip_executor or "executor" in completed_stages:
         logger.info("[Stage 3] Trading executor — SKIPPED%s",

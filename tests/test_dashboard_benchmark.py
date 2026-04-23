@@ -6,7 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dashboard.benchmark import compute_alpha
+from dashboard.benchmark import (
+    _clear_cache,
+    _clear_deposit_cache,
+    compute_alpha,
+    enrich_snapshots_with_deposits,
+    get_deposit_history,
+    get_spy_benchmark,
+)
 
 
 class TestComputeAlpha:
@@ -121,9 +128,6 @@ class TestComputeAlpha:
         assert compute_alpha(None, None) is None
 
 
-from dashboard.benchmark import _clear_cache, get_spy_benchmark
-
-
 class TestGetSpyBenchmark:
     """Tests for get_spy_benchmark() with in-memory TTL cache."""
 
@@ -200,11 +204,6 @@ class TestGetSpyBenchmark:
         assert result == []
 
 
-from dashboard.benchmark import (
-    _clear_deposit_cache,
-    enrich_snapshots_with_deposits,
-    get_deposit_history,
-)
 
 
 class TestEnrichSnapshotsWithDeposits:

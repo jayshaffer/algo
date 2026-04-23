@@ -509,7 +509,7 @@ class TestGeneratePatternReport:
 
         report = generate_pattern_report(90)
         # Count ticker lines in the report
-        ticker_lines = [l for l in report.split("\n") if l.strip().startswith("TKR")]
+        ticker_lines = [line for line in report.split("\n") if line.strip().startswith("TKR")]
         assert len(ticker_lines) == 5
 
     @patch("trading.patterns.get_worst_performing_signals")
@@ -538,9 +538,9 @@ class TestGeneratePatternReport:
         ]
 
         report = generate_pattern_report(90)
-        best_lines = [l for l in report.split("\n")
-                      if l.strip().startswith("cat")]
-        worst_lines = [l for l in report.split("\n")
-                       if l.strip().startswith("bad")]
+        best_lines = [line for line in report.split("\n")
+                      if line.strip().startswith("cat")]
+        worst_lines = [line for line in report.split("\n")
+                       if line.strip().startswith("bad")]
         assert len(best_lines) == 3
         assert len(worst_lines) == 3

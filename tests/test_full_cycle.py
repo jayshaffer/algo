@@ -4,7 +4,6 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-
 from tests.conftest import make_attribution_row, make_playbook_row
 
 

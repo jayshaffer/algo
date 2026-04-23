@@ -12,6 +12,7 @@ from datetime import date
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
 from .database.trading_db import insert_tweet
+from .twitter import gather_tweet_context
 
 logger = logging.getLogger("bluesky")
 
@@ -303,9 +304,6 @@ def generate_bluesky_entertainment_post(context: str, model: str = "claude-haiku
     post_text = _enforce_limit(client, post_text, BLUESKY_GRAPHEME_LIMIT, model)
 
     return {"text": post_text, "type": "entertainment"}
-
-
-from .twitter import gather_tweet_context
 
 
 @dataclass

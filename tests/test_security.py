@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-
 from tests.conftest import make_trading_decision
 from trading.agent import MAX_POSITION_PCT, validate_decision
 from trading.classifier import _sanitize_headline

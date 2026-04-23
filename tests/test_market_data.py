@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-
 from trading.market_data import (
     INDEX_ETFS,
     SECTOR_ETFS,
@@ -333,7 +332,7 @@ class TestFormatMarketSnapshot:
 
         gainers_section = text.split("Top Gainers:")[1].split("Top Losers:")[0]
         # Count lines that look like stock entries (start with "  T")
-        stock_lines = [l for l in gainers_section.strip().split("\n") if l.strip().startswith("T")]
+        stock_lines = [line for line in gainers_section.strip().split("\n") if line.strip().startswith("T")]
         assert len(stock_lines) == 5
 
     def test_negative_index_shows_no_plus(self):
