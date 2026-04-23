@@ -465,11 +465,11 @@ def run_trading_session(
     logger.info("[Step 6] Logging decisions")
     signals_used = format_decisions_for_logging(response)
 
+    # Holds are logged so override reasoning (e.g., playbook said buy but executor
+    # held) is auditable. Backfill, attribution, and patterns filter action IN
+    # ('buy','sell') so unfillable holds don't pollute outcome metrics.
+    logged_count = 0
     for i, decision in enumerate(response.decisions):
-        # Skip logging hold decisions — they pollute the database with unfillable outcomes
-        if decision.action == "hold":
-            continue
-
         try:
             # Prefer filled price from order, fall back to latest quote.
             # Invalid (rejected) decisions may have no price available — that's
@@ -510,6 +510,7 @@ def run_trading_session(
                 is_off_playbook=decision.is_off_playbook,
                 order_id=order_ids.get(i),
             )
+            logged_count += 1
         except Exception as e:
             errors.append(f"Failed to log decision for {decision.ticker}: {e}")
             logger.error("Error logging %s: %s", decision.ticker, e)
@@ -531,11 +532,11 @@ def run_trading_session(
                     insert_decision_signals_batch(signal_links)
             except Exception as e:
                 errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
-        else:
+        elif decision.action in ("buy", "sell"):
             logger.warning("%s: no signal_refs cited — decision will be excluded from attribution",
                            decision.ticker)
 
-    logger.info("Logged %d decisions", len(response.decisions))
+    logger.info("Logged %d decisions (%d emitted by executor)", logged_count, len(response.decisions))
 
     # Summary
     logger.info("=" * 60)

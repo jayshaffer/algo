@@ -213,8 +213,9 @@ def get_playbook_actions(playbook_id):
     with get_cursor() as cur:
         cur.execute("""
             SELECT pa.id, pa.playbook_id, pa.ticker, pa.action, pa.thesis_id,
-                   pa.reasoning, pa.confidence, pa.max_quantity, pa.priority,
-                   pa.created_at, t.thesis AS thesis_text, t.direction AS thesis_direction
+                   pa.reasoning, pa.confidence, pa.intent_type, pa.intent_magnitude,
+                   pa.priority, pa.created_at,
+                   t.thesis AS thesis_text, t.direction AS thesis_direction
             FROM playbook_actions pa
             LEFT JOIN theses t ON pa.thesis_id = t.id
             WHERE pa.playbook_id = %s

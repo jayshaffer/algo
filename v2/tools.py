@@ -76,11 +76,11 @@ def tool_get_active_theses(ticker: Optional[str] = None) -> str:
         )
         parts = []
         if t['entry_trigger']:
-            parts.append(f"entry:{t['entry_trigger'][:60]}")
+            parts.append(f"entry:{t['entry_trigger']}")
         if t['exit_trigger']:
-            parts.append(f"exit:{t['exit_trigger'][:60]}")
+            parts.append(f"exit:{t['exit_trigger']}")
         if t['invalidation']:
-            parts.append(f"invalidate:{t['invalidation'][:60]}")
+            parts.append(f"invalidate:{t['invalidation']}")
         if parts:
             lines.append(f"  {' | '.join(parts)}")
 

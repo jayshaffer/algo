@@ -43,7 +43,7 @@
                     <th class="pb-2">Action</th>
                     <th class="pb-2">Thesis</th>
                     <th class="pb-2">Reasoning</th>
-                    <th class="pb-2">Max Qty</th>
+                    <th class="pb-2">Intent</th>
                     <th class="pb-2">Confidence</th>
                 </tr>
             </thead>
@@ -67,7 +67,13 @@
                         {% endif %}
                     </td>
                     <td class="py-2 text-sm">{{ action.reasoning }}</td>
-                    <td class="py-2">{{ action.max_quantity }}</td>
+                    <td class="py-2 text-sm">
+                        {% if action.intent_type %}
+                            {{ action.intent_type }}{% if action.intent_magnitude is not none %}={{ action.intent_magnitude }}{% endif %}
+                        {% else %}
+                        <span class="text-gray-400">-</span>
+                        {% endif %}
+                    </td>
                     <td class="py-2 text-sm">
                         {% if action.confidence == 'high' %}
                         <span class="px-2 py-0.5 rounded bg-green-100 text-green-800">high</span>

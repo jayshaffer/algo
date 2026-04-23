@@ -142,7 +142,11 @@ def insert_decision(decision_date, ticker, action, quantity, price, reasoning, s
 
 
 def check_decision_exists(decision_date, ticker: str, action: str) -> int | None:
-    """Check if a buy/sell decision already exists for this ticker today.
+    """Check if a decision already exists for this (date, ticker, action).
+
+    Applies to any action including 'hold' so same-day duplicate rows are
+    suppressed even when the trader runs multiple times per day. The DB-level
+    unique index only covers buy/sell; this function covers the rest.
 
     Returns the existing decision ID if found, None otherwise.
     """
@@ -150,7 +154,6 @@ def check_decision_exists(decision_date, ticker: str, action: str) -> int | None
         cur.execute("""
             SELECT id FROM decisions
             WHERE date = %s AND ticker = %s AND action = %s
-              AND action IN ('buy', 'sell')
             LIMIT 1
         """, (decision_date, ticker, action))
         row = cur.fetchone()
