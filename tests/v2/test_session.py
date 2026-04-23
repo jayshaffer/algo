@@ -1,11 +1,25 @@
 """Tests for 5-stage session orchestrator."""
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.bluesky import BlueskyStageResult
 from v2.dashboard_publish import DashboardStageResult
 from v2.session import SessionResult, run_session
 from v2.strategy import StrategyReflectionResult
 from v2.twitter import TwitterStageResult
+
+
+@pytest.fixture(autouse=True)
+def _bypass_session_idempotency():
+    """All tests in this module should exercise run_session as if no prior session exists today.
+
+    The production idempotency check reads the live Postgres `sessions` row for
+    today's date; leaving that intact makes tests flaky against shared DB state.
+    """
+    with patch("v2.session.get_session_for_date", return_value=None), \
+         patch("v2.session.get_completed_stages", return_value=set()):
+        yield
 
 
 class TestRunSession:
