@@ -1,10 +1,9 @@
 """Tests for dashboard/app.py - Flask dashboard routes."""
 
-import json
 import sys
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,7 +20,6 @@ from tests.conftest import (
     make_strategy_memo_row,
     make_strategy_rule_row,
     make_strategy_state_row,
-    make_thesis_row,
     make_tweet_row,
 )
 

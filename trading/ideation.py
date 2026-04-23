@@ -1,10 +1,8 @@
 """Ideation module for autonomous trade idea generation."""
 
 import argparse
-import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from .context import get_macro_context, get_portfolio_context
 from .db import (

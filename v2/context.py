@@ -1,9 +1,7 @@
 """Context builder for trading agent - aggregates signals into compressed format."""
 
 from collections import defaultdict
-from datetime import date, timedelta
-from decimal import Decimal
-from typing import Optional
+from datetime import date
 
 from .agent import ExecutorInput, PlaybookAction
 from .attribution import get_attribution_summary
@@ -17,7 +15,6 @@ from .database.trading_db import (
     get_open_orders,
     get_pending_playbook_actions,
     get_playbook,
-    get_playbook_actions,
     get_positions,
     get_recent_decisions,
     get_signal_attribution,

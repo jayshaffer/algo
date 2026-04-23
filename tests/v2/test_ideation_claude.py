@@ -1,5 +1,4 @@
 """Tests for Claude strategist."""
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from v2.ideation_claude import (
@@ -8,9 +7,7 @@ from v2.ideation_claude import (
     CLAUDE_SESSION_STRATEGIST_SYSTEM,
     CLAUDE_STRATEGIST_SYSTEM,
     ClaudeIdeationResult,
-    StrategistResult,
     count_actions,
-    run_ideation_claude,
     run_strategist_loop,
     run_strategist_session,
 )

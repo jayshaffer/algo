@@ -1,7 +1,7 @@
 """Tests for new database functions: playbooks, decision_signals, signal_attribution."""
 
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 

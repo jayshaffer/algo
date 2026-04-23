@@ -8,7 +8,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
 
 from . import db
 from .ollama import chat_json

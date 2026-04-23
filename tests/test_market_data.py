@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from trading.market_data import (
     INDEX_ETFS,

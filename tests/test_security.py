@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
 
 from tests.conftest import make_trading_decision
 from trading.agent import MAX_POSITION_PCT, validate_decision
@@ -112,7 +111,6 @@ class TestTradeSessionLimit:
 
     def test_trade_limit_exists_in_v1_trader(self):
         """Verify max_trades_per_session is set in trading/trader.py."""
-        import ast
         with open("trading/trader.py") as f:
             source = f.read()
         assert "max_trades_per_session" in source
@@ -120,7 +118,6 @@ class TestTradeSessionLimit:
 
     def test_trade_limit_exists_in_v2_trader(self):
         """Verify max_trades_per_session is set in v2/trader.py."""
-        import ast
         with open("v2/trader.py") as f:
             source = f.read()
         assert "max_trades_per_session" in source

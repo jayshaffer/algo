@@ -8,7 +8,6 @@ from decimal import Decimal
 
 from .agent import (
     DEFAULT_EXECUTOR_MODEL,
-    AgentResponse,
     TradingDecision,
     format_decisions_for_logging,
     get_trading_decisions,
@@ -17,7 +16,7 @@ from .agent import (
 from .context import build_trading_context
 from .db import close_thesis, get_positions, insert_decision, insert_decision_signals_batch
 from .executor import (
-    calculate_position_size,
+    calculate_position_size,  # noqa: F401 — patched in tests via mock.patch
     execute_market_order,
     get_account_info,
     get_latest_price,

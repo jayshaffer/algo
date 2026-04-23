@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from v2.agent import AgentResponse, ExecutorDecision, ExecutorInput, PlaybookAction
+from v2.agent import AgentResponse, ExecutorDecision, ExecutorInput
 from v2.trader import TradingSessionResult, run_trading_session
 
 

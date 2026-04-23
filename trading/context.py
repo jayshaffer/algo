@@ -2,9 +2,7 @@
 
 import re
 from collections import defaultdict
-from datetime import date, timedelta
-from decimal import Decimal
-from typing import Optional
+from datetime import date
 
 
 def _sanitize_text(text: str, max_len: int = 200) -> str:
@@ -15,7 +13,6 @@ def _sanitize_text(text: str, max_len: int = 200) -> str:
 
 from .attribution import get_attribution_summary
 from .db import (
-    get_account_snapshots,
     get_active_theses,
     get_macro_signals,
     get_news_signals,

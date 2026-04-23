@@ -4,7 +4,6 @@ import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
 
 from .claude_client import _call_with_retry, get_claude_client
 

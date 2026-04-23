@@ -1,7 +1,6 @@
 """Pattern analysis for learning from past decisions."""
 
 from dataclasses import dataclass
-from decimal import Decimal
 
 from .db import get_cursor
 

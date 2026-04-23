@@ -1,15 +1,12 @@
 """Tests for v2/strategy.py — strategy reflection stage (Stage 4)."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from tests.v2.conftest import (
     make_decision_row,
-    make_strategy_memo_row,
-    make_strategy_rule_row,
     make_strategy_state_row,
 )
 from v2.strategy import run_strategy_reflection
@@ -467,7 +464,6 @@ class TestIdentityUpdateGuard:
     @patch("v2.strategy.get_current_strategy_state")
     def test_warns_if_recently_updated(self, mock_get, mock_clear, mock_insert):
         """Should return warning if identity was updated within 3 days."""
-        from datetime import timezone
 
         from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = make_strategy_state_row(
@@ -492,7 +488,7 @@ class TestIdentityUpdateGuard:
     @patch("v2.strategy.get_current_strategy_state")
     def test_allows_update_if_not_recent(self, mock_get, mock_clear, mock_insert):
         """Should allow update if identity hasn't been updated in >3 days."""
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = make_strategy_state_row(

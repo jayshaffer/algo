@@ -1,7 +1,6 @@
 """Outcome backfill job - fills in 7d and 30d P&L for past decisions."""
 
 import os
-import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 

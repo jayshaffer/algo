@@ -18,8 +18,7 @@ import argparse
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from .agent import DEFAULT_EXECUTOR_MODEL
 from .attribution import build_attribution_constraints, compute_signal_attribution

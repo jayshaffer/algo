@@ -2,9 +2,8 @@
 
 from unittest.mock import patch
 
-import pytest
 
-from v2.formation import FORMATION_TRADE_THRESHOLD, is_formation_mode
+from v2.formation import is_formation_mode
 
 
 class TestIsFormationMode:

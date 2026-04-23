@@ -3,12 +3,11 @@
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 
 from .classifier import classify_news_batch
 from .db import insert_macro_signals_batch, insert_news_signals_batch
-from .filter import DEFAULT_STRATEGY_CONTEXT, FilteredNewsItem, filter_by_relevance
-from .news import NewsItem, fetch_broad_news
+from .filter import DEFAULT_STRATEGY_CONTEXT, filter_by_relevance
+from .news import fetch_broad_news
 from .ollama import check_ollama_health, list_models
 
 logger = logging.getLogger("pipeline")

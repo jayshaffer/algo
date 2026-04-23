@@ -1,13 +1,9 @@
 """Tests for trading/tools.py - tool handler functions for Claude ideation agent."""
 
-from datetime import datetime, timedelta
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from tests.conftest import (
-    make_attribution_row,
     make_decision_row,
     make_news_signal_row,
     make_position_row,

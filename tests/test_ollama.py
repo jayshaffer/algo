@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 from trading.ollama import (

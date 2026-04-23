@@ -2,21 +2,16 @@
 
 import os
 from datetime import date
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from v2.bluesky import (
     _DASHBOARD_LINK_TEXT,
     _PROMPT_BUFFER,
-    _SHORTEN_MAX_RETRIES,
-    BLUESKY_ENTERTAINMENT_SYSTEM_PROMPT,
     BLUESKY_GRAPHEME_LIMIT,
-    BLUESKY_SYSTEM_PROMPT,
     BlueskyStageResult,
     _build_link_facets,
     _condense_post,
-    _dashboard_url_suffix,
     _enforce_limit,
     _grapheme_length,
     _grapheme_truncate,

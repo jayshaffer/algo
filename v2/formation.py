@@ -6,7 +6,6 @@ the system has enough data to self-sustain.
 """
 
 import logging
-from datetime import date
 
 from .database.trading_db import (
     get_active_theses,

@@ -1,11 +1,9 @@
 """Integration test: strategist writes playbook, executor reads and acts on it."""
 
-import json
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from tests.conftest import make_attribution_row, make_playbook_row
 
@@ -20,7 +18,7 @@ class TestFullCycle:
         2. Executor reads the playbook via get_playbook
         3. Context builder formats playbook into trading context
         """
-        from trading.db import get_playbook, upsert_playbook
+        from trading.db import upsert_playbook
 
         # Mock cursor for upsert
         mock_cursor = MagicMock()

@@ -19,7 +19,6 @@ import pytest
 
 from trading.ollama import check_ollama_health, list_models
 from trading.twitter import (
-    MR_KRABS_SYSTEM_PROMPT,
     generate_tweets,
     get_twitter_client,
 )

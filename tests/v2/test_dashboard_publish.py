@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from v2.dashboard_publish import (
-    DashboardStageResult,
     _build_summary,
     _DecimalEncoder,
     assemble_deploy_dir,

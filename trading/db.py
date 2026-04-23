@@ -4,7 +4,6 @@ import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor, execute_values

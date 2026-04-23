@@ -5,7 +5,6 @@ from decimal import Decimal
 import pytest
 
 from v2.intents import (
-    MAX_POSITION_PCT,
     BuyIntent,
     IntentError,
     SellIntent,

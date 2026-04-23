@@ -1,11 +1,9 @@
 """Tests for v2 executor functions."""
 
-import time
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from v2.executor import OrderResult
 
 
 class TestIsMarketOpen:

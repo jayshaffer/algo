@@ -4,14 +4,11 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import (
     StockBarsRequest,
-    StockLatestQuoteRequest,
-    StockSnapshotRequest,
 )
 from alpaca.data.timeframe import TimeFrame
 

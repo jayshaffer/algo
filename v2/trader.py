@@ -8,7 +8,6 @@ from decimal import Decimal
 
 from .agent import (
     DEFAULT_EXECUTOR_MODEL,
-    AgentResponse,
     ExecutorDecision,
     format_decisions_for_logging,
     get_trading_decisions,
@@ -24,7 +23,6 @@ from .database.trading_db import (
     insert_decision_signals_batch,
 )
 from .executor import (
-    calculate_position_size,
     execute_market_order,
     get_account_info,
     get_latest_price,

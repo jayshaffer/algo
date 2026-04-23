@@ -1,7 +1,7 @@
 """Tests for trading/news.py - Alpaca news fetching."""
 
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, PropertyMock, patch
+from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 

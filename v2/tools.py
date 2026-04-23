@@ -3,7 +3,6 @@
 import logging
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 
 from .attribution import get_attribution_summary
 from .context import get_macro_context, get_portfolio_context
@@ -14,7 +13,6 @@ from .database.trading_db import (
     get_active_theses,
     get_current_strategy_state,
     get_news_signals,
-    get_playbook_actions,
     get_positions,
     get_recent_decisions,
     get_recent_strategy_memos,

@@ -1,6 +1,5 @@
 """Shared test fixtures for the trading platform test suite."""
 
-import json
 import logging
 import os
 from contextlib import contextmanager
@@ -11,9 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trading.agent import AgentResponse, ThesisInvalidation, TradingDecision
-from trading.classifier import ClassificationResult, MacroSignal, TickerSignal
-from trading.filter import FilteredNewsItem
+from trading.agent import AgentResponse, TradingDecision
+from trading.classifier import TickerSignal
 from trading.news import NewsItem
 
 # ---------------------------------------------------------------------------

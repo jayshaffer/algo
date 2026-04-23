@@ -2,7 +2,6 @@
 
 import logging
 from datetime import date, datetime
-from typing import Optional
 
 from .attribution import get_attribution_summary
 from .context import get_macro_context, get_portfolio_context

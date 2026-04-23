@@ -2,7 +2,6 @@
 
 import os
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 
 import psycopg2
 from psycopg2.extras import RealDictCursor

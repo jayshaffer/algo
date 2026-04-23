@@ -2,12 +2,10 @@
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from tests.conftest import (
-    make_attribution_row,
     make_decision_row,
     make_macro_signal_row,
     make_news_signal_row,

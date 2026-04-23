@@ -8,10 +8,9 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
 
 from .claude_client import _call_with_retry, get_claude_client
-from .database.connection import get_cursor
+from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
 from .database.trading_db import insert_tweet
 
 logger = logging.getLogger("bluesky")

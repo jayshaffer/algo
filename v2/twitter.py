@@ -8,7 +8,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
 
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor

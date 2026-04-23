@@ -1,9 +1,8 @@
 """Tests for trading/db.py - Database CRUD operations."""
 
-from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 

@@ -5,11 +5,9 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from v2.database.trading_db import get_tweets_for_date, insert_tweet
 from v2.twitter import (
-    MR_KRABS_SYSTEM_PROMPT,
     TwitterStageResult,
     gather_tweet_context,
     generate_tweet,

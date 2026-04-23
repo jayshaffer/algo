@@ -6,12 +6,12 @@ news and trends, independent of the daily trading session.
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 from .bluesky import generate_bluesky_entertainment_post, get_bluesky_client, post_to_bluesky
 from .claude_client import _call_with_retry, get_claude_client
-from .database.connection import get_cursor
+from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
 from .database.trading_db import insert_tweet
 from .market_data import format_market_snapshot, get_market_snapshot
 from .news import fetch_broad_news

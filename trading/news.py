@@ -3,7 +3,6 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest

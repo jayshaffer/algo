@@ -8,16 +8,13 @@ rules, and write session memos.
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
 
 from .attribution import get_attribution_summary
-from .claude_client import extract_final_text, get_claude_client, run_agentic_loop
+from .claude_client import get_claude_client, run_agentic_loop
 from .database.trading_db import (
     clear_current_strategy_state,
-    get_active_strategy_rules,
     get_current_strategy_state,
     get_recent_decisions,
-    get_recent_strategy_memos,
     insert_strategy_memo,
     insert_strategy_rule,
     insert_strategy_state,

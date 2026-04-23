@@ -4,7 +4,6 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from .claude_client import get_claude_client
 

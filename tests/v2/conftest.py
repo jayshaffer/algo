@@ -1,6 +1,5 @@
 """Shared test fixtures and factory functions for v2 module."""
 
-import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal

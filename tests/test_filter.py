@@ -1,9 +1,7 @@
 """Tests for trading/filter.py - Embedding-based relevance filtering."""
 
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from tests.conftest import make_news_item
 from trading.filter import (
@@ -12,7 +10,6 @@ from trading.filter import (
     filter_by_relevance,
     filter_news_batch,
 )
-from trading.news import NewsItem
 
 # ---------------------------------------------------------------------------
 # FilteredNewsItem dataclass tests

@@ -1,5 +1,4 @@
 """Tests for v2 database layer."""
-from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch

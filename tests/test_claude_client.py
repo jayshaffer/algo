@@ -1,7 +1,6 @@
 """Tests for trading/claude_client.py - Claude API client and agentic loop."""
 
-import os
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import anthropic
 import httpx

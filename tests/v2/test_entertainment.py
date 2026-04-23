@@ -1,13 +1,9 @@
 """Tests for the entertainment tweet pipeline."""
 
-from datetime import datetime
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from v2.entertainment import (
-    ENTERTAINMENT_SYSTEM_PROMPT,
     EntertainmentResult,
     gather_market_context,
     generate_entertainment_tweet,
