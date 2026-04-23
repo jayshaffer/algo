@@ -84,6 +84,33 @@ class SessionResult:
                     self.bluesky_error, self.dashboard_error])
 
 
+def _start_stage(session_id: int | None, stage: str) -> None:
+    if session_id is None:
+        return
+    try:
+        insert_session_stage(session_id, stage)
+    except Exception:
+        pass
+
+
+def _complete_stage(session_id: int | None, stage: str) -> None:
+    if session_id is None:
+        return
+    try:
+        complete_session_stage(session_id, stage)
+    except Exception:
+        pass
+
+
+def _fail_stage(session_id: int | None, stage: str, error: str) -> None:
+    if session_id is None:
+        return
+    try:
+        fail_session_stage(session_id, stage, error)
+    except Exception:
+        pass
+
+
 def run_session(
     dry_run: bool = False,
     model: str = "claude-opus-4-6",
@@ -148,25 +175,13 @@ def run_session(
                      " (completed in prior run)" if "pipeline" in completed_stages else "")
     else:
         logger.info("[Stage 1] Running news pipeline")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "pipeline")
-            except Exception:
-                pass
+        _start_stage(session_id, "pipeline")
         try:
             result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit)
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "pipeline")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "pipeline")
         except Exception as e:
             result.pipeline_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "pipeline", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "pipeline", str(e))
             logger.error("Pipeline failed: %s — continuing with existing signals", e)
 
     # Stage 2: Claude strategist (receives attribution constraints)
@@ -175,11 +190,7 @@ def run_session(
                      " (completed in prior run)" if "strategist" in completed_stages else "")
     else:
         logger.info("[Stage 2] Running Claude strategist")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "strategist")
-            except Exception:
-                pass
+        _start_stage(session_id, "strategist")
         try:
             result.strategist_result = run_strategist_loop(
                 model=model,
@@ -199,18 +210,10 @@ def run_session(
                     logger.info("Strategist summary saved as memo")
             except Exception as e:
                 logger.warning("Could not save strategist memo: %s", e)
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "strategist")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "strategist")
         except Exception as e:
             result.strategist_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "strategist", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "strategist", str(e))
             logger.error("Strategist failed: %s — continuing with existing playbook", e)
 
     # Stage 3: Trading session
@@ -230,25 +233,13 @@ def run_session(
                      " (completed in prior run)" if "executor" in completed_stages else "")
     else:
         logger.info("[Stage 3] Running trading session")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "executor")
-            except Exception:
-                pass
+        _start_stage(session_id, "executor")
         try:
             result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "executor")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "executor")
         except Exception as e:
             result.trading_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "executor", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "executor", str(e))
             logger.error("Trading session failed: %s", e)
 
     # Stage 4: Strategy reflection
@@ -258,29 +249,17 @@ def run_session(
         result.skipped_strategy = True
     else:
         logger.info("[Stage 4] Running strategy reflection")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "strategy")
-            except Exception:
-                pass
+        _start_stage(session_id, "strategy")
         try:
             result.strategy_result = run_strategy_reflection(
                 model=DEFAULT_REFLECTION_MODEL,
                 max_turns=10,
                 trading_result=result.trading_result,
             )
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "strategy")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "strategy")
         except Exception as e:
             result.strategy_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "strategy", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "strategy", str(e))
             logger.error("Strategy reflection failed: %s", e)
 
     # Stage 5: Twitter posting
@@ -290,25 +269,13 @@ def run_session(
         result.skipped_twitter = True
     else:
         logger.info("[Stage 5] Running Twitter posting")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "twitter")
-            except Exception:
-                pass
+        _start_stage(session_id, "twitter")
         try:
             result.twitter_result = run_twitter_stage()
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "twitter")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "twitter")
         except Exception as e:
             result.twitter_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "twitter", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "twitter", str(e))
             logger.error("Twitter stage failed: %s", e)
 
     # Stage 5b: Bluesky posting
@@ -318,25 +285,13 @@ def run_session(
         result.skipped_bluesky = True
     else:
         logger.info("[Stage 5b] Running Bluesky posting")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "bluesky")
-            except Exception:
-                pass
+        _start_stage(session_id, "bluesky")
         try:
             result.bluesky_result = run_bluesky_stage()
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "bluesky")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "bluesky")
         except Exception as e:
             result.bluesky_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "bluesky", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "bluesky", str(e))
             logger.error("Bluesky stage failed: %s", e)
 
     # Stage 6: Dashboard publish
@@ -346,25 +301,13 @@ def run_session(
         result.skipped_dashboard = True
     else:
         logger.info("[Stage 6] Publishing public dashboard")
-        if session_id:
-            try:
-                insert_session_stage(session_id, "dashboard")
-            except Exception:
-                pass
+        _start_stage(session_id, "dashboard")
         try:
             result.dashboard_result = run_dashboard_stage()
-            if session_id:
-                try:
-                    complete_session_stage(session_id, "dashboard")
-                except Exception:
-                    pass
+            _complete_stage(session_id, "dashboard")
         except Exception as e:
             result.dashboard_error = str(e)
-            if session_id:
-                try:
-                    fail_session_stage(session_id, "dashboard", str(e))
-                except Exception:
-                    pass
+            _fail_stage(session_id, "dashboard", str(e))
             logger.error("Dashboard publish failed: %s", e)
 
     result.duration_seconds = time.monotonic() - start
