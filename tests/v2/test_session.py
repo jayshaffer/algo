@@ -747,3 +747,312 @@ class TestExecutorPlaybookDependency:
             result = run_session(dry_run=True)
 
         mock_trade.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Branch-coverage completion tests (one branch per test)
+#
+# These cover paths not exercised by the semantic/behavior tests above:
+# - exception handlers around DB tracking calls
+# - the session_id-is-None branch of per-stage fail paths
+# - the final fail_session exception handler
+# - main() CLI entry point (both success and --has-errors exit paths)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIdempotencyExceptionHandler:
+    def test_idempotency_check_exception_does_not_block(self):
+        """If get_session_for_date raises, session proceeds with a fresh record."""
+        with patch("v2.session.get_session_for_date", side_effect=RuntimeError("db dead")), \
+             patch("v2.session.insert_session_record", return_value=99), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        # Idempotency exception is swallowed; session ran end-to-end.
+        assert not result.has_errors
+
+
+class TestStageFailFailureSwallowed:
+    """Each stage's fail_session_stage call is wrapped in try/except: pass.
+    Stages must continue even if the DB tracking itself fails.
+    """
+
+    def test_pipeline_fail_session_stage_exception_is_swallowed(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline", side_effect=Exception("pipeline broke")), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.pipeline_error == "pipeline broke"
+
+    def test_pipeline_failure_without_session_id_takes_short_branch(self):
+        """Pipeline raises AND insert_session_record failed (session_id=None).
+        Covers the 'if session_id:' False branch in the pipeline except handler.
+        """
+        with patch("v2.session.insert_session_record", side_effect=Exception("cant track")), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline", side_effect=Exception("pipeline broke")), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.pipeline_error == "pipeline broke"
+
+    def test_strategist_failure_tracks_fail_session_stage(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", side_effect=Exception("strat broke")), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.strategist_error == "strat broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "strategist" in stages_failed
+
+    def test_executor_stage_failure_tracks_and_captures(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session", side_effect=Exception("trader broke")), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.trading_error == "trader broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "executor" in stages_failed
+
+    def test_strategy_stage_failure_tracks_and_captures(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection", side_effect=Exception("reflection broke")), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.strategy_error == "reflection broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "strategy" in stages_failed
+
+    def test_twitter_stage_failure_tracks_and_captures(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage", side_effect=Exception("twitter broke")), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.twitter_error == "twitter broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "twitter" in stages_failed
+
+    def test_bluesky_stage_failure_tracks_and_captures(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage", side_effect=Exception("bluesky broke")), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.bluesky_error == "bluesky broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "bluesky" in stages_failed
+
+    def test_dashboard_stage_failure_tracks_and_captures(self):
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage", side_effect=Exception("dash broke")):
+
+            result = run_session(dry_run=True)
+
+        assert result.dashboard_error == "dash broke"
+        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
+        assert "dashboard" in stages_failed
+
+
+    def test_executor_failure_without_session_id_takes_short_branch(self):
+        """Executor stage raises AND insert_session_record failed (session_id=None).
+        Covers the 'if session_id:' False branch in the executor except handler.
+        """
+        with patch("v2.session.insert_session_record", side_effect=Exception("cant track")), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session", side_effect=Exception("trader broke")), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        assert result.trading_error == "trader broke"
+
+
+class TestFinalSessionStatusExceptionHandler:
+    def test_fail_session_exception_is_swallowed(self):
+        """A stage failed so run_session calls fail_session; fail_session itself raises.
+        Covers the except Exception around fail_session/complete_session.
+        """
+        with patch("v2.session.insert_session_record", return_value=5), \
+             patch("v2.session.fail_session", side_effect=Exception("status db down")), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.fail_session_stage"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline", side_effect=Exception("pipeline broke")), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=True)
+
+        # fail_session itself threw — run_session must still return normally.
+        assert result.has_errors
+
+
+class TestCliMain:
+    def test_main_forwards_args_to_run_session(self):
+        """CLI main() parses argv and invokes run_session with those kwargs."""
+        import sys as _sys
+
+        from v2.session import SessionResult, main
+
+        argv = [
+            "v2.session", "--dry-run", "--skip-pipeline",
+            "--skip-twitter", "--skip-bluesky", "--skip-dashboard",
+        ]
+        with patch.object(_sys, "argv", argv), \
+             patch("v2.session.setup_logging"), \
+             patch("v2.session.run_session", return_value=SessionResult()) as mock_run:
+
+            main()
+
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["dry_run"] is True
+        assert kwargs["skip_pipeline"] is True
+
+    def test_main_exits_nonzero_when_session_has_errors(self):
+        """CLI main() exits 1 when the SessionResult has errors."""
+        import sys as _sys
+
+        from v2.session import SessionResult, main
+
+        failed = SessionResult()
+        failed.pipeline_error = "boom"
+        with patch.object(_sys, "argv", ["v2.session"]), \
+             patch("v2.session.setup_logging"), \
+             patch("v2.session.run_session", return_value=failed):
+
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
