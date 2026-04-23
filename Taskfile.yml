@@ -130,11 +130,13 @@ tasks:
   # Dev
   # ---------------------------------------------------------------------------
   test:
-    desc: Run tests
+    desc: Run tests (in trading container)
+    deps: [docker:up]
     cmds:
-      - python3 -m pytest tests/ {{.CLI_ARGS}}
+      - docker compose exec -T trading python -m pytest tests/ {{.CLI_ARGS}}
 
   test:coverage:
-    desc: Run tests with coverage
+    desc: Run tests with coverage (in trading container)
+    deps: [docker:up]
     cmds:
-      - python3 -m pytest tests/ --cov=trading --cov=dashboard {{.CLI_ARGS}}
+      - docker compose exec -T trading python -m pytest tests/ --cov=trading --cov=dashboard --cov=v2 {{.CLI_ARGS}}

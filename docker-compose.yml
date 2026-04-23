@@ -43,6 +43,8 @@ services:
       - ./dashboard:/app/dashboard:ro
       - ./public_dashboard:/app/public_dashboard:ro
       - ./logs:/app/logs
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
     command: ["sleep", "infinity"]
 
   dashboard:

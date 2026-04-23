@@ -1,0 +1,30 @@
+target-version = "py312"
+line-length = 140
+
+extend-exclude = [
+    "logs",
+    "logs_paper",
+    "public_dashboard",
+    "db",
+]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "W",    # pycodestyle warnings
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["B011", "F841"]  # allow assert False and unused locals in tests
+
+[lint.isort]
+known-first-party = ["v2", "trading", "dashboard", "tests"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
