@@ -1,10 +1,100 @@
 """Tests for trading session executor."""
+from contextlib import ExitStack
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.agent import AgentResponse, ExecutorDecision, ExecutorInput
 from v2.trader import TradingSessionResult, run_trading_session
+
+# ---------------------------------------------------------------------------
+# Helpers for branch-coverage tests
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ACCOUNT = {
+    "portfolio_value": Decimal("100000"),
+    "cash": Decimal("50000"),
+    "buying_power": Decimal("50000"),
+}
+
+
+def _make_decision(
+    ticker="AAPL",
+    action="buy",
+    intent_type="invest_dollar",
+    intent_magnitude=Decimal("500"),
+    playbook_action_id=1,
+    signal_refs=None,
+    thesis_id=None,
+    reasoning="test",
+    is_off_playbook=False,
+):
+    return ExecutorDecision(
+        playbook_action_id=playbook_action_id,
+        ticker=ticker,
+        action=action,
+        intent_type=intent_type,
+        intent_magnitude=intent_magnitude,
+        reasoning=reasoning,
+        confidence="high",
+        is_off_playbook=is_off_playbook,
+        signal_refs=signal_refs if signal_refs is not None else [],
+        thesis_id=thesis_id,
+    )
+
+
+def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
+    """Enter all default trader.py happy-path patches on `stack`.
+
+    Returns a dict of the mocks keyed by the dependency name so tests can
+    make assertions on them. `overrides` is a dict mapping dependency name
+    (unqualified — patched at v2.trader.<name>) to MagicMock.
+    """
+    overrides = overrides or {}
+    defaults = {
+        "sync_positions_from_alpaca": MagicMock(return_value=0),
+        "sync_orders_from_alpaca": MagicMock(return_value=0),
+        "is_market_open": MagicMock(return_value=True),
+        "get_account_info": MagicMock(return_value=_DEFAULT_ACCOUNT),
+        "take_account_snapshot": MagicMock(return_value=1),
+        "build_executor_input": MagicMock(return_value=ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )),
+        "get_trading_decisions": MagicMock(return_value=AgentResponse(
+            decisions=decisions or [],
+            thesis_invalidations=invalidations or [],
+            market_summary="", risk_assessment="",
+        )),
+        "get_latest_price": MagicMock(return_value=Decimal("150")),
+        "get_live_available_qty": MagicMock(return_value=Decimal("1000")),
+        "execute_market_order": MagicMock(return_value=MagicMock(
+            success=True, order_id="ord-1", error=None,
+            filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+        )),
+        "wait_for_fill": MagicMock(return_value=MagicMock(
+            success=True, order_id="ord-1", error=None,
+            filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+        )),
+        "get_open_orders": MagicMock(return_value=[]),
+        "get_positions": MagicMock(return_value=[]),
+        "check_decision_exists": MagicMock(return_value=None),
+        "insert_decision": MagicMock(return_value=1),
+        "insert_decision_signals_batch": MagicMock(),
+        "validate_signal_refs": MagicMock(side_effect=lambda refs: refs),
+        "close_thesis": MagicMock(),
+        "format_decisions_for_logging": MagicMock(return_value={}),
+        "check_sector_concentration": MagicMock(return_value=[]),
+        "update_playbook_action_status": MagicMock(),
+    }
+    defaults.update(overrides)
+    mocks = {}
+    for name, mock in defaults.items():
+        mocks[name] = stack.enter_context(patch(f"v2.trader.{name}", mock))
+    return mocks
 
 
 class TestRunTradingSession:
@@ -567,3 +657,709 @@ class TestTradingSessionResult:
             errors=[],
         )
         assert result.decisions_made == 3
+
+
+# ---------------------------------------------------------------------------
+# Branch-coverage completion tests
+# ---------------------------------------------------------------------------
+
+
+class TestSyncFailures:
+    def test_position_sync_failure_records_error(self, mock_db, mock_cursor):
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "sync_positions_from_alpaca": MagicMock(side_effect=RuntimeError("pos sync down")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("Position sync failed" in e for e in result.errors)
+        assert result.positions_synced == 0
+
+    def test_order_sync_failure_records_error(self, mock_db, mock_cursor):
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "sync_orders_from_alpaca": MagicMock(side_effect=RuntimeError("ord sync down")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("Order sync failed" in e for e in result.errors)
+        assert result.orders_synced == 0
+
+
+class TestContextBuild:
+    def test_build_executor_input_fallback_on_exception(self, mock_db, mock_cursor):
+        """When build_executor_input raises, a fallback ExecutorInput is used."""
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "build_executor_input": MagicMock(side_effect=RuntimeError("context dead")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("Context build failed" in e for e in result.errors)
+        # Session proceeds despite context-build failure
+        assert isinstance(result, TradingSessionResult)
+
+    def test_sector_warnings_append_to_existing_risk_notes(self, mock_db, mock_cursor):
+        existing_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="existing note",
+        )
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "build_executor_input": MagicMock(return_value=existing_input),
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
+                "check_sector_concentration": MagicMock(return_value=["tech heavy"]),
+            })
+            run_trading_session(dry_run=True)
+        assert "existing note" in existing_input.risk_notes
+        assert "tech heavy" in existing_input.risk_notes
+
+    def test_sector_warnings_set_empty_risk_notes(self, mock_db, mock_cursor):
+        empty_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "build_executor_input": MagicMock(return_value=empty_input),
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
+                "check_sector_concentration": MagicMock(return_value=["tech heavy"]),
+            })
+            run_trading_session(dry_run=True)
+        assert "tech heavy" in empty_input.risk_notes
+
+    def test_position_loop_skips_ticker_when_price_is_none(self, mock_db, mock_cursor):
+        """The loop that builds position_values for sector check skips tickers
+        whose price lookup returns None (covers the 'if price:' False branch).
+        """
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
+                "get_latest_price": MagicMock(return_value=None),
+                "check_sector_concentration": MagicMock(return_value=[]),
+            })
+            run_trading_session(dry_run=True)
+        # check_sector_concentration called with empty position_values dict
+        assert mocks["check_sector_concentration"].called
+        args, _ = mocks["check_sector_concentration"].call_args
+        assert args[0] == {}
+
+
+class TestLLMDecisionFailure:
+    def test_llm_failure_returns_early(self, mock_db, mock_cursor):
+        with ExitStack() as stack:
+            _happy_path(stack, overrides={
+                "get_trading_decisions": MagicMock(side_effect=RuntimeError("claude down")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("LLM decision failed" in e for e in result.errors)
+        assert result.decisions_made == 0
+
+
+class TestDecisionLoopBranches:
+    def test_hold_decision_is_skipped(self, mock_db, mock_cursor):
+        decision = _make_decision(action="hold", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=True)
+        mocks["execute_market_order"].assert_not_called()
+        assert result.trades_executed == 0
+
+    def test_trade_limit_halts_loop(self, mock_db, mock_cursor):
+        """After 10 successful trades, subsequent decisions are skipped (break)."""
+        decisions = [
+            _make_decision(ticker=f"T{i}", action="buy")
+            for i in range(12)
+        ]
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=decisions)
+            result = run_trading_session(dry_run=True)
+        # Exactly 10 trades executed; two decisions skipped by the limit.
+        assert result.trades_executed == 10
+
+    def test_open_sell_orders_map_built_from_pending(self, mock_db, mock_cursor):
+        """The open_sell_orders-building loop runs when there is a pending
+        sell order in the open-orders list (covers lines 236-239).
+        """
+        open_sell = [{
+            "side": "sell", "status": "new",
+            "ticker": "AAPL", "qty": Decimal("5"),
+            "filled_qty": Decimal("1"),
+        }]
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[], overrides={
+                "get_open_orders": MagicMock(return_value=open_sell),
+            })
+            run_trading_session(dry_run=True)
+
+    def test_open_orders_with_non_matching_filter(self, mock_db, mock_cursor):
+        """Open orders that are buys or non-active sells are skipped by the
+        filter (covers the 'if order['side'] == 'sell' ...' False branch, L236->235).
+        """
+        orders = [
+            {"side": "buy", "status": "new", "ticker": "AAPL",
+             "qty": Decimal("5"), "filled_qty": Decimal("0")},
+            {"side": "sell", "status": "canceled", "ticker": "AAPL",
+             "qty": Decimal("5"), "filled_qty": Decimal("0")},
+        ]
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[], overrides={
+                "get_open_orders": MagicMock(return_value=orders),
+            })
+            run_trading_session(dry_run=True)
+
+
+class TestIntentResolution:
+    def test_buy_without_magnitude_raises_intent_error(self, mock_db, mock_cursor):
+        decision = _make_decision(action="buy", intent_magnitude=None)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=True)
+        assert result.trades_failed == 1
+        assert decision.action == "invalid"
+        assert "intent error" in decision.reasoning.lower()
+
+    def test_unsupported_action_raises_intent_error(self, mock_db, mock_cursor):
+        # "short" is not in (hold, buy, sell) → IntentError("unsupported action")
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action="short",
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            reasoning="test", confidence="high",
+            is_off_playbook=False, signal_refs=[], thesis_id=None,
+        )
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=True)
+        assert result.trades_failed == 1
+        assert decision.action == "invalid"
+        assert "unsupported action" in decision.reasoning.lower()
+
+
+class TestZeroResolvedQty:
+    def test_sell_resolves_to_zero_when_no_holdings(self, mock_db, mock_cursor):
+        """exit_full on a ticker with 0 shares → resolved_qty=0 → skip path."""
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[]),  # no holdings
+            })
+            run_trading_session(dry_run=True)
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert "resolved to 0 shares" in decision.reasoning
+
+
+class TestAlpacaPrecheck:
+    def test_live_availability_check_exception_proceeds(self, mock_db, mock_cursor):
+        """If get_live_available_qty raises, the sell proceeds (defensive warn).
+        Covers the 'except Exception ... available = None' branch.
+        """
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(side_effect=RuntimeError("alpaca 500")),
+            })
+            result = run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_called_once()
+        assert result.trades_executed == 1
+
+    def test_sell_trimmed_to_alpaca_available(self, mock_db, mock_cursor):
+        """DB says 10 shares but Alpaca reports 4 available → trim to 4."""
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
+                "get_live_available_qty": MagicMock(return_value=Decimal("4")),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("4"), filled_avg_price=Decimal("150"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("4"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            run_trading_session(dry_run=False)
+        call_kwargs = mocks["execute_market_order"].call_args.kwargs
+        assert call_kwargs["qty"] == Decimal("4")
+
+    def test_zero_available_without_playbook_action(self, mock_db, mock_cursor):
+        """Zero-available rejection branch when playbook_action_id is None
+        (covers the 'if decision.playbook_action_id:' False branch, L344->350).
+        """
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None,
+                                  playbook_action_id=None)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(return_value=Decimal("0")),
+            })
+            result = run_trading_session(dry_run=False)
+        assert decision.action == "invalid"
+        assert result.trades_failed == 1
+
+    def test_zero_available_with_playbook_action_status_update_failure(self, mock_db, mock_cursor):
+        """playbook_action_id is set and update_playbook_action_status raises
+        inside the zero-available handler — exception is swallowed.
+        """
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None,
+                                  playbook_action_id=42)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(return_value=Decimal("0")),
+                "update_playbook_action_status": MagicMock(
+                    side_effect=RuntimeError("db down"),
+                ),
+            })
+            result = run_trading_session(dry_run=False)
+        assert decision.action == "invalid"
+        assert result.trades_failed == 1
+
+
+class TestExecutionSuccessBranches:
+    def test_update_playbook_action_status_executed_failure_is_logged(self, mock_db, mock_cursor):
+        """After successful execution, update_playbook_action_status raises —
+        logged as warning but does not break the flow.
+        """
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "update_playbook_action_status": MagicMock(
+                    side_effect=RuntimeError("db down"),
+                ),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_executed == 1
+
+    def test_successful_execution_without_playbook_action_id(self, mock_db, mock_cursor):
+        """Covers L386->395: 'if decision.playbook_action_id:' False branch
+        when execution succeeds but no playbook_action_id is set.
+        """
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=False)
+        assert result.trades_executed == 1
+
+    def test_buying_power_refresh_failure_falls_back_to_local(self, mock_db, mock_cursor):
+        """Second call to get_account_info (refresh) raises → use local estimate."""
+        decision = _make_decision(ticker="AAPL", action="buy")
+        calls = [0]
+
+        def acct_side_effect():
+            calls[0] += 1
+            if calls[0] == 1:
+                return _DEFAULT_ACCOUNT
+            raise RuntimeError("refresh flaky")
+
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_account_info": MagicMock(side_effect=acct_side_effect),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_executed == 1
+
+    def test_dry_run_buy_adjusts_buying_power_locally(self, mock_db, mock_cursor):
+        """dry_run buy path → local buying_power adjustment (L416-417)."""
+        decision = _make_decision(ticker="AAPL", action="buy")
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="DRY_RUN", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            result = run_trading_session(dry_run=True)
+        assert result.trades_executed == 1
+
+    def test_dry_run_sell_takes_no_buying_power_adjustment(self, mock_db, mock_cursor):
+        """dry_run sell path hits the 'if action == buy' False branch (L416->419)."""
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_full", intent_magnitude=None,
+        )
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="DRY_RUN", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            result = run_trading_session(dry_run=True)
+        assert result.trades_executed == 1
+
+    def test_buying_power_refresh_failure_on_sell(self, mock_db, mock_cursor):
+        """Real-trade refresh fails for a SELL — local fallback does NOT adjust
+        buying_power (covers L412->419 branch where action != buy).
+        """
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_full", intent_magnitude=None,
+        )
+        calls = [0]
+
+        def acct_side_effect():
+            calls[0] += 1
+            if calls[0] == 1:
+                return _DEFAULT_ACCOUNT
+            raise RuntimeError("refresh flaky")
+
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_account_info": MagicMock(side_effect=acct_side_effect),
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="ord-1", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="ord-1", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_executed == 1
+
+    def test_fill_failure_marks_trade_failed_and_continues(self, mock_db, mock_cursor):
+        """wait_for_fill returns success=False → trades_failed++, continue."""
+        decision = _make_decision(ticker="AAPL", action="buy")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="real-order", error=None,
+                    filled_qty=None, filled_avg_price=None,
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=False, error="timed out",
+                    filled_qty=None, filled_avg_price=None,
+                )),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_executed == 0
+        assert result.trades_failed == 1
+        # The decision is still logged in Step 6 (the execution `continue` skips
+        # the order-tracking path but not the bulk logging loop).
+        mocks["insert_decision"].assert_called_once()
+
+
+class TestThesisLifecycle:
+    def test_full_sell_closes_thesis(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_full", intent_magnitude=None,
+            thesis_id=9,
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            run_trading_session(dry_run=False)
+        # Expect close_thesis called (once for this fill; invalidations loop is empty).
+        close_calls = mocks["close_thesis"].call_args_list
+        assert any(c.kwargs.get("status") == "closed" for c in close_calls)
+
+    def test_partial_sell_keeps_thesis_active(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_partial_pct", intent_magnitude=Decimal("50"),
+            thesis_id=9,
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("5"), filled_avg_price=Decimal("150"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("5"), filled_avg_price=Decimal("150"),
+                )),
+            })
+            run_trading_session(dry_run=False)
+        # No "closed" status — thesis stays active on partial.
+        close_calls = mocks["close_thesis"].call_args_list
+        assert not any(c.kwargs.get("status") == "closed" for c in close_calls)
+
+    def test_close_thesis_exception_on_fill_is_recorded(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_full", intent_magnitude=None,
+            thesis_id=9,
+        )
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
+                )),
+                "close_thesis": MagicMock(side_effect=RuntimeError("thesis table down")),
+            })
+            result = run_trading_session(dry_run=False)
+        assert any("thesis" in e.lower() for e in result.errors)
+
+
+class TestOrderFailure:
+    def test_order_failure_counts_and_updates_playbook(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, order_id=None, error="rejected",
+                    filled_qty=None, filled_avg_price=None,
+                )),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_failed == 1
+        assert any("execution failed" in e for e in result.errors)
+
+    def test_order_failure_update_playbook_exception_is_swallowed(self, mock_db, mock_cursor):
+        """Order failed, playbook_action_id set, update_playbook_action_status raises."""
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, order_id=None, error="rejected",
+                    filled_qty=None, filled_avg_price=None,
+                )),
+                "update_playbook_action_status": MagicMock(
+                    side_effect=RuntimeError("db down"),
+                ),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_failed == 1
+
+    def test_order_failure_without_playbook_action_id(self, mock_db, mock_cursor):
+        """Order fails and decision.playbook_action_id is None — the
+        update_playbook_action_status block is skipped (covers L450->249).
+        """
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, order_id=None, error="rejected",
+                    filled_qty=None, filled_avg_price=None,
+                )),
+            })
+            result = run_trading_session(dry_run=False)
+        assert result.trades_failed == 1
+
+
+class TestThesisInvalidationExceptions:
+    def test_invalidation_close_thesis_exception_is_recorded(self, mock_db, mock_cursor):
+        from v2.agent import ThesisInvalidation
+        inv = ThesisInvalidation(thesis_id=5, reason="changed")
+        with ExitStack() as stack:
+            _happy_path(stack, invalidations=[inv], overrides={
+                "close_thesis": MagicMock(side_effect=RuntimeError("thesis down")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("invalidate thesis 5" in e for e in result.errors)
+
+
+class TestDecisionLoggingBranches:
+    def test_duplicate_decision_is_skipped(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "check_decision_exists": MagicMock(return_value=42),
+            })
+            run_trading_session(dry_run=True)
+        mocks["insert_decision"].assert_not_called()
+
+    def test_insert_decision_exception_recorded_and_loop_continues(self, mock_db, mock_cursor):
+        d1 = _make_decision(ticker="AAA", action="buy")
+        d2 = _make_decision(ticker="BBB", action="buy")
+        with ExitStack() as stack:
+            insert_calls = [0]
+
+            def fail_then_pass(*a, **kw):
+                insert_calls[0] += 1
+                if insert_calls[0] == 1:
+                    raise RuntimeError("insert broke")
+                return 2
+
+            mocks = _happy_path(stack, decisions=[d1, d2], overrides={
+                "insert_decision": MagicMock(side_effect=fail_then_pass),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("Failed to log decision for AAA" in e for e in result.errors)
+        # Second insert attempted after continue
+        assert mocks["insert_decision"].call_count == 2
+
+    def test_logged_qty_falls_back_to_decision_quantity(self, mock_db, mock_cursor):
+        """Dry run: result has no filled_qty → logged_qty uses decision.quantity."""
+        decision = _make_decision(ticker="AAPL", action="buy")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="DRY_RUN", error=None,
+                    filled_qty=None, filled_avg_price=None,
+                )),
+            })
+            run_trading_session(dry_run=True)
+        inserted_qty = mocks["insert_decision"].call_args.kwargs["quantity"]
+        assert inserted_qty is not None
+        assert inserted_qty > 0
+
+    def test_logged_qty_is_none_for_hold(self, mock_db, mock_cursor):
+        """Hold decision: no execution, no decision.quantity → logged_qty=None."""
+        # But HOLDs also never reach the log block via the execution path — yet they
+        # still get inserted via the logging loop. Confirm quantity is None.
+        decision = _make_decision(action="hold", intent_magnitude=None)
+        decision.quantity = None
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=True)
+        mocks["insert_decision"].assert_called_once()
+        assert mocks["insert_decision"].call_args.kwargs["quantity"] is None
+
+    def test_price_is_none_for_buy_skips_log(self, mock_db, mock_cursor):
+        """Price lookup returns None for a buy/sell in the logging loop → skip,
+        append error (L488-490).
+        """
+        decision = _make_decision(action="hold", intent_magnitude=None)  # hold avoids exec path
+        # Then mutate to "buy" AFTER decision loop (not possible here cleanly).
+        # Easier approach: execute a buy, leave order_results with no fill price,
+        # and have get_latest_price also return None in the logging loop.
+        # Use two calls: first returns 150 (for resolver), then None (logging loop).
+        calls = [0]
+
+        def price_then_none(*a, **kw):
+            calls[0] += 1
+            return Decimal("150") if calls[0] == 1 else None
+
+        decision = _make_decision(ticker="AAPL", action="buy")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_latest_price": MagicMock(side_effect=price_then_none),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=None, filled_avg_price=None,
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="o", error=None,
+                    filled_qty=None, filled_avg_price=None,
+                )),
+            })
+            result = run_trading_session(dry_run=False)
+        assert any("No price available" in e for e in result.errors)
+        mocks["insert_decision"].assert_not_called()
+
+
+class TestSignalRefValidation:
+    def test_stripped_invalid_signal_refs_are_logged(self, mock_db, mock_cursor):
+        """validated_refs is shorter than original → warning log, insert batch w/ valid refs."""
+        decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[
+            {"type": "news_signal", "id": 1},
+            {"type": "news_signal", "id": 2},
+        ])
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "validate_signal_refs": MagicMock(return_value=[{"type": "news_signal", "id": 1}]),
+            })
+            run_trading_session(dry_run=True)
+        mocks["insert_decision_signals_batch"].assert_called_once()
+
+    def test_validate_signal_refs_all_valid(self, mock_db, mock_cursor):
+        """validated_refs == original length → no warning, batch inserted."""
+        refs = [{"type": "news_signal", "id": 1}]
+        decision = _make_decision(ticker="AAPL", action="buy", signal_refs=refs)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=True)
+        mocks["insert_decision_signals_batch"].assert_called_once()
+
+    def test_validated_refs_empty_skips_batch(self, mock_db, mock_cursor):
+        """validated_refs is empty → insert_decision_signals_batch NOT called."""
+        decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[
+            {"type": "junk", "id": 1},
+        ])
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "validate_signal_refs": MagicMock(return_value=[]),
+            })
+            run_trading_session(dry_run=True)
+        mocks["insert_decision_signals_batch"].assert_not_called()
+
+    def test_signal_link_exception_is_recorded(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[
+            {"type": "news_signal", "id": 1},
+        ])
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "insert_decision_signals_batch": MagicMock(side_effect=RuntimeError("link table down")),
+            })
+            result = run_trading_session(dry_run=True)
+        assert any("signal links" in e for e in result.errors)
+
+    def test_buy_without_signal_refs_logs_warning(self, mock_db, mock_cursor, caplog):
+        """action in (buy, sell) with empty signal_refs → warning log (L543-545)."""
+        decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[])
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision])
+            with caplog.at_level("WARNING", logger="trader"):
+                run_trading_session(dry_run=True)
+        assert any("no signal_refs cited" in r.getMessage() for r in caplog.records)
+
+
+class TestTraderCliMain:
+    def test_main_forwards_args(self, mock_db, mock_cursor):
+        import sys as _sys
+
+        from v2.trader import TradingSessionResult as TSR
+        from v2.trader import main
+
+        argv = ["v2.trader", "--dry-run"]
+        ok = TSR(
+            timestamp=datetime.now(), account_snapshot_id=1,
+            positions_synced=0, orders_synced=0,
+            decisions_made=0, trades_executed=0, trades_failed=0,
+            total_buy_value=Decimal(0), total_sell_value=Decimal(0),
+            errors=[],
+        )
+        with patch.object(_sys, "argv", argv), \
+             patch("v2.log_config.setup_logging"), \
+             patch("v2.trader.run_trading_session", return_value=ok) as mock_run:
+            main()
+        mock_run.assert_called_once()
+
+    def test_main_exits_nonzero_on_errors(self, mock_db, mock_cursor):
+        import sys as _sys
+
+        from v2.trader import TradingSessionResult as TSR
+        from v2.trader import main
+
+        failed = TSR(
+            timestamp=datetime.now(), account_snapshot_id=1,
+            positions_synced=0, orders_synced=0,
+            decisions_made=0, trades_executed=0, trades_failed=0,
+            total_buy_value=Decimal(0), total_sell_value=Decimal(0),
+            errors=["boom"],
+        )
+        with patch.object(_sys, "argv", ["v2.trader"]), \
+             patch("v2.log_config.setup_logging"), \
+             patch("v2.trader.run_trading_session", return_value=failed):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
