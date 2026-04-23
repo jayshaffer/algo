@@ -19,6 +19,71 @@ class LearningResult:
     errors: list[str]
 
 
+def _print_header(timestamp: datetime, analysis_days: int, dry_run: bool) -> None:
+    print("=" * 60)
+    print(f"Learning Loop - {timestamp.isoformat()}")
+    print("=" * 60)
+    print(f"  Analysis period: {analysis_days} days")
+    print(f"  Dry run: {dry_run}")
+    print()
+
+
+def _step_backfill(dry_run: bool, errors: list[str]) -> int:
+    print("[Step 1] Backfilling decision outcomes...")
+    print("-" * 40)
+    outcomes_backfilled = 0
+    try:
+        backfill_result = run_backfill(dry_run=dry_run)
+        outcomes_backfilled = backfill_result["total_filled"]
+    except Exception as e:
+        errors.append(f"Backfill failed: {e}")
+        print(f"Error: {e}")
+    print()
+    return outcomes_backfilled
+
+
+def _step_patterns(analysis_days: int, errors: list[str]) -> str:
+    print("[Step 2] Analyzing patterns...")
+    print("-" * 40)
+    pattern_report = ""
+    try:
+        pattern_report = generate_pattern_report(days=analysis_days)
+        print(pattern_report)
+    except Exception as e:
+        errors.append(f"Pattern analysis failed: {e}")
+        print(f"Error: {e}")
+    print()
+    return pattern_report
+
+
+def _step_attribution(errors: list[str]) -> int:
+    print("[Step 3] Computing signal attribution...")
+    print("-" * 40)
+    attribution_computed = 0
+    try:
+        attribution_results = compute_signal_attribution()
+        attribution_computed = len(attribution_results)
+        print(f"  Computed attribution for {attribution_computed} signal categories")
+    except Exception as e:
+        errors.append(f"Attribution computation failed: {e}")
+        print(f"Error: {e}")
+    print()
+    return attribution_computed
+
+
+def _print_summary(outcomes_backfilled: int, attribution_computed: int, errors: list[str]) -> None:
+    print("=" * 60)
+    print("Learning Loop Complete")
+    print("=" * 60)
+    print(f"  Outcomes backfilled: {outcomes_backfilled}")
+    print(f"  Attribution categories computed: {attribution_computed}")
+    print(f"  Errors: {len(errors)}")
+    if errors:
+        print("\nErrors encountered:")
+        for error in errors:
+            print(f"  - {error}")
+
+
 def run_learning_loop(
     analysis_days: int = 60,
     dry_run: bool = False,
@@ -27,72 +92,25 @@ def run_learning_loop(
 ) -> LearningResult:
     """Run the complete learning loop."""
     timestamp = datetime.now()
-    errors = []
+    errors: list[str] = []
     outcomes_backfilled = 0
-    pattern_report = ""
     attribution_computed = 0
 
-    print("=" * 60)
-    print(f"Learning Loop - {timestamp.isoformat()}")
-    print("=" * 60)
-    print(f"  Analysis period: {analysis_days} days")
-    print(f"  Dry run: {dry_run}")
-    print()
+    _print_header(timestamp, analysis_days, dry_run)
 
-    # Step 1: Backfill outcomes
     if not skip_backfill:
-        print("[Step 1] Backfilling decision outcomes...")
-        print("-" * 40)
-        try:
-            backfill_result = run_backfill(dry_run=dry_run)
-            outcomes_backfilled = backfill_result["total_filled"]
-        except Exception as e:
-            errors.append(f"Backfill failed: {e}")
-            print(f"Error: {e}")
-        print()
+        outcomes_backfilled = _step_backfill(dry_run, errors)
     else:
-        print("[Step 1] Skipping backfill")
-        print()
+        print("[Step 1] Skipping backfill\n")
 
-    # Step 2: Analyze patterns
-    print("[Step 2] Analyzing patterns...")
-    print("-" * 40)
-    try:
-        pattern_report = generate_pattern_report(days=analysis_days)
-        print(pattern_report)
-    except Exception as e:
-        errors.append(f"Pattern analysis failed: {e}")
-        print(f"Error: {e}")
-    print()
+    pattern_report = _step_patterns(analysis_days, errors)
 
-    # Step 3: Compute signal attribution
     if not skip_attribution:
-        print("[Step 3] Computing signal attribution...")
-        print("-" * 40)
-        try:
-            attribution_results = compute_signal_attribution()
-            attribution_computed = len(attribution_results)
-            print(f"  Computed attribution for {attribution_computed} signal categories")
-        except Exception as e:
-            errors.append(f"Attribution computation failed: {e}")
-            print(f"Error: {e}")
-        print()
+        attribution_computed = _step_attribution(errors)
     else:
-        print("[Step 3] Skipping attribution computation")
-        print()
+        print("[Step 3] Skipping attribution computation\n")
 
-    # Summary
-    print("=" * 60)
-    print("Learning Loop Complete")
-    print("=" * 60)
-    print(f"  Outcomes backfilled: {outcomes_backfilled}")
-    print(f"  Attribution categories computed: {attribution_computed}")
-    print(f"  Errors: {len(errors)}")
-
-    if errors:
-        print("\nErrors encountered:")
-        for error in errors:
-            print(f"  - {error}")
+    _print_summary(outcomes_backfilled, attribution_computed, errors)
 
     return LearningResult(
         timestamp=timestamp,

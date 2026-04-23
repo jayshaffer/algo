@@ -278,6 +278,64 @@ When you've completed your research, provide a summary of your findings and acti
     )
 
 
+def _build_pre_seeded_context() -> str:
+    """Build the pre-seeded portfolio/strategy context block for the strategist."""
+    sections = [
+        ("Portfolio", tool_get_portfolio_state),
+        ("Active Theses", tool_get_active_theses),
+        ("Decision History", tool_get_decision_history),
+        ("Signal Attribution", tool_get_signal_attribution),
+        ("Strategy Identity", tool_get_strategy_identity),
+        ("Strategy Rules", tool_get_strategy_rules),
+        ("Strategy History", tool_get_strategy_history),
+    ]
+    parts = []
+    for name, fetch in sections:
+        try:
+            parts.append(f"=== {name} ===\n{fetch()}")
+        except Exception:
+            parts.append(f"=== {name} ===\n(unavailable)")
+
+    try:
+        equity = get_equity_summary(days=30)
+        if equity:
+            parts.append(f"=== Account History ===\n{equity}")
+    except Exception:
+        pass
+
+    return "\n\n".join(parts)
+
+
+def _build_orphan_block() -> tuple[str, str, int]:
+    """Return (orphan_block, adopt_step, step_offset). Empty strings / 0 when no orphans."""
+    try:
+        orphans = get_orphan_positions()
+    except Exception:
+        logger.exception("Failed to fetch orphan positions for initial message")
+        orphans = []
+
+    if not orphans:
+        return "", "", 0
+
+    orphan_lines = "\n".join(
+        f"- {p['ticker']}: {p['shares']} shares @ ${float(p['avg_cost']):.2f} avg"
+        for p in orphans
+    )
+    orphan_block = f"""
+=== ORPHAN POSITIONS (no active thesis) ===
+{orphan_lines}
+
+These are held positions with no thesis attached. For EACH orphan, call the \
+`adopt_thesis` tool to attach a direction, rationale, and exit/invalidation \
+triggers. Do this BEFORE writing the playbook — orphans without theses cannot \
+be reasoned about or learned from."""
+    adopt_step = (
+        "2. Adopt every orphan position listed above via `adopt_thesis` — "
+        "this is a prerequisite for the playbook.\n"
+    )
+    return orphan_block, adopt_step, 1
+
+
 def run_strategist_loop(
     model: str = "claude-opus-4-6",
     max_turns: int = 25,
@@ -297,76 +355,10 @@ def run_strategist_loop(
     if formation_context:
         base_prompt = base_prompt + "\n\n" + formation_context
 
-    # Pre-seed context to eliminate 3-5 tool round-trips on early turns
-    context_parts = []
-    try:
-        context_parts.append(f"=== Portfolio ===\n{tool_get_portfolio_state()}")
-    except Exception:
-        context_parts.append("=== Portfolio ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Active Theses ===\n{tool_get_active_theses()}")
-    except Exception:
-        context_parts.append("=== Active Theses ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Decision History ===\n{tool_get_decision_history()}")
-    except Exception:
-        context_parts.append("=== Decision History ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Signal Attribution ===\n{tool_get_signal_attribution()}")
-    except Exception:
-        context_parts.append("=== Signal Attribution ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Strategy Identity ===\n{tool_get_strategy_identity()}")
-    except Exception:
-        context_parts.append("=== Strategy Identity ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Strategy Rules ===\n{tool_get_strategy_rules()}")
-    except Exception:
-        context_parts.append("=== Strategy Rules ===\n(unavailable)")
-    try:
-        context_parts.append(f"=== Strategy History ===\n{tool_get_strategy_history()}")
-    except Exception:
-        context_parts.append("=== Strategy History ===\n(unavailable)")
-    try:
-        equity = get_equity_summary(days=30)
-        if equity:
-            context_parts.append(f"=== Account History ===\n{equity}")
-    except Exception:
-        pass
-
-    pre_seeded = "\n\n".join(context_parts)
-
-    # Surface orphan positions directly in the initial message so the strategist
-    # can't miss them. These are positions currently held with no active thesis —
-    # they need adoption or the system can't reason about exits or learn from outcomes.
-    orphans = []
-    try:
-        orphans = get_orphan_positions()
-    except Exception:
-        logger.exception("Failed to fetch orphan positions for initial message")
-
-    if orphans:
-        orphan_lines = "\n".join(
-            f"- {p['ticker']}: {p['shares']} shares @ ${float(p['avg_cost']):.2f} avg"
-            for p in orphans
-        )
-        orphan_block = f"""
-=== ORPHAN POSITIONS (no active thesis) ===
-{orphan_lines}
-
-These are held positions with no thesis attached. For EACH orphan, call the \
-`adopt_thesis` tool to attach a direction, rationale, and exit/invalidation \
-triggers. Do this BEFORE writing the playbook — orphans without theses cannot \
-be reasoned about or learned from."""
+    pre_seeded = _build_pre_seeded_context()
+    orphan_block, adopt_step, step_offset = _build_orphan_block()
+    if orphan_block:
         pre_seeded = pre_seeded + "\n\n" + orphan_block
-        adopt_step = (
-            "2. Adopt every orphan position listed above via `adopt_thesis` — "
-            "this is a prerequisite for the playbook.\n"
-        )
-        step_offset = 1
-    else:
-        adopt_step = ""
-        step_offset = 0
 
     initial_message = f"""Here is the current state (pre-loaded to save round-trips):
 

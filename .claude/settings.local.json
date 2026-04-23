@@ -66,7 +66,14 @@
       "Bash(docker run:*)",
       "Bash(docker port:*)",
       "Bash(xargs -I{} ls -la /home/jay/dev/algo/logs/{})",
-      "Bash(tee /tmp/strategist_rerun.log)"
+      "Bash(tee /tmp/strategist_rerun.log)",
+      "Bash(ruff --version)",
+      "Bash(pip show *)",
+      "Bash(ruff check *)",
+      "Bash(task test *)",
+      "Bash(task --version)",
+      "Bash(task lint *)",
+      "Bash(ruff rule *)"
     ]
   }
 }

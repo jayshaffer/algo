@@ -1,0 +1,12 @@
+#!/bin/bash
+# Runs ruff and the pytest suite in the trading container before allowing a commit.
+# Install with: task install-hooks
+# Bypass once with: git commit --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "[pre-commit] ruff check"
+task lint

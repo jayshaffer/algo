@@ -26,6 +26,11 @@ tasks:
     cmds:
       - docker compose logs -f {{.CLI_ARGS}}
 
+  docker:stop:session:
+    desc: Stop session services (trading, ollama); leave db + dashboard running
+    cmds:
+      - docker compose stop trading ollama
+
   setup:ollama:
     desc: Pull Ollama models (run after first docker:up)
     deps: [docker:up]
@@ -39,55 +44,49 @@ tasks:
     desc: Run full consolidated daily session
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.session {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.session {{.CLI_ARGS}}
 
   session:dry-run:
     desc: Dry-run the full daily session
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.session --dry-run {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.session --dry-run {{.CLI_ARGS}}
 
   trade:
     desc: Run the trader
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.trader {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.trader {{.CLI_ARGS}}
 
   trade:dry-run:
     desc: Dry-run the trader
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.trader --dry-run {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.trader --dry-run {{.CLI_ARGS}}
 
   ideation:
-    desc: Run Ollama ideation session
-    deps: [docker:up]
-    cmds:
-      - docker compose exec trading python -m trading.ideation {{.CLI_ARGS}}
-
-  ideation:claude:
     desc: Run Claude strategist ideation
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.ideation_claude {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.ideation_claude {{.CLI_ARGS}}
 
   pipeline:
     desc: Run news processing pipeline
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.pipeline {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.pipeline {{.CLI_ARGS}}
 
   learn:
     desc: Run learning loop
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.learn {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.learn {{.CLI_ARGS}}
 
   backfill:
     desc: Backfill decision outcomes
     deps: [docker:up]
     cmds:
-      - docker compose exec trading python -m trading.backfill {{.CLI_ARGS}}
+      - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
 
   entertainment:
     desc: Generate and post entertainment tweets
@@ -140,3 +139,14 @@ tasks:
     deps: [docker:up]
     cmds:
       - docker compose exec -T trading python -m pytest tests/ --cov=trading --cov=dashboard --cov=v2 {{.CLI_ARGS}}
+
+  lint:
+    desc: Run ruff lint (host, no docker)
+    cmds:
+      - ruff check {{.CLI_ARGS}} .
+
+  install-hooks:
+    desc: Point git at the tracked .githooks directory
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "Git hooks installed. Bypass with 'git commit --no-verify'."
