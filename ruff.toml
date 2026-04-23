@@ -10,13 +10,14 @@ extend-exclude = [
 
 [lint]
 select = [
-    "E",    # pycodestyle errors
-    "F",    # pyflakes
-    "I",    # isort
-    "W",    # pycodestyle warnings
-    "B",    # flake8-bugbear
-    "UP",   # pyupgrade
-    "SIM",  # flake8-simplify
+    "E",        # pycodestyle errors
+    "F",        # pyflakes
+    "I",        # isort
+    "W",        # pycodestyle warnings
+    "B",        # flake8-bugbear
+    "UP",       # pyupgrade
+    "SIM",      # flake8-simplify
+    "PLR0915",  # too-many-statements (function-size guardrail)
 ]
 ignore = [
     "E501",    # line-too-long (large existing backlog; revisit later)
@@ -24,8 +25,12 @@ ignore = [
     "SIM108",  # ternary vs if/else is a style preference
 ]
 
+[lint.pylint]
+max-statements = 50
+
 [lint.per-file-ignores]
-"tests/**" = ["B011", "F841"]  # allow assert False and unused locals in tests
+"tests/**" = ["B011", "F841"]   # allow assert False and unused locals in tests
+"trading/**" = ["PLR0915"]      # legacy v1 module (sunset); not worth refactoring
 
 [lint.isort]
 known-first-party = ["v2", "trading", "dashboard", "tests"]

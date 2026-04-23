@@ -21,6 +21,106 @@ logger = logging.getLogger("twitter")
 # Context gathering
 # ---------------------------------------------------------------------------
 
+def _section_decisions(cur, session_date: date) -> str | None:
+    cur.execute(
+        "SELECT ticker, action, quantity, price, reasoning FROM decisions WHERE date = %s ORDER BY id",
+        (session_date,),
+    )
+    decisions = cur.fetchall()
+    if not decisions:
+        return None
+    lines = ["TODAY'S DECISIONS:"]
+    for d in decisions:
+        qty = d['quantity']
+        if d.get('price'):
+            lines.append(f"  {d['action'].upper()} {qty} {d['ticker']} @ ${d['price']}: {d['reasoning']}")
+        else:
+            lines.append(f"  {d['action'].upper()} {qty} {d['ticker']}: {d['reasoning']}")
+    return "\n".join(lines)
+
+
+def _section_positions(cur) -> tuple[str | None, list]:
+    cur.execute("SELECT ticker, shares, avg_cost FROM positions ORDER BY ticker")
+    positions = cur.fetchall()
+    if not positions:
+        return None, []
+    lines = ["CURRENT POSITIONS:"]
+    for p in positions:
+        lines.append(f"  {p['ticker']}: {p['shares']} shares @ ${p['avg_cost']}")
+    return "\n".join(lines), positions
+
+
+def _section_theses(cur) -> str | None:
+    cur.execute(
+        "SELECT ticker, direction, thesis, confidence FROM theses WHERE status = 'active' ORDER BY created_at DESC LIMIT 10"
+    )
+    theses = cur.fetchall()
+    if not theses:
+        return None
+    lines = ["ACTIVE THESES:"]
+    for t in theses:
+        lines.append(f"  {t['ticker']} ({t['direction']}, {t['confidence']}): {t['thesis']}")
+    return "\n".join(lines)
+
+
+def _append_total_return(cur, lines: list[str], portfolio: float, today_date) -> None:
+    cur.execute(
+        "SELECT portfolio_value, date FROM account_snapshots ORDER BY date ASC LIMIT 1"
+    )
+    first = cur.fetchone()
+    if not (first and first['portfolio_value'] and first['date'] != today_date):
+        return
+    try:
+        net_deposits = get_net_deposits()
+    except Exception:
+        net_deposits = None
+    if net_deposits is not None and net_deposits != 0:
+        total_pnl = portfolio - net_deposits
+        total_pct = (total_pnl / net_deposits * 100)
+    else:
+        total_pnl = portfolio - first['portfolio_value']
+        total_pct = (total_pnl / first['portfolio_value'] * 100)
+    sign = "+" if total_pnl >= 0 else ""
+    lines.append(f"  Total return: {sign}${total_pnl:,.2f} ({sign}{total_pct:.2f}%) since {first['date']}")
+
+
+def _section_book_status(cur, position_count: int) -> str | None:
+    cur.execute(
+        "SELECT date, portfolio_value, cash, buying_power, long_market_value "
+        "FROM account_snapshots ORDER BY date DESC LIMIT 2"
+    )
+    snapshots = cur.fetchall()
+    if not snapshots:
+        return None
+    today = snapshots[0]
+    portfolio = today['portfolio_value']
+    cash = today['cash']
+    invested = today['long_market_value'] or (portfolio - cash)
+    lines = [
+        "BOOK STATUS:",
+        f"  Portfolio value: ${portfolio:,.2f}",
+        f"  Invested: ${invested:,.2f}",
+        f"  Cash: ${cash:,.2f}",
+        f"  Positions: {position_count}",
+    ]
+    if len(snapshots) == 2:
+        prev = snapshots[1]['portfolio_value']
+        day_pnl = portfolio - prev
+        day_pct = (day_pnl / prev * 100) if prev else 0
+        sign = "+" if day_pnl >= 0 else ""
+        lines.append(f"  Today's P&L: {sign}${day_pnl:,.2f} ({sign}{day_pct:.2f}%)")
+    _append_total_return(cur, lines, portfolio, today['date'])
+    return "\n".join(lines)
+
+
+def _section_memo(cur) -> str | None:
+    cur.execute("SELECT content FROM strategy_memos ORDER BY created_at DESC LIMIT 1")
+    memo = cur.fetchone()
+    if not memo:
+        return None
+    return f"STRATEGY MEMO:\n  {memo['content']}"
+
+
 def gather_tweet_context(session_date: date | None = None) -> str:
     """Build a plain-text summary of today's trading session for tweet generation.
 
@@ -30,100 +130,22 @@ def gather_tweet_context(session_date: date | None = None) -> str:
     if session_date is None:
         session_date = date.today()
 
-    sections = []
-
+    sections: list[str] = []
     with get_cursor() as cur:
-        # Decisions for today
-        cur.execute(
-            "SELECT ticker, action, quantity, price, reasoning FROM decisions WHERE date = %s ORDER BY id",
-            (session_date,),
-        )
-        decisions = cur.fetchall()
-        if decisions:
-            lines = ["TODAY'S DECISIONS:"]
-            for d in decisions:
-                qty = d['quantity']
-                if d.get('price'):
-                    lines.append(f"  {d['action'].upper()} {qty} {d['ticker']} @ ${d['price']}: {d['reasoning']}")
-                else:
-                    lines.append(f"  {d['action'].upper()} {qty} {d['ticker']}: {d['reasoning']}")
-            sections.append("\n".join(lines))
-
-        # Current positions
-        cur.execute("SELECT ticker, shares, avg_cost FROM positions ORDER BY ticker")
-        positions = cur.fetchall()
-        if positions:
-            lines = ["CURRENT POSITIONS:"]
-            for p in positions:
-                lines.append(f"  {p['ticker']}: {p['shares']} shares @ ${p['avg_cost']}")
-            sections.append("\n".join(lines))
-
-        # Active theses
-        cur.execute(
-            "SELECT ticker, direction, thesis, confidence FROM theses WHERE status = 'active' ORDER BY created_at DESC LIMIT 10"
-        )
-        theses = cur.fetchall()
-        if theses:
-            lines = ["ACTIVE THESES:"]
-            for t in theses:
-                lines.append(f"  {t['ticker']} ({t['direction']}, {t['confidence']}): {t['thesis']}")
-            sections.append("\n".join(lines))
-
-        # Book status: current snapshot + P&L from history
-        cur.execute(
-            "SELECT date, portfolio_value, cash, buying_power, long_market_value "
-            "FROM account_snapshots ORDER BY date DESC LIMIT 2"
-        )
-        snapshots = cur.fetchall()
-        if snapshots:
-            today = snapshots[0]
-            portfolio = today['portfolio_value']
-            cash = today['cash']
-            invested = today['long_market_value'] or (portfolio - cash)
-            lines = [
-                "BOOK STATUS:",
-                f"  Portfolio value: ${portfolio:,.2f}",
-                f"  Invested: ${invested:,.2f}",
-                f"  Cash: ${cash:,.2f}",
-                f"  Positions: {len(positions) if positions else 0}",
-            ]
-            if len(snapshots) == 2:
-                prev = snapshots[1]['portfolio_value']
-                day_pnl = portfolio - prev
-                day_pct = (day_pnl / prev * 100) if prev else 0
-                sign = "+" if day_pnl >= 0 else ""
-                lines.append(f"  Today's P&L: {sign}${day_pnl:,.2f} ({sign}{day_pct:.2f}%)")
-            # Overall return from first snapshot (deposit-adjusted when possible)
-            cur.execute(
-                "SELECT portfolio_value, date FROM account_snapshots ORDER BY date ASC LIMIT 1"
-            )
-            first = cur.fetchone()
-            if first and first['portfolio_value'] and first['date'] != today['date']:
-                try:
-                    net_deposits = get_net_deposits()
-                except Exception:
-                    net_deposits = None
-                if net_deposits is not None and net_deposits != 0:
-                    total_pnl = portfolio - net_deposits
-                    total_pct = (total_pnl / net_deposits * 100)
-                else:
-                    total_pnl = portfolio - first['portfolio_value']
-                    total_pct = (total_pnl / first['portfolio_value'] * 100)
-                sign = "+" if total_pnl >= 0 else ""
-                lines.append(f"  Total return: {sign}${total_pnl:,.2f} ({sign}{total_pct:.2f}%) since {first['date']}")
-            sections.append("\n".join(lines))
-
-        # Latest strategy memo
-        cur.execute(
-            "SELECT content FROM strategy_memos ORDER BY created_at DESC LIMIT 1"
-        )
-        memo = cur.fetchone()
-        if memo:
-            sections.append(f"STRATEGY MEMO:\n  {memo['content']}")
+        if (s := _section_decisions(cur, session_date)) is not None:
+            sections.append(s)
+        positions_section, positions = _section_positions(cur)
+        if positions_section is not None:
+            sections.append(positions_section)
+        if (s := _section_theses(cur)) is not None:
+            sections.append(s)
+        if (s := _section_book_status(cur, len(positions))) is not None:
+            sections.append(s)
+        if (s := _section_memo(cur)) is not None:
+            sections.append(s)
 
     if not sections:
         return "No trading activity today."
-
     return "\n\n".join(sections)
 
 

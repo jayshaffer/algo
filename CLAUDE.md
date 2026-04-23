@@ -15,6 +15,22 @@ Alpaca Learning Platform - an agentic trading system that uses Claude (via Anthr
 - **`tests/`** — Test suite covering both v1 and v2.
 - **`dashboard/`** — Legacy v1 dashboard (Flask on port 3000). v2 dashboard lives in `v2/dashboard/`.
 
+## Pipelines: Paper vs Prod
+
+The same v2 code runs against two isolated pipelines selected by docker-compose overlay and env file:
+
+| | Prod | Paper |
+|---|---|---|
+| Compose files | `docker-compose.yml` | `docker-compose.yml` + `docker-compose.paper.yml` |
+| Env file | `.env` | `.env.paper` |
+| Trading service | `trading` | `trading-paper` |
+| Database service | `db` (Postgres `:5432`) | `db-paper` (Postgres `:5433`) |
+| Dashboard | `dashboard` (`:3000`) | `dashboard-paper` (`:3001`) |
+| Logs | `./logs` | `./logs_paper` |
+| Alpaca account | Live account | Paper account |
+
+Paper runs skip social/public-dashboard stages by default (`--skip-twitter --skip-bluesky --skip-dashboard`). Taskfile targets prefixed `paper:*` (e.g. `paper:up`, `paper:session`, `paper:session:dry-run`) exercise the paper pipeline; the unprefixed targets (`session`, `trade`, etc.) run against prod. The two stacks use separate Postgres volumes, so data never crosses between them.
+
 ## Project Goals
 
 - Prove whether agentic trading can find an edge
