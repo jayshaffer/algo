@@ -9,7 +9,6 @@ import pytest
 from v2.agent import AgentResponse, ExecutorDecision, ExecutorInput
 from v2.trader import TradingSessionResult, run_trading_session
 
-
 # ---------------------------------------------------------------------------
 # Helpers for branch-coverage tests
 # ---------------------------------------------------------------------------
@@ -50,10 +49,8 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
     """Enter all default trader.py happy-path patches on `stack`.
 
     Returns a dict of the mocks keyed by the dependency name so tests can
-    make assertions on them. `overrides` is a dict mapping dependency name ->
-    MagicMock. Use this to set side_effect / return_value / assert behavior
-    per-test. Keys containing '.' are treated as full patch targets (used for
-    inline-imported names like v2.risk.check_sector_concentration).
+    make assertions on them. `overrides` is a dict mapping dependency name
+    (unqualified — patched at v2.trader.<name>) to MagicMock.
     """
     overrides = overrides or {}
     defaults = {
@@ -90,19 +87,13 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
         "validate_signal_refs": MagicMock(side_effect=lambda refs: refs),
         "close_thesis": MagicMock(),
         "format_decisions_for_logging": MagicMock(return_value={}),
+        "check_sector_concentration": MagicMock(return_value=[]),
+        "update_playbook_action_status": MagicMock(),
     }
-    # Inline imports in trader.py must be patched at their source module.
-    inline_defaults = {
-        "v2.risk.check_sector_concentration": MagicMock(return_value=[]),
-        "v2.database.trading_db.update_playbook_action_status": MagicMock(),
-    }
-    defaults.update({k: v for k, v in overrides.items() if "." not in k})
-    inline_defaults.update({k: v for k, v in overrides.items() if "." in k})
+    defaults.update(overrides)
     mocks = {}
     for name, mock in defaults.items():
         mocks[name] = stack.enter_context(patch(f"v2.trader.{name}", mock))
-    for target, mock in inline_defaults.items():
-        mocks[target] = stack.enter_context(patch(target, mock))
     return mocks
 
 
@@ -715,7 +706,7 @@ class TestContextBuild:
             _happy_path(stack, overrides={
                 "build_executor_input": MagicMock(return_value=existing_input),
                 "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
-                "v2.risk.check_sector_concentration": MagicMock(return_value=["tech heavy"]),
+                "check_sector_concentration": MagicMock(return_value=["tech heavy"]),
             })
             run_trading_session(dry_run=True)
         assert "existing note" in existing_input.risk_notes
@@ -731,7 +722,7 @@ class TestContextBuild:
             _happy_path(stack, overrides={
                 "build_executor_input": MagicMock(return_value=empty_input),
                 "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
-                "v2.risk.check_sector_concentration": MagicMock(return_value=["tech heavy"]),
+                "check_sector_concentration": MagicMock(return_value=["tech heavy"]),
             })
             run_trading_session(dry_run=True)
         assert "tech heavy" in empty_input.risk_notes
@@ -744,12 +735,12 @@ class TestContextBuild:
             mocks = _happy_path(stack, overrides={
                 "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
                 "get_latest_price": MagicMock(return_value=None),
-                "v2.risk.check_sector_concentration": MagicMock(return_value=[]),
+                "check_sector_concentration": MagicMock(return_value=[]),
             })
             run_trading_session(dry_run=True)
         # check_sector_concentration called with empty position_values dict
-        assert mocks["v2.risk.check_sector_concentration"].called
-        args, _ = mocks["v2.risk.check_sector_concentration"].call_args
+        assert mocks["check_sector_concentration"].called
+        args, _ = mocks["check_sector_concentration"].call_args
         assert args[0] == {}
 
 
@@ -922,7 +913,7 @@ class TestAlpacaPrecheck:
             _happy_path(stack, decisions=[decision], overrides={
                 "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
                 "get_live_available_qty": MagicMock(return_value=Decimal("0")),
-                "v2.database.trading_db.update_playbook_action_status": MagicMock(
+                "update_playbook_action_status": MagicMock(
                     side_effect=RuntimeError("db down"),
                 ),
             })
@@ -939,7 +930,7 @@ class TestExecutionSuccessBranches:
         decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
         with ExitStack() as stack:
             _happy_path(stack, decisions=[decision], overrides={
-                "v2.database.trading_db.update_playbook_action_status": MagicMock(
+                "update_playbook_action_status": MagicMock(
                     side_effect=RuntimeError("db down"),
                 ),
             })
@@ -1151,7 +1142,7 @@ class TestOrderFailure:
                     success=False, order_id=None, error="rejected",
                     filled_qty=None, filled_avg_price=None,
                 )),
-                "v2.database.trading_db.update_playbook_action_status": MagicMock(
+                "update_playbook_action_status": MagicMock(
                     side_effect=RuntimeError("db down"),
                 ),
             })

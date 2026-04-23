@@ -1,14 +1,18 @@
 """Trading agent orchestrator -- daily automation entry point."""
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
+from alpaca.data.historical import StockHistoricalDataClient
+
 from .agent import (
     DEFAULT_EXECUTOR_MODEL,
     ExecutorDecision,
+    ExecutorInput,
     format_decisions_for_logging,
     get_trading_decisions,
     validate_signal_refs,
@@ -21,6 +25,7 @@ from .database.trading_db import (
     get_positions,
     insert_decision,
     insert_decision_signals_batch,
+    update_playbook_action_status,
 )
 from .executor import (
     execute_market_order,
@@ -40,6 +45,7 @@ from .intents import (
     resolve_buy_intent,
     resolve_sell_intent,
 )
+from .risk import check_sector_concentration
 
 logger = logging.getLogger("trader")
 
@@ -71,34 +77,23 @@ class TradingSessionResult:
     risk_assessment: str = ""
 
 
-def run_trading_session(
-    dry_run: bool = False,
-    model: str = DEFAULT_EXECUTOR_MODEL,
-) -> TradingSessionResult:
-    """
-    Run a complete trading session.
+def _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors):
+    return TradingSessionResult(
+        timestamp=timestamp,
+        account_snapshot_id=snapshot_id,
+        positions_synced=positions_synced,
+        orders_synced=orders_synced,
+        decisions_made=0,
+        trades_executed=0,
+        trades_failed=0,
+        total_buy_value=Decimal(0),
+        total_sell_value=Decimal(0),
+        errors=errors,
+    )
 
-    1. Sync positions from Alpaca
-    2. Take account snapshot
-    3. Build executor input (structured)
-    4. Get decisions from Claude Haiku
-    5. Validate and execute trades
-    6. Log decisions to database
 
-    Args:
-        dry_run: If True, don't execute real trades
-        model: Claude model to use for decisions
-
-    Returns:
-        TradingSessionResult with session details
-    """
-    errors = []
-    timestamp = datetime.now()
-
-    logger.info("Starting trading session (dry_run=%s, model=%s)", dry_run, model)
-
-    # Step 1: Sync positions and orders
-    logger.info("[Step 1] Syncing positions and orders from Alpaca")
+def _sync_from_alpaca(errors: list[str]) -> tuple[int, int]:
+    """Sync positions and open orders; return counts, append failures to errors."""
     try:
         positions_synced = sync_positions_from_alpaca()
         logger.info("Synced %d positions", positions_synced)
@@ -115,67 +110,35 @@ def run_trading_session(
         logger.error("Order sync failed: %s", e)
         orders_synced = 0
 
-    # Market hours gate — skip trading if market is closed (dry_run bypasses)
-    if not dry_run and not is_market_open():
-        logger.warning("Market is closed. Skipping trading session (use --dry-run to bypass)")
-        errors.append("Market is closed — skipped trading")
-        return TradingSessionResult(
-            timestamp=timestamp,
-            account_snapshot_id=0,
-            positions_synced=positions_synced,
-            orders_synced=orders_synced,
-            decisions_made=0,
-            trades_executed=0,
-            trades_failed=0,
-            total_buy_value=Decimal(0),
-            total_sell_value=Decimal(0),
-            errors=errors,
-        )
+    return positions_synced, orders_synced
 
-    # Create a shared data client for price lookups
-    import os
 
-    from alpaca.data.historical import StockHistoricalDataClient
-    data_client = StockHistoricalDataClient(
-        os.environ.get("ALPACA_API_KEY"),
-        os.environ.get("ALPACA_SECRET_KEY"),
-    )
-
-    # Step 2: Take account snapshot
-    logger.info("[Step 2] Taking account snapshot")
+def _snapshot_account(errors: list[str]) -> tuple[dict | None, int]:
+    """Take account snapshot; return (account_info, snapshot_id) or (None, 0) on failure."""
     try:
         account_info = get_account_info()
         snapshot_id = take_account_snapshot()
         logger.info("Snapshot ID: %d", snapshot_id)
-        logger.info("Portfolio value: $%s  Buying power: $%s",
-                     f"{float(account_info['portfolio_value']):,.2f}",
-                     f"{float(account_info['buying_power']):,.2f}")
+        logger.info(
+            "Portfolio value: $%s  Buying power: $%s",
+            f"{float(account_info['portfolio_value']):,.2f}",
+            f"{float(account_info['buying_power']):,.2f}",
+        )
+        return account_info, snapshot_id
     except Exception as e:
         errors.append(f"Account snapshot failed: {e}")
         logger.error("Account snapshot failed: %s", e, exc_info=True)
-        return TradingSessionResult(
-            timestamp=timestamp,
-            account_snapshot_id=0,
-            positions_synced=positions_synced,
-            orders_synced=orders_synced,
-            decisions_made=0,
-            trades_executed=0,
-            trades_failed=0,
-            total_buy_value=Decimal(0),
-            total_sell_value=Decimal(0),
-            errors=errors,
-        )
+        return None, 0
 
-    # Step 3: Build executor input (structured, not string)
-    logger.info("[Step 3] Building executor input")
+
+def _build_executor_context(account_info: dict, data_client, errors: list[str]) -> ExecutorInput:
+    """Build executor input and augment risk_notes with sector concentration warnings."""
     try:
         executor_input = build_executor_input(account_info)
         logger.info("Executor input built")
     except Exception as e:
         errors.append(f"Context build failed: {e}")
         logger.error("Context build failed: %s", e, exc_info=True)
-        # Build a minimal fallback input
-        from .agent import ExecutorInput
         executor_input = ExecutorInput(
             playbook_actions=[],
             positions=[],
@@ -186,8 +149,6 @@ def run_trading_session(
             risk_notes="",
         )
 
-    # Check sector concentration and inject warnings
-    from .risk import check_sector_concentration
     position_values = {}
     for p in get_positions():
         price = get_latest_price(p["ticker"], client=data_client)
@@ -201,281 +162,451 @@ def run_trading_session(
         else:
             executor_input.risk_notes = "\n".join(sector_warnings)
 
-    # Step 4: Get LLM decisions
-    logger.info("[Step 4] Getting trading decisions from executor")
-    try:
-        response = get_trading_decisions(executor_input, model=model)
-        logger.info("Received %d decisions", len(response.decisions))
-        logger.info("Market summary: %s...", response.market_summary[:100])
-    except Exception as e:
-        errors.append(f"LLM decision failed: {e}")
-        logger.error("LLM decision failed: %s", e, exc_info=True)
-        return TradingSessionResult(
-            timestamp=timestamp,
-            account_snapshot_id=snapshot_id,
-            positions_synced=positions_synced,
-            orders_synced=orders_synced,
-            decisions_made=0,
-            trades_executed=0,
-            trades_failed=0,
-            total_buy_value=Decimal(0),
-            total_sell_value=Decimal(0),
-            errors=errors,
-        )
+    return executor_input
 
-    # Step 5: Validate and execute trades
-    logger.info("[Step 5] Executing trades")
-    positions = {p["ticker"]: p["shares"] for p in get_positions()}
-    buying_power = account_info["buying_power"]
-    portfolio_value = account_info["portfolio_value"]
 
-    # Build pending sell orders map for validation
-    open_orders_list = get_open_orders()
-    open_sell_orders = {}
-    for order in open_orders_list:
+def _build_open_sell_orders() -> dict:
+    """Build the {ticker: remaining_qty} map of live pending sell orders."""
+    open_sell_orders: dict = {}
+    for order in get_open_orders():
         if order["side"] == "sell" and order["status"] in ("new", "accepted", "partially_filled"):
             ticker = order["ticker"]
             remaining = order["qty"] - (order.get("filled_qty") or Decimal(0))
             open_sell_orders[ticker] = open_sell_orders.get(ticker, Decimal(0)) + remaining
+    return open_sell_orders
 
-    trades_executed = 0
-    trades_failed = 0
-    total_buy_value = Decimal(0)
-    total_sell_value = Decimal(0)
+
+def _resolve_decision_qty(
+    decision: ExecutorDecision,
+    held: Decimal,
+    price: Decimal,
+    portfolio_value: Decimal,
+    buying_power: Decimal,
+) -> Decimal:
+    """Resolve an intent to a concrete share count. Raises IntentError on failure."""
+    if decision.action == "sell":
+        intent = SellIntent(
+            type=decision.intent_type,
+            magnitude=(
+                Decimal(str(decision.intent_magnitude))
+                if decision.intent_magnitude is not None else None
+            ),
+        )
+        return resolve_sell_intent(
+            intent, held=held, price=price, portfolio_value=portfolio_value,
+        )
+    if decision.action == "buy":
+        if decision.intent_magnitude is None:
+            raise IntentError("buy intents require a magnitude")
+        intent = BuyIntent(
+            type=decision.intent_type,
+            magnitude=Decimal(str(decision.intent_magnitude)),
+        )
+        return resolve_buy_intent(
+            intent, held=held, price=price,
+            portfolio_value=portfolio_value, buying_power=buying_power,
+        )
+    raise IntentError(f"unsupported action: {decision.action}")
+
+
+def _precheck_sell_against_alpaca(
+    decision: ExecutorDecision, held: Decimal, errors: list[str],
+) -> bool:
+    """Return True if the sell should proceed; False if it was fully rejected.
+
+    Returning False always represents a rejection worth counting toward
+    trades_failed, so the caller should increment that counter on False.
+    Trim-to-available is not a rejection and returns True after mutating
+    decision.quantity.
+    """
+    try:
+        available = get_live_available_qty(decision.ticker)
+    except Exception as e:
+        logger.warning(
+            "%s: live availability check failed (%s) — proceeding",
+            decision.ticker, e,
+        )
+        return True
+
+    if available is None or available >= decision.quantity:
+        return True
+
+    if available <= Decimal("0.0001"):
+        reason = f"Alpaca reports 0 available shares (DB said {held})"
+        errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
+        logger.warning("%s: SKIP - %s", decision.ticker, reason)
+        if decision.playbook_action_id:
+            try:
+                update_playbook_action_status(decision.playbook_action_id, "skipped")
+            except Exception:
+                pass
+        decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
+        decision.action = "invalid"
+        return False
+
+    logger.info(
+        "%s: trimming sell from %s to %s (Alpaca available)",
+        decision.ticker, decision.quantity, available,
+    )
+    decision.quantity = available
+    return True
+
+
+@dataclass
+class _DecisionOutcome:
+    executed: bool
+    fill_price: Decimal | None
+    order_id: str | None
+    order_result: object | None
+    trade_value: Decimal
+
+
+def _execute_decision_order(
+    decision: ExecutorDecision,
+    price: Decimal,
+    positions: dict,
+    dry_run: bool,
+    errors: list[str],
+) -> _DecisionOutcome:
+    """Submit the order, wait for fill, run post-fill side effects.
+
+    Updates playbook_action_status on success/failure, handles thesis lifecycle
+    on sell fills, and returns the outcome so the caller can update aggregate
+    counters.
+    """
+    logger.info("%s: %s %s @ ~$%.2f", decision.ticker, decision.action.upper(),
+                decision.quantity, price)
+
+    result = execute_market_order(
+        ticker=decision.ticker,
+        side=decision.action,
+        qty=decision.quantity,
+        dry_run=dry_run,
+        simulated_price=price,
+    )
+
+    if not result.success:
+        errors.append(f"{decision.ticker} execution failed: {result.error}")
+        logger.error("  %s: execution failed: %s", decision.ticker, result.error)
+        if decision.playbook_action_id:
+            try:
+                update_playbook_action_status(decision.playbook_action_id, "failed")
+            except Exception:
+                pass
+        return _DecisionOutcome(False, None, None, None, Decimal(0))
+
+    # Wait for fill confirmation (skip for dry run — fills are instant)
+    if not dry_run and result.order_id != "DRY_RUN":
+        fill = wait_for_fill(result.order_id)
+        if not fill.success:
+            errors.append(f"{decision.ticker} fill failed: {fill.error}")
+            logger.error("  %s: fill failed: %s", decision.ticker, fill.error)
+            return _DecisionOutcome(False, None, None, None, Decimal(0))
+        result = fill  # Use fill data
+
+    if decision.playbook_action_id:
+        try:
+            update_playbook_action_status(decision.playbook_action_id, "executed")
+        except Exception as e:
+            logger.warning("Could not mark playbook action %d as executed: %s",
+                           decision.playbook_action_id, e)
+
+    fill_price = result.filled_avg_price if result.filled_avg_price else price
+    trade_value = fill_price * decision.quantity
+
+    status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
+    logger.info("  %s - Success", status)
+
+    # Thesis lifecycle on fill: buys leave active, full sells close,
+    # partial sells keep active.
+    if decision.thesis_id and not dry_run and decision.action == "sell":
+        try:
+            held_before = positions.get(decision.ticker, Decimal(0))
+            remaining = held_before - decision.quantity
+            if remaining <= Decimal("0.0001"):
+                close_thesis(
+                    thesis_id=decision.thesis_id,
+                    status="closed",
+                    reason=f"Position exited: sold {decision.quantity} shares @ ${fill_price}",
+                )
+                logger.info("  Thesis %d closed (position exited)", decision.thesis_id)
+            else:
+                logger.info(
+                    "  Thesis %d kept active (partial exit, %s shares remaining)",
+                    decision.thesis_id, remaining,
+                )
+        except Exception as e:
+            errors.append(f"Failed to update thesis {decision.thesis_id}: {e}")
+
+    return _DecisionOutcome(True, fill_price, result.order_id, result, trade_value)
+
+
+def _refresh_buying_power(
+    decision: ExecutorDecision,
+    buying_power: Decimal,
+    portfolio_value: Decimal,
+    trade_value: Decimal,
+    dry_run: bool,
+) -> tuple[Decimal, Decimal]:
+    """After a fill, refresh buying power / portfolio value from Alpaca (real
+    trades) or adjust locally (dry run).
+    """
+    if not dry_run:
+        try:
+            refreshed = get_account_info()
+            return refreshed["buying_power"], refreshed["portfolio_value"]
+        except Exception as e:
+            logger.warning("Could not refresh buying power: %s — using local estimate", e)
+            if decision.action == "buy":
+                buying_power -= trade_value
+            return buying_power, portfolio_value
+    # Dry run: use local estimate
+    if decision.action == "buy":
+        buying_power -= trade_value
+    return buying_power, portfolio_value
+
+
+def _handle_thesis_invalidations(invalidations, errors: list[str]) -> None:
+    if not invalidations:
+        return
+    logger.info("[Step 5b] Processing thesis invalidations")
+    for inv in invalidations:
+        try:
+            close_thesis(thesis_id=inv.thesis_id, status="invalidated", reason=inv.reason)
+            logger.info("Thesis %d: INVALIDATED - %s...", inv.thesis_id, inv.reason[:50])
+        except Exception as e:
+            errors.append(f"Failed to invalidate thesis {inv.thesis_id}: {e}")
+            logger.error("Error invalidating thesis %d: %s", inv.thesis_id, e)
+
+
+def _resolve_logged_qty(result, decision) -> Decimal | None:
+    if result and result.filled_qty is not None:
+        return Decimal(str(result.filled_qty))
+    if decision.quantity:
+        return decision.quantity
+    return None
+
+
+def _log_signal_links(decision_id: int, decision, errors: list[str]) -> None:
+    if decision.signal_refs:
+        try:
+            validated_refs = validate_signal_refs(decision.signal_refs)
+            if len(validated_refs) < len(decision.signal_refs):
+                logger.warning(
+                    "%s: stripped %d invalid signal refs",
+                    decision.ticker,
+                    len(decision.signal_refs) - len(validated_refs),
+                )
+            if validated_refs:
+                signal_links = [
+                    (decision_id, ref["type"], ref["id"])
+                    for ref in validated_refs
+                ]
+                insert_decision_signals_batch(signal_links)
+        except Exception as e:
+            errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
+    elif decision.action in ("buy", "sell"):
+        logger.warning(
+            "%s: no signal_refs cited — decision will be excluded from attribution",
+            decision.ticker,
+        )
+
+
+@dataclass
+class _ExecutionTotals:
+    trades_executed: int = 0
+    trades_failed: int = 0
+    total_buy_value: Decimal = Decimal(0)
+    total_sell_value: Decimal = Decimal(0)
+
+
+def _prepare_decision(
+    decision: ExecutorDecision,
+    positions: dict,
+    data_client,
+    dry_run: bool,
+    portfolio_value: Decimal,
+    buying_power: Decimal,
+    totals: "_ExecutionTotals",
+    errors: list[str],
+) -> Decimal | None:
+    """Price-lookup, resolve intent to share count, and run sell precheck.
+
+    Returns the price to use for execution, or None if the decision was
+    rejected / skipped. Mutates the decision (reasoning, action, quantity)
+    and totals.trades_failed in the rejection/skip paths.
+    """
+    price = get_latest_price(decision.ticker, client=data_client)
+    if price is None:
+        errors.append(f"Could not get price for {decision.ticker}")
+        logger.error("%s: Could not get price", decision.ticker)
+        totals.trades_failed += 1
+        decision.reasoning = f"[REJECTED: no price available] {decision.reasoning}"
+        decision.action = "invalid"
+        return None
+
+    # Resolve intent → concrete share count using live portfolio state.
+    # The LLM does NOT author share counts; it authors intents (e.g.
+    # exit_full, invest_dollar) and the system computes the exact Decimal
+    # from positions/account. This structurally prevents oversells and
+    # overspends regardless of LLM drift.
+    held = positions.get(decision.ticker, Decimal(0))
+    try:
+        resolved_qty = _resolve_decision_qty(
+            decision, held=held, price=price,
+            portfolio_value=portfolio_value, buying_power=buying_power,
+        )
+    except IntentError as e:
+        errors.append(f"{decision.ticker} intent error: {e}")
+        logger.warning("%s: INVALID - intent error: %s", decision.ticker, e)
+        totals.trades_failed += 1
+        decision.reasoning = f"[REJECTED: intent error: {e}] {decision.reasoning}"
+        decision.action = "invalid"
+        return None
+
+    if resolved_qty <= Decimal("0.0001"):
+        logger.info(
+            "%s: %s resolves to zero shares (held=%s, intent=%s, magnitude=%s) — skipping",
+            decision.ticker, decision.action.upper(),
+            held, decision.intent_type, decision.intent_magnitude,
+        )
+        decision.reasoning = (
+            f"[SKIPPED: intent {decision.intent_type} resolved to 0 shares "
+            f"against held={held}] {decision.reasoning}"
+        )
+        decision.action = "invalid"
+        return None
+
+    decision.quantity = resolved_qty
+
+    # Defense-in-depth: pre-submit live Alpaca check for sells. Catches the
+    # edge case where Alpaca disagrees with the DB (untracked orders, partial
+    # fills from a prior session, externally closed positions).
+    if (
+        decision.action == "sell"
+        and not dry_run
+        and not _precheck_sell_against_alpaca(decision, held, errors)
+    ):
+        totals.trades_failed += 1
+        return None
+
+    return price
+
+
+def _execute_decisions(
+    response,
+    positions: dict,
+    account_info: dict,
+    data_client,
+    dry_run: bool,
+    errors: list[str],
+) -> tuple[_ExecutionTotals, dict, dict]:
+    """Run the per-decision execution loop. Returns (totals, order_ids, order_results)."""
+    buying_power = account_info["buying_power"]
+    portfolio_value = account_info["portfolio_value"]
+
+    totals = _ExecutionTotals()
     max_trades_per_session = 10
+    order_ids: dict = {}
+    order_results: dict = {}
 
-    order_ids = {}
-    order_results = {}
     for i, decision in enumerate(response.decisions):
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             continue
 
-        if trades_executed >= max_trades_per_session:
-            logger.warning("Trade limit reached (%d trades). Skipping remaining decisions.", max_trades_per_session)
+        if totals.trades_executed >= max_trades_per_session:
+            logger.warning("Trade limit reached (%d trades). Skipping remaining decisions.",
+                           max_trades_per_session)
             break
 
-        # Price lookup
-        price = get_latest_price(decision.ticker, client=data_client)
+        price = _prepare_decision(
+            decision, positions, data_client, dry_run,
+            portfolio_value, buying_power, totals, errors,
+        )
         if price is None:
-            errors.append(f"Could not get price for {decision.ticker}")
-            logger.error("%s: Could not get price", decision.ticker)
-            trades_failed += 1
-            decision.reasoning = f"[REJECTED: no price available] {decision.reasoning}"
-            decision.action = "invalid"
             continue
 
-        # Resolve intent → concrete share count using live portfolio state.
-        # The LLM does NOT author share counts; it authors intents (e.g.
-        # exit_full, invest_dollar) and the system computes the exact Decimal
-        # from positions/account. This structurally prevents oversells and
-        # overspends regardless of LLM drift.
-        held = positions.get(decision.ticker, Decimal(0))
-        try:
-            if decision.action == "sell":
-                intent = SellIntent(
-                    type=decision.intent_type,
-                    magnitude=Decimal(str(decision.intent_magnitude)) if decision.intent_magnitude is not None else None,
-                )
-                resolved_qty = resolve_sell_intent(
-                    intent, held=held, price=price,
-                    portfolio_value=portfolio_value,
-                )
-            elif decision.action == "buy":
-                if decision.intent_magnitude is None:
-                    raise IntentError("buy intents require a magnitude")
-                intent = BuyIntent(
-                    type=decision.intent_type,
-                    magnitude=Decimal(str(decision.intent_magnitude)),
-                )
-                resolved_qty = resolve_buy_intent(
-                    intent, held=held, price=price,
-                    portfolio_value=portfolio_value,
-                    buying_power=buying_power,
-                )
-            else:
-                raise IntentError(f"unsupported action: {decision.action}")
-        except IntentError as e:
-            errors.append(f"{decision.ticker} intent error: {e}")
-            logger.warning("%s: INVALID - intent error: %s", decision.ticker, e)
-            trades_failed += 1
-            decision.reasoning = f"[REJECTED: intent error: {e}] {decision.reasoning}"
-            decision.action = "invalid"
+        outcome = _execute_decision_order(decision, price, positions, dry_run, errors)
+        if not outcome.executed:
+            totals.trades_failed += 1
             continue
 
-        if resolved_qty <= Decimal("0.0001"):
-            logger.info(
-                "%s: %s resolves to zero shares (held=%s, intent=%s, magnitude=%s) — skipping",
-                decision.ticker, decision.action.upper(),
-                held, decision.intent_type, decision.intent_magnitude,
-            )
-            decision.reasoning = (
-                f"[SKIPPED: intent {decision.intent_type} resolved to 0 shares "
-                f"against held={held}] {decision.reasoning}"
-            )
-            decision.action = "invalid"
-            continue
+        totals.trades_executed += 1
+        order_ids[i] = outcome.order_id
+        order_results[i] = outcome.order_result
+        if decision.action == "buy":
+            totals.total_buy_value += outcome.trade_value
+        else:
+            totals.total_sell_value += outcome.trade_value
 
-        decision.quantity = resolved_qty
-
-        # Defense-in-depth: pre-submit live Alpaca check for sells.
-        # The resolver already clamped to DB-held shares; this catches the
-        # edge case where Alpaca disagrees with our DB (untracked orders,
-        # partial fills from a prior session, externally closed positions).
-        if decision.action == "sell" and not dry_run:
-            try:
-                available = get_live_available_qty(decision.ticker)
-            except Exception as e:
-                logger.warning(
-                    "%s: live availability check failed (%s) — proceeding",
-                    decision.ticker, e,
-                )
-                available = None
-
-            if available is not None and available < decision.quantity:
-                if available <= Decimal("0.0001"):
-                    reason = (
-                        f"Alpaca reports 0 available shares "
-                        f"(DB said {held})"
-                    )
-                    errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
-                    logger.warning("%s: SKIP - %s", decision.ticker, reason)
-                    trades_failed += 1
-                    if decision.playbook_action_id:
-                        try:
-                            from .database.trading_db import update_playbook_action_status
-                            update_playbook_action_status(decision.playbook_action_id, "skipped")
-                        except Exception:
-                            pass
-                    decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
-                    decision.action = "invalid"
-                    continue
-                logger.info(
-                    "%s: trimming sell from %s to %s (Alpaca available)",
-                    decision.ticker, decision.quantity, available,
-                )
-                decision.quantity = available
-
-        # Execute trade
-        logger.info("%s: %s %s @ ~$%.2f", decision.ticker, decision.action.upper(), decision.quantity, price)
-
-        result = execute_market_order(
-            ticker=decision.ticker,
-            side=decision.action,
-            qty=decision.quantity,
-            dry_run=dry_run,
-            simulated_price=price,
+        buying_power, portfolio_value = _refresh_buying_power(
+            decision, buying_power, portfolio_value, outcome.trade_value, dry_run,
         )
 
-        if result.success:
-            # Wait for fill confirmation (skip for dry run — fills are instant)
-            if not dry_run and result.order_id != "DRY_RUN":
-                fill = wait_for_fill(result.order_id)
-                if not fill.success:
-                    trades_failed += 1
-                    errors.append(f"{decision.ticker} fill failed: {fill.error}")
-                    logger.error("  %s: fill failed: %s", decision.ticker, fill.error)
-                    continue
-                # Update result with fill data
-                result = fill
+    return totals, order_ids, order_results
 
-            trades_executed += 1
-            order_ids[i] = result.order_id
-            order_results[i] = result
 
-            if decision.playbook_action_id:
-                try:
-                    from .database.trading_db import update_playbook_action_status
-                    update_playbook_action_status(decision.playbook_action_id, "executed")
-                except Exception as e:
-                    logger.warning("Could not mark playbook action %d as executed: %s",
-                                   decision.playbook_action_id, e)
+def _build_final_result(
+    timestamp, snapshot_id, positions_synced, orders_synced,
+    response, totals: "_ExecutionTotals", errors: list[str],
+) -> TradingSessionResult:
+    return TradingSessionResult(
+        timestamp=timestamp,
+        account_snapshot_id=snapshot_id,
+        positions_synced=positions_synced,
+        orders_synced=orders_synced,
+        decisions_made=len(response.decisions),
+        trades_executed=totals.trades_executed,
+        trades_failed=totals.trades_failed,
+        total_buy_value=totals.total_buy_value,
+        total_sell_value=totals.total_sell_value,
+        errors=errors,
+        market_summary=response.market_summary,
+        risk_assessment=response.risk_assessment,
+    )
 
-            # Use fill price if available, fall back to quote price
-            fill_price = result.filled_avg_price if result.filled_avg_price else price
-            trade_value = fill_price * decision.quantity
 
-            if decision.action == "buy":
-                total_buy_value += trade_value
-            else:
-                total_sell_value += trade_value
+def _get_decisions(executor_input, model: str, errors: list[str]):
+    """Call the executor LLM; return response or None on failure."""
+    try:
+        response = get_trading_decisions(executor_input, model=model)
+        logger.info("Received %d decisions", len(response.decisions))
+        logger.info("Market summary: %s...", response.market_summary[:100])
+        return response
+    except Exception as e:
+        errors.append(f"LLM decision failed: {e}")
+        logger.error("LLM decision failed: %s", e, exc_info=True)
+        return None
 
-            # Refresh buying power from Alpaca after real trades
-            if not dry_run:
-                try:
-                    refreshed = get_account_info()
-                    buying_power = refreshed["buying_power"]
-                    portfolio_value = refreshed["portfolio_value"]
-                except Exception as e:
-                    # Fall back to local estimate if refresh fails
-                    logger.warning("Could not refresh buying power: %s — using local estimate", e)
-                    if decision.action == "buy":
-                        buying_power -= trade_value
-            else:
-                # Dry run: use local estimate
-                if decision.action == "buy":
-                    buying_power -= trade_value
 
-            status = "[DRY RUN]" if dry_run else f"Order {result.order_id} filled @ ${fill_price}"
-            logger.info("  %s - Success", status)
+def _log_session_summary(response, totals: _ExecutionTotals, errors: list[str]) -> None:
+    logger.info("=" * 60)
+    logger.info("Trading Session Complete")
+    logger.info("Decisions: %d | Executed: %d | Failed: %d",
+                len(response.decisions), totals.trades_executed, totals.trades_failed)
+    logger.info("Buy value: $%s | Sell value: $%s",
+                f"{float(totals.total_buy_value):,.2f}",
+                f"{float(totals.total_sell_value):,.2f}")
+    if errors:
+        logger.info("Errors: %d", len(errors))
 
-            # Update thesis lifecycle on fill. A thesis represents the *trade idea*
-            # for the life of the position, not just the entry fill — so:
-            #   - buy fills leave the thesis active (position is now being held)
-            #   - sell fills that flatten the position close the thesis
-            #   - partial sells leave the thesis active
-            if decision.thesis_id and not dry_run and decision.action == "sell":
-                try:
-                    held_before = positions.get(decision.ticker, Decimal(0))
-                    sold = decision.quantity
-                    remaining = held_before - sold
-                    if remaining <= Decimal("0.0001"):
-                        close_thesis(
-                            thesis_id=decision.thesis_id,
-                            status="closed",
-                            reason=f"Position exited: sold {decision.quantity} shares @ ${fill_price}"
-                        )
-                        logger.info("  Thesis %d closed (position exited)", decision.thesis_id)
-                    else:
-                        logger.info(
-                            "  Thesis %d kept active (partial exit, %s shares remaining)",
-                            decision.thesis_id, remaining,
-                        )
-                except Exception as e:
-                    errors.append(f"Failed to update thesis {decision.thesis_id}: {e}")
-        else:
-            trades_failed += 1
-            errors.append(f"{decision.ticker} execution failed: {result.error}")
-            logger.error("  %s: execution failed: %s", decision.ticker, result.error)
-            if hasattr(decision, 'playbook_action_id') and decision.playbook_action_id:
-                try:
-                    from .database.trading_db import update_playbook_action_status
-                    update_playbook_action_status(decision.playbook_action_id, "failed")
-                except Exception:
-                    pass
 
-    # Step 5b: Process thesis invalidations
-    if response.thesis_invalidations:
-        logger.info("[Step 5b] Processing thesis invalidations")
-        for inv in response.thesis_invalidations:
-            try:
-                close_thesis(
-                    thesis_id=inv.thesis_id,
-                    status="invalidated",
-                    reason=inv.reason
-                )
-                logger.info("Thesis %d: INVALIDATED - %s...", inv.thesis_id, inv.reason[:50])
-            except Exception as e:
-                errors.append(f"Failed to invalidate thesis {inv.thesis_id}: {e}")
-                logger.error("Error invalidating thesis %d: %s", inv.thesis_id, e)
+def _log_decisions(
+    response,
+    order_ids: dict,
+    order_results: dict,
+    data_client,
+    account_info: dict,
+    errors: list[str],
+) -> int:
+    """Insert decision rows and signal-links. Returns count of successfully logged decisions.
 
-    # Step 6: Log decisions
-    logger.info("[Step 6] Logging decisions")
+    Holds are logged so override reasoning (e.g., playbook said buy but executor
+    held) is auditable. Backfill, attribution, and patterns filter action IN
+    ('buy','sell') so unfillable holds don't pollute outcome metrics.
+    """
     signals_used = format_decisions_for_logging(response)
-
-    # Holds are logged so override reasoning (e.g., playbook said buy but executor
-    # held) is auditable. Backfill, attribution, and patterns filter action IN
-    # ('buy','sell') so unfillable holds don't pollute outcome metrics.
     logged_count = 0
     for i, decision in enumerate(response.decisions):
         try:
@@ -483,7 +614,10 @@ def run_trading_session(
             # Invalid (rejected) decisions may have no price available — that's
             # fine, the CHECK constraint only requires price for buy/sell.
             result = order_results.get(i)
-            price = result.filled_avg_price if result and result.filled_avg_price else get_latest_price(decision.ticker, client=data_client)
+            price = (
+                result.filled_avg_price if result and result.filled_avg_price
+                else get_latest_price(decision.ticker, client=data_client)
+            )
             if price is None and decision.action in ("buy", "sell"):
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
@@ -492,17 +626,13 @@ def run_trading_session(
             # Skip duplicate decisions (same ticker+action already logged today)
             existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
             if existing_id:
-                logger.warning("%s: duplicate %s decision — already logged as ID %d",
-                               decision.ticker, decision.action, existing_id)
+                logger.warning(
+                    "%s: duplicate %s decision — already logged as ID %d",
+                    decision.ticker, decision.action, existing_id,
+                )
                 continue
 
-            # Use filled quantity when available (handles partial fills)
-            if result and result.filled_qty is not None:
-                logged_qty = Decimal(str(result.filled_qty))
-            elif decision.quantity:
-                logged_qty = decision.quantity
-            else:
-                logged_qty = None
+            logged_qty = _resolve_logged_qty(result, decision)
 
             decision_id = insert_decision(
                 decision_date=date.today(),
@@ -524,51 +654,87 @@ def run_trading_session(
             logger.error("Error logging %s: %s", decision.ticker, e)
             continue
 
-        # Log signal-decision links for attribution (validate first)
-        if decision.signal_refs:
-            try:
-                validated_refs = validate_signal_refs(decision.signal_refs)
-                if len(validated_refs) < len(decision.signal_refs):
-                    logger.warning("%s: stripped %d invalid signal refs",
-                                   decision.ticker,
-                                   len(decision.signal_refs) - len(validated_refs))
-                if validated_refs:
-                    signal_links = [
-                        (decision_id, ref["type"], ref["id"])
-                        for ref in validated_refs
-                    ]
-                    insert_decision_signals_batch(signal_links)
-            except Exception as e:
-                errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
-        elif decision.action in ("buy", "sell"):
-            logger.warning("%s: no signal_refs cited — decision will be excluded from attribution",
-                           decision.ticker)
+        _log_signal_links(decision_id, decision, errors)
+    return logged_count
 
+
+def run_trading_session(
+    dry_run: bool = False,
+    model: str = DEFAULT_EXECUTOR_MODEL,
+) -> TradingSessionResult:
+    """
+    Run a complete trading session.
+
+    1. Sync positions from Alpaca
+    2. Take account snapshot
+    3. Build executor input (structured)
+    4. Get decisions from Claude Haiku
+    5. Validate and execute trades
+    6. Log decisions to database
+
+    Args:
+        dry_run: If True, don't execute real trades
+        model: Claude model to use for decisions
+
+    Returns:
+        TradingSessionResult with session details
+    """
+    errors: list[str] = []
+    timestamp = datetime.now()
+
+    logger.info("Starting trading session (dry_run=%s, model=%s)", dry_run, model)
+
+    # Step 1: Sync positions and orders
+    logger.info("[Step 1] Syncing positions and orders from Alpaca")
+    positions_synced, orders_synced = _sync_from_alpaca(errors)
+
+    # Market hours gate — skip trading if market is closed (dry_run bypasses)
+    if not dry_run and not is_market_open():
+        logger.warning("Market is closed. Skipping trading session (use --dry-run to bypass)")
+        errors.append("Market is closed — skipped trading")
+        return _empty_result(timestamp, positions_synced, orders_synced, 0, errors)
+
+    data_client = StockHistoricalDataClient(
+        os.environ.get("ALPACA_API_KEY"),
+        os.environ.get("ALPACA_SECRET_KEY"),
+    )
+
+    # Step 2: Take account snapshot
+    logger.info("[Step 2] Taking account snapshot")
+    account_info, snapshot_id = _snapshot_account(errors)
+    if account_info is None:
+        return _empty_result(timestamp, positions_synced, orders_synced, 0, errors)
+
+    # Step 3: Build executor input (structured, not string)
+    logger.info("[Step 3] Building executor input")
+    executor_input = _build_executor_context(account_info, data_client, errors)
+
+    # Step 4: Get LLM decisions
+    logger.info("[Step 4] Getting trading decisions from executor")
+    response = _get_decisions(executor_input, model, errors)
+    if response is None:
+        return _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors)
+
+    # Step 5: Validate and execute trades
+    logger.info("[Step 5] Executing trades")
+    positions = {p["ticker"]: p["shares"] for p in get_positions()}
+    _build_open_sell_orders()  # run for side effect (future: pass to precheck)
+    totals, order_ids, order_results = _execute_decisions(
+        response, positions, account_info, data_client, dry_run, errors,
+    )
+
+    # Step 5b: Process thesis invalidations
+    _handle_thesis_invalidations(response.thesis_invalidations, errors)
+
+    # Step 6: Log decisions
+    logger.info("[Step 6] Logging decisions")
+    logged_count = _log_decisions(response, order_ids, order_results, data_client, account_info, errors)
     logger.info("Logged %d decisions (%d emitted by executor)", logged_count, len(response.decisions))
 
-    # Summary
-    logger.info("=" * 60)
-    logger.info("Trading Session Complete")
-    logger.info("Decisions: %d | Executed: %d | Failed: %d",
-                len(response.decisions), trades_executed, trades_failed)
-    logger.info("Buy value: $%s | Sell value: $%s",
-                f"{float(total_buy_value):,.2f}", f"{float(total_sell_value):,.2f}")
-    if errors:
-        logger.info("Errors: %d", len(errors))
-
-    return TradingSessionResult(
-        timestamp=timestamp,
-        account_snapshot_id=snapshot_id,
-        positions_synced=positions_synced,
-        orders_synced=orders_synced,
-        decisions_made=len(response.decisions),
-        trades_executed=trades_executed,
-        trades_failed=trades_failed,
-        total_buy_value=total_buy_value,
-        total_sell_value=total_sell_value,
-        errors=errors,
-        market_summary=response.market_summary,
-        risk_assessment=response.risk_assessment,
+    _log_session_summary(response, totals, errors)
+    return _build_final_result(
+        timestamp, snapshot_id, positions_synced, orders_synced,
+        response, totals, errors,
     )
 
 
