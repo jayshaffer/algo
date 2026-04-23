@@ -1,7 +1,7 @@
 """Ollama client for embeddings and LLM inference."""
 
-import os
 import json
+import os
 from typing import Optional
 
 import httpx
@@ -68,7 +68,7 @@ def embed_batch(texts: list[str], model: str = "nomic-embed-text") -> list[list[
 def chat(
     prompt: str,
     model: str = "qwen2.5:14b",
-    system: Optional[str] = None,
+    system: str | None = None,
     temperature: float = 0.1
 ) -> str:
     """
@@ -108,7 +108,7 @@ def chat(
 def chat_json(
     prompt: str,
     model: str = "qwen2.5:14b",
-    system: Optional[str] = None
+    system: str | None = None
 ) -> dict:
     """
     Generate a chat completion and parse as JSON.

@@ -5,10 +5,9 @@ This module provides all database operations for the trading system,
 including positions, decisions, theses, signals, and playbooks.
 """
 
-from psycopg2.extras import execute_values, Json
+from psycopg2.extras import Json, execute_values
 
 from .connection import get_cursor
-
 
 # --- News Signals ---
 

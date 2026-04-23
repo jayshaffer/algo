@@ -1,21 +1,20 @@
 """Tests for trading/claude_client.py - Claude API client and agentic loop."""
 
 import os
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import anthropic
 import httpx
 import pytest
 
 from trading.claude_client import (
-    ToolResult,
     AgenticLoopResult,
+    ToolResult,
+    _call_with_retry,
+    extract_final_text,
     get_claude_client,
     run_agentic_loop,
-    extract_final_text,
-    _call_with_retry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

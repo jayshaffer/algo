@@ -1,18 +1,17 @@
 """Tests for v2/strategy.py — strategy reflection stage (Stage 4)."""
 
-from datetime import datetime, date
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tests.v2.conftest import (
-    make_strategy_state_row,
-    make_strategy_rule_row,
-    make_strategy_memo_row,
     make_decision_row,
+    make_strategy_memo_row,
+    make_strategy_rule_row,
+    make_strategy_state_row,
 )
-
 from v2.strategy import run_strategy_reflection
 
 
@@ -42,8 +41,9 @@ class TestToolUpdateStrategyIdentity:
     @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
     def test_updates_existing_identity(self, mock_get, mock_clear, mock_insert):
-        from v2.strategy import tool_update_strategy_identity
         from datetime import timedelta
+
+        from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = make_strategy_state_row(
             version=2, created_at=datetime.now() - timedelta(days=5),
         )
@@ -102,7 +102,8 @@ class TestToolRetireRule:
     @patch("v2.database.trading_db.get_strategy_rule")
     def test_retires_existing_rule(self, mock_get_rule, mock_retire):
         from datetime import datetime, timedelta
-        from v2.strategy import tool_retire_rule, reset_session
+
+        from v2.strategy import reset_session, tool_retire_rule
         mock_get_rule.return_value = {
             "id": 1, "status": "active",
             "created_at": datetime.now() - timedelta(days=10),
@@ -126,7 +127,8 @@ class TestToolRetireRule:
     def test_passes_reason_to_db(self, mock_get_rule, mock_retire):
         """retire_rule should pass the reason to the database function."""
         from datetime import datetime, timedelta
-        from v2.strategy import tool_retire_rule, reset_session
+
+        from v2.strategy import reset_session, tool_retire_rule
         mock_get_rule.return_value = {
             "id": 5, "status": "active",
             "created_at": datetime.now() - timedelta(days=10),
@@ -275,8 +277,8 @@ class TestRunStrategyReflection:
     @patch("v2.strategy.run_agentic_loop")
     @patch("v2.strategy.build_formation_context", return_value="")
     def test_returns_reflection_result(self, mock_formation, mock_loop, mock_client):
-        from v2.strategy import run_strategy_reflection, StrategyReflectionResult
         from v2.claude_client import AgenticLoopResult
+        from v2.strategy import StrategyReflectionResult, run_strategy_reflection
 
         mock_loop.return_value = AgenticLoopResult(
             messages=[
@@ -299,8 +301,8 @@ class TestRunStrategyReflection:
     @patch("v2.strategy.run_agentic_loop")
     @patch("v2.strategy.build_formation_context", return_value="")
     def test_passes_system_prompt_and_tools(self, mock_formation, mock_loop, mock_client):
-        from v2.strategy import run_strategy_reflection, STRATEGY_REFLECTION_SYSTEM, STRATEGY_TOOL_DEFINITIONS, STRATEGY_TOOL_HANDLERS
         from v2.claude_client import AgenticLoopResult
+        from v2.strategy import STRATEGY_REFLECTION_SYSTEM, STRATEGY_TOOL_DEFINITIONS, STRATEGY_TOOL_HANDLERS, run_strategy_reflection
 
         mock_loop.return_value = AgenticLoopResult(
             messages=[],
@@ -323,8 +325,8 @@ class TestRunStrategyReflection:
     @patch("v2.strategy.run_agentic_loop")
     @patch("v2.strategy.build_formation_context", return_value="")
     def test_counts_actions_from_messages(self, mock_formation, mock_loop, mock_client):
-        from v2.strategy import run_strategy_reflection
         from v2.claude_client import AgenticLoopResult
+        from v2.strategy import run_strategy_reflection
 
         mock_loop.return_value = AgenticLoopResult(
             messages=[
@@ -375,7 +377,7 @@ class TestRuleTenureGuard:
             "confidence": Decimal("0.8"), "supporting_evidence": "test",
         }
         mock_db.rowcount = 1
-        from v2.strategy import tool_retire_rule, reset_session
+        from v2.strategy import reset_session, tool_retire_rule
         reset_session()
         result = tool_retire_rule(rule_id=1, reason="Data no longer supports it")
         assert "retired" in result.lower()
@@ -394,7 +396,7 @@ class TestRetirementCap:
         }
         mock_db.fetchone.return_value = old_rule
         mock_db.rowcount = 1
-        from v2.strategy import tool_retire_rule, reset_session
+        from v2.strategy import reset_session, tool_retire_rule
         reset_session()
         r1 = tool_retire_rule(rule_id=1, reason="Data changed")
         assert "retired" in r1.lower()
@@ -465,11 +467,12 @@ class TestIdentityUpdateGuard:
     @patch("v2.strategy.get_current_strategy_state")
     def test_warns_if_recently_updated(self, mock_get, mock_clear, mock_insert):
         """Should return warning if identity was updated within 3 days."""
-        from v2.strategy import tool_update_strategy_identity
         from datetime import timezone
+
+        from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = make_strategy_state_row(
             version=5,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
 
         result = tool_update_strategy_identity(
@@ -489,11 +492,12 @@ class TestIdentityUpdateGuard:
     @patch("v2.strategy.get_current_strategy_state")
     def test_allows_update_if_not_recent(self, mock_get, mock_clear, mock_insert):
         """Should allow update if identity hasn't been updated in >3 days."""
-        from v2.strategy import tool_update_strategy_identity
         from datetime import timedelta, timezone
+
+        from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = make_strategy_state_row(
             version=5,
-            created_at=datetime.now(timezone.utc) - timedelta(days=5),
+            created_at=datetime.now(UTC) - timedelta(days=5),
         )
         mock_insert.return_value = 6
 

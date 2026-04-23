@@ -7,17 +7,21 @@ from decimal import Decimal
 from typing import Optional
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
 from .db import (
-    upsert_position,
+    delete_open_order,
     delete_position,
     insert_account_snapshot,
-    get_positions as db_get_positions,
     upsert_open_order,
-    delete_open_order,
+    upsert_position,
+)
+from .db import (
     get_open_orders as db_get_open_orders,
+)
+from .db import (
+    get_positions as db_get_positions,
 )
 
 
@@ -25,10 +29,10 @@ from .db import (
 class OrderResult:
     """Result of an order execution."""
     success: bool
-    order_id: Optional[str]
-    filled_qty: Optional[Decimal]
-    filled_avg_price: Optional[Decimal]
-    error: Optional[str]
+    order_id: str | None
+    filled_qty: Decimal | None
+    filled_avg_price: Decimal | None
+    error: str | None
 
 
 def get_trading_client() -> TradingClient:
@@ -275,7 +279,7 @@ def execute_limit_order(
         )
 
 
-def get_latest_price(ticker: str) -> Optional[Decimal]:
+def get_latest_price(ticker: str) -> Decimal | None:
     """Get latest quote price for a ticker."""
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockLatestQuoteRequest

@@ -1,35 +1,34 @@
 """Alpaca Learning Platform - Dashboard"""
 
-from flask import Flask, render_template, jsonify, request
-
+from benchmark import (
+    compute_alpha,
+    enrich_snapshots_with_deposits,
+    get_deposit_history,
+    get_spy_benchmark,
+)
+from flask import Flask, jsonify, render_template, request
 from queries import (
-    get_positions,
-    get_latest_snapshot,
-    get_open_orders,
-    get_today_playbook,
-    get_playbook_actions,
-    get_signal_attribution,
-    get_recent_ticker_signals,
-    get_recent_macro_signals,
-    get_signal_summary,
-    get_recent_decisions,
-    get_decision_stats,
-    get_decision_signal_refs_batch,
-    get_equity_curve,
-    get_performance_metrics,
-    get_thesis_stats,
-    get_theses,
     close_thesis,
     get_current_strategy,
-    get_strategy_rules,
-    get_strategy_memos,
+    get_decision_signal_refs_batch,
+    get_decision_stats,
+    get_equity_curve,
+    get_latest_snapshot,
+    get_open_orders,
+    get_performance_metrics,
+    get_playbook_actions,
+    get_positions,
+    get_recent_decisions,
+    get_recent_macro_signals,
+    get_recent_ticker_signals,
     get_recent_tweets,
-)
-from benchmark import (
-    get_spy_benchmark,
-    compute_alpha,
-    get_deposit_history,
-    enrich_snapshots_with_deposits,
+    get_signal_attribution,
+    get_signal_summary,
+    get_strategy_memos,
+    get_strategy_rules,
+    get_theses,
+    get_thesis_stats,
+    get_today_playbook,
 )
 
 app = Flask(__name__)

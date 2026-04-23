@@ -6,11 +6,11 @@ Generates and posts to Bluesky about trading activity using Claude.
 import json
 import logging
 import os
-from datetime import date
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
-from .claude_client import get_claude_client, _call_with_retry
+from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 
@@ -317,7 +317,7 @@ class BlueskyStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_bluesky_stage(session_date: Optional[date] = None) -> BlueskyStageResult:
+def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
     """Run the full Bluesky pipeline: context -> generate -> post -> log."""
     if session_date is None:
         session_date = date.today()

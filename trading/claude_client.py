@@ -1,11 +1,12 @@
 """Claude API client with tool handling and agentic loop."""
 
-import os
-import time
-import random
 import logging
+import os
+import random
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 import anthropic
 
@@ -273,7 +274,7 @@ def run_agentic_loop(
     )
 
 
-def extract_final_text(messages: list[dict]) -> Optional[str]:
+def extract_final_text(messages: list[dict]) -> str | None:
     """
     Extract the final text response from conversation history.
 

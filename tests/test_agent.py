@@ -2,20 +2,19 @@
 
 import json
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_agent_response, make_trading_decision
 from trading.agent import (
-    TradingDecision,
-    ThesisInvalidation,
     AgentResponse,
-    get_trading_decisions,
+    ThesisInvalidation,
+    TradingDecision,
     format_decisions_for_logging,
+    get_trading_decisions,
     validate_decision,
 )
-from tests.conftest import make_trading_decision, make_agent_response
-
 
 # ---------------------------------------------------------------------------
 # Dataclass construction

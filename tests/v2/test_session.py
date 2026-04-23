@@ -1,12 +1,12 @@
 """Tests for 5-stage session orchestrator."""
-from unittest.mock import patch, MagicMock
 from datetime import date
+from unittest.mock import MagicMock, patch
 
-from v2.session import run_session, SessionResult
-from v2.strategy import StrategyReflectionResult
-from v2.twitter import TwitterStageResult
 from v2.bluesky import BlueskyStageResult
 from v2.dashboard_publish import DashboardStageResult
+from v2.session import SessionResult, run_session
+from v2.strategy import StrategyReflectionResult
+from v2.twitter import TwitterStageResult
 
 
 class TestRunSession:

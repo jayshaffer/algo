@@ -1,27 +1,27 @@
 """Tests for v2.tools — tool definitions and handlers."""
 
-import pytest
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from v2.tools import (
-    tool_get_market_snapshot,
-    tool_get_portfolio_state,
-    tool_get_active_theses,
-    tool_create_thesis,
-    tool_adopt_thesis,
-    tool_update_thesis,
-    tool_close_thesis,
-    tool_get_news_signals,
-    tool_get_macro_context,
-    tool_get_signal_attribution,
-    tool_get_decision_history,
-    tool_write_playbook,
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
+    tool_adopt_thesis,
+    tool_close_thesis,
+    tool_create_thesis,
+    tool_get_active_theses,
+    tool_get_decision_history,
+    tool_get_macro_context,
+    tool_get_market_snapshot,
+    tool_get_news_signals,
+    tool_get_portfolio_state,
+    tool_get_signal_attribution,
+    tool_update_thesis,
+    tool_write_playbook,
 )
-
 
 # --- write_playbook tests (V3 rewrite) ---
 
@@ -373,7 +373,7 @@ class TestToolCompleteness:
 
 # --- Strategy tool tests ---
 
-from tests.v2.conftest import make_strategy_state_row, make_strategy_rule_row, make_strategy_memo_row
+from tests.v2.conftest import make_strategy_memo_row, make_strategy_rule_row, make_strategy_state_row
 
 
 class TestGetStrategyIdentity:

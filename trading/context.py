@@ -13,17 +13,17 @@ def _sanitize_text(text: str, max_len: int = 200) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     return text[:max_len]
 
+from .attribution import get_attribution_summary
 from .db import (
-    get_positions,
-    get_open_orders,
-    get_news_signals,
-    get_macro_signals,
-    get_recent_decisions,
     get_account_snapshots,
     get_active_theses,
+    get_macro_signals,
+    get_news_signals,
+    get_open_orders,
     get_playbook,
+    get_positions,
+    get_recent_decisions,
 )
-from .attribution import get_attribution_summary
 
 
 def get_portfolio_context(account_info: dict) -> str:

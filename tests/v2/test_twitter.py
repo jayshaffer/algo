@@ -7,15 +7,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from v2.database.trading_db import insert_tweet, get_tweets_for_date
+from v2.database.trading_db import get_tweets_for_date, insert_tweet
 from v2.twitter import (
+    MR_KRABS_SYSTEM_PROMPT,
+    TwitterStageResult,
     gather_tweet_context,
     generate_tweet,
     get_twitter_client,
     post_tweet,
-    MR_KRABS_SYSTEM_PROMPT,
     run_twitter_stage,
-    TwitterStageResult,
 )
 
 

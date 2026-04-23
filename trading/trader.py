@@ -3,28 +3,28 @@
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
 
-from .context import build_trading_context
-from .executor import (
-    get_account_info,
-    take_account_snapshot,
-    sync_positions_from_alpaca,
-    sync_orders_from_alpaca,
-    execute_market_order,
-    get_latest_price,
-    calculate_position_size,
-)
 from .agent import (
-    get_trading_decisions,
-    validate_decision,
-    format_decisions_for_logging,
+    DEFAULT_EXECUTOR_MODEL,
     AgentResponse,
     TradingDecision,
-    DEFAULT_EXECUTOR_MODEL,
+    format_decisions_for_logging,
+    get_trading_decisions,
+    validate_decision,
 )
-from .db import insert_decision, get_positions, close_thesis, insert_decision_signals_batch
+from .context import build_trading_context
+from .db import close_thesis, get_positions, insert_decision, insert_decision_signals_batch
+from .executor import (
+    calculate_position_size,
+    execute_market_order,
+    get_account_info,
+    get_latest_price,
+    sync_orders_from_alpaca,
+    sync_positions_from_alpaca,
+    take_account_snapshot,
+)
 
 logger = logging.getLogger("trader")
 
@@ -312,6 +312,7 @@ def run_trading_session(
 def main():
     """CLI entry point for trading agent."""
     import argparse
+
     from .log_config import setup_logging
 
     setup_logging()

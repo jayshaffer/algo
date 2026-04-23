@@ -1,9 +1,9 @@
 """Tests for v2 executor functions."""
 
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from v2.executor import OrderResult
 
@@ -34,7 +34,7 @@ class TestGetLatestPrice:
         mock_quote = MagicMock()
         mock_quote.ask_price = 150.25
         mock_quote.bid_price = 150.00
-        mock_quote.timestamp = datetime.now(timezone.utc)
+        mock_quote.timestamp = datetime.now(UTC)
         mock_client = MagicMock()
         mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
         mock_data_client_cls.return_value = mock_client
@@ -51,7 +51,7 @@ class TestGetLatestPrice:
         mock_quote = MagicMock()
         mock_quote.ask_price = 150.25
         mock_quote.bid_price = 150.00
-        mock_quote.timestamp = datetime.now(timezone.utc) - timedelta(seconds=120)
+        mock_quote.timestamp = datetime.now(UTC) - timedelta(seconds=120)
         mock_client = MagicMock()
         mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
         mock_data_client_cls.return_value = mock_client
@@ -68,7 +68,7 @@ class TestGetLatestPrice:
         mock_quote = MagicMock()
         mock_quote.ask_price = 160.0  # 10% above bid
         mock_quote.bid_price = 145.0
-        mock_quote.timestamp = datetime.now(timezone.utc)
+        mock_quote.timestamp = datetime.now(UTC)
         mock_client = MagicMock()
         mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
         mock_data_client_cls.return_value = mock_client
@@ -84,7 +84,7 @@ class TestGetLatestPrice:
         mock_quote = MagicMock()
         mock_quote.ask_price = 0
         mock_quote.bid_price = 0
-        mock_quote.timestamp = datetime.now(timezone.utc)
+        mock_quote.timestamp = datetime.now(UTC)
         mock_client = MagicMock()
         mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
         mock_data_client_cls.return_value = mock_client

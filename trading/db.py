@@ -2,12 +2,12 @@
 
 import os
 from contextlib import contextmanager
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
 import psycopg2
-from psycopg2.extras import RealDictCursor, Json, execute_values
+from psycopg2.extras import Json, RealDictCursor, execute_values
 
 
 def get_connection():
@@ -72,7 +72,7 @@ def insert_news_signals_batch(signals: list[tuple]) -> int:
         return len(signals)
 
 
-def get_news_signals(ticker: Optional[str] = None, days: int = 7) -> list:
+def get_news_signals(ticker: str | None = None, days: int = 7) -> list:
     """Get recent news signals, optionally filtered by ticker."""
     with get_cursor() as cur:
         if ticker:
@@ -128,7 +128,7 @@ def insert_macro_signals_batch(signals: list[tuple]) -> int:
         return len(signals)
 
 
-def get_macro_signals(category: Optional[str] = None, days: int = 7) -> list:
+def get_macro_signals(category: str | None = None, days: int = 7) -> list:
     """Get recent macro signals, optionally filtered by category."""
     with get_cursor() as cur:
         if category:
@@ -153,8 +153,8 @@ def insert_account_snapshot(
     cash: Decimal,
     portfolio_value: Decimal,
     buying_power: Decimal,
-    long_market_value: Optional[Decimal] = None,
-    short_market_value: Optional[Decimal] = None
+    long_market_value: Decimal | None = None,
+    short_market_value: Decimal | None = None
 ) -> int:
     """Insert or update daily account snapshot."""
     with get_cursor() as cur:
@@ -190,8 +190,8 @@ def insert_decision(
     decision_date: date,
     ticker: str,
     action: str,
-    quantity: Optional[Decimal],
-    price: Optional[Decimal],
+    quantity: Decimal | None,
+    price: Decimal | None,
     reasoning: str,
     signals_used: dict,
     account_equity: Decimal,
@@ -255,9 +255,9 @@ def insert_thesis(
     ticker: str,
     direction: str,
     thesis: str,
-    entry_trigger: Optional[str] = None,
-    exit_trigger: Optional[str] = None,
-    invalidation: Optional[str] = None,
+    entry_trigger: str | None = None,
+    exit_trigger: str | None = None,
+    invalidation: str | None = None,
     confidence: str = "medium",
     source: str = "ideation"
 ) -> int:
@@ -271,7 +271,7 @@ def insert_thesis(
         return cur.fetchone()["id"]
 
 
-def get_active_theses(ticker: Optional[str] = None) -> list:
+def get_active_theses(ticker: str | None = None) -> list:
     """Get all active theses, optionally filtered by ticker."""
     with get_cursor() as cur:
         if ticker:
@@ -291,11 +291,11 @@ def get_active_theses(ticker: Optional[str] = None) -> list:
 
 def update_thesis(
     thesis_id: int,
-    thesis: Optional[str] = None,
-    entry_trigger: Optional[str] = None,
-    exit_trigger: Optional[str] = None,
-    invalidation: Optional[str] = None,
-    confidence: Optional[str] = None
+    thesis: str | None = None,
+    entry_trigger: str | None = None,
+    exit_trigger: str | None = None,
+    invalidation: str | None = None,
+    confidence: str | None = None
 ) -> bool:
     """Update an existing thesis."""
     updates = []
@@ -350,8 +350,8 @@ def upsert_open_order(
     order_type: str,
     qty: Decimal,
     filled_qty: Decimal,
-    limit_price: Optional[Decimal],
-    stop_price: Optional[Decimal],
+    limit_price: Decimal | None,
+    stop_price: Decimal | None,
     status: str,
     submitted_at: datetime
 ) -> int:

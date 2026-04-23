@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from .db import get_cursor, upsert_signal_attribution, get_signal_attribution
+from .db import get_cursor, get_signal_attribution, upsert_signal_attribution
 
 
 def compute_signal_attribution() -> list[dict]:

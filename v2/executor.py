@@ -3,26 +3,30 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
 logger = logging.getLogger(__name__)
 
 from .database.trading_db import (
-    upsert_position,
+    delete_open_order,
     delete_position,
     insert_account_snapshot,
-    get_positions as db_get_positions,
     upsert_open_order,
-    delete_open_order,
+    upsert_position,
+)
+from .database.trading_db import (
     get_open_orders as db_get_open_orders,
+)
+from .database.trading_db import (
+    get_positions as db_get_positions,
 )
 
 
@@ -30,10 +34,10 @@ from .database.trading_db import (
 class OrderResult:
     """Result of an order execution."""
     success: bool
-    order_id: Optional[str]
-    filled_qty: Optional[Decimal]
-    filled_avg_price: Optional[Decimal]
-    error: Optional[str]
+    order_id: str | None
+    filled_qty: Decimal | None
+    filled_avg_price: Decimal | None
+    error: str | None
 
 
 def get_trading_client() -> TradingClient:
@@ -89,7 +93,7 @@ def take_account_snapshot() -> int:
     )
 
 
-def get_live_available_qty(ticker: str) -> Optional[Decimal]:
+def get_live_available_qty(ticker: str) -> Decimal | None:
     """Return Alpaca's live qty_available for a ticker, or None if not held.
 
     qty_available = held_qty - qty locked by pending sell orders. This is the
@@ -330,7 +334,7 @@ def get_latest_price(
     max_age_seconds: int = 60,
     max_spread_pct: Decimal = Decimal("0.05"),
     client: StockHistoricalDataClient = None,
-) -> Optional[Decimal]:
+) -> Decimal | None:
     """Get latest quote price for a ticker with staleness and spread validation.
 
     Args:
@@ -359,7 +363,7 @@ def get_latest_price(
         # Staleness check
         if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
             from datetime import timezone
-            age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
+            age = (datetime.now(UTC) - quote.timestamp).total_seconds()
             if age > max_age_seconds:
                 logger.warning("%s: quote is %.0fs old (max %ds) — rejecting", ticker, age, max_age_seconds)
                 return None

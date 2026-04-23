@@ -1,7 +1,9 @@
 """Tests for portfolio risk checks."""
 from decimal import Decimal
+
 import pytest
-from v2.risk import check_sector_concentration, SECTOR_MAP, MAX_SECTOR_PCT
+
+from v2.risk import MAX_SECTOR_PCT, SECTOR_MAP, check_sector_concentration
 
 
 class TestSectorConcentration:

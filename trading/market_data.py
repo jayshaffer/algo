@@ -15,7 +15,6 @@ from alpaca.data.requests import (
 )
 from alpaca.data.timeframe import TimeFrame
 
-
 # Sector ETF proxies
 SECTOR_ETFS = {
     "tech": "XLK",
@@ -72,7 +71,7 @@ def get_data_client() -> StockHistoricalDataClient:
     return StockHistoricalDataClient(api_key, secret_key)
 
 
-def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) -> Optional[float]:
+def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) -> float | None:
     """Get percentage change over N days for a symbol."""
     end = datetime.now()
     start = end - timedelta(days=days + 5)  # Extra buffer for weekends
@@ -276,7 +275,7 @@ def get_default_universe() -> list[str]:
     ]
 
 
-def get_market_snapshot(universe: Optional[list[str]] = None) -> MarketSnapshot:
+def get_market_snapshot(universe: list[str] | None = None) -> MarketSnapshot:
     """
     Build complete market snapshot for ideation.
 

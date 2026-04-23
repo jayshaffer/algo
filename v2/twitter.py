@@ -6,11 +6,11 @@ Generates and posts tweets about trading activity using Claude.
 import json
 import logging
 import os
-from datetime import date
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
-from .claude_client import get_claude_client, _call_with_retry
+from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet
 from .executor import get_net_deposits
@@ -22,7 +22,7 @@ logger = logging.getLogger("twitter")
 # Context gathering
 # ---------------------------------------------------------------------------
 
-def gather_tweet_context(session_date: Optional[date] = None) -> str:
+def gather_tweet_context(session_date: date | None = None) -> str:
     """Build a plain-text summary of today's trading session for tweet generation.
 
     Queries decisions, positions, active theses, latest snapshot, and latest
@@ -248,7 +248,7 @@ class TwitterStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult:
+def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
     """Run the full tweet pipeline: context -> generate -> post -> log."""
     if session_date is None:
         session_date = date.today()

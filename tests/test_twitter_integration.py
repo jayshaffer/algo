@@ -11,17 +11,17 @@ Requires:
     - Twitter API credentials in env vars
 """
 
-import os
 import logging
+import os
 import time
 
 import pytest
 
 from trading.ollama import check_ollama_health, list_models
 from trading.twitter import (
+    MR_KRABS_SYSTEM_PROMPT,
     generate_tweets,
     get_twitter_client,
-    MR_KRABS_SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger("test_twitter_integration")

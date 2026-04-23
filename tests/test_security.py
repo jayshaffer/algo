@@ -4,9 +4,9 @@ from decimal import Decimal
 
 import pytest
 
-from trading.classifier import _sanitize_headline
-from trading.agent import validate_decision, MAX_POSITION_PCT
 from tests.conftest import make_trading_decision
+from trading.agent import MAX_POSITION_PCT, validate_decision
+from trading.classifier import _sanitize_headline
 
 
 class TestSanitizeHeadline:
@@ -44,7 +44,7 @@ class TestPositionSizeCap:
     """Tests for MAX_POSITION_PCT enforcement in validate_decision."""
 
     def test_max_position_pct_is_ten_percent(self):
-        assert MAX_POSITION_PCT == Decimal("0.10")
+        assert Decimal("0.10") == MAX_POSITION_PCT
 
     def test_rejects_buy_exceeding_cap(self):
         """A buy > 10% of portfolio should be rejected."""

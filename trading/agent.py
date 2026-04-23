@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-from .claude_client import get_claude_client, _call_with_retry
+from .claude_client import _call_with_retry, get_claude_client
 
 logger = logging.getLogger(__name__)
 
 
-def _safe_int(value) -> Optional[int]:
+def _safe_int(value) -> int | None:
     """Coerce a value to int, returning None if not possible."""
     if value is None:
         return None
@@ -26,10 +26,10 @@ class TradingDecision:
     """A trading decision from the LLM."""
     action: str         # buy, sell, hold
     ticker: str
-    quantity: Optional[float]
+    quantity: float | None
     reasoning: str
     confidence: str     # high, medium, low
-    thesis_id: Optional[int] = None  # If acting on a thesis
+    thesis_id: int | None = None  # If acting on a thesis
     signal_refs: list = None  # [{"type": "news_signal", "id": 15}, ...]
 
     def __post_init__(self):

@@ -49,7 +49,7 @@ class ClassificationResult:
     """Result of news classification."""
     news_type: str  # ticker_specific, macro_political, sector, noise
     ticker_signals: list[TickerSignal]
-    macro_signal: Optional[MacroSignal]
+    macro_signal: MacroSignal | None
 
 
 CLASSIFICATION_SYSTEM = """Classify news headlines for stock trading relevance. Respond with JSON only.

@@ -2,8 +2,8 @@
 
 from decimal import Decimal
 
-from .database.trading_db import upsert_signal_attribution, get_signal_attribution
 from .database.connection import get_cursor
+from .database.trading_db import get_signal_attribution, upsert_signal_attribution
 
 
 def compute_signal_attribution(days: int = 90) -> list[dict]:

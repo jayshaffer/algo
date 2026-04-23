@@ -1,15 +1,16 @@
 """Tests for intent-based sizing resolver."""
 
 from decimal import Decimal
+
 import pytest
 
 from v2.intents import (
-    SellIntent,
-    BuyIntent,
-    resolve_sell_intent,
-    resolve_buy_intent,
-    IntentError,
     MAX_POSITION_PCT,
+    BuyIntent,
+    IntentError,
+    SellIntent,
+    resolve_buy_intent,
+    resolve_sell_intent,
 )
 
 

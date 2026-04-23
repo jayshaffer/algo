@@ -7,19 +7,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trading.patterns import (
-    SignalPerformance,
-    SentimentPerformance,
-    TickerPerformance,
     ConfidenceCorrelation,
-    analyze_signal_categories,
-    analyze_sentiment_performance,
-    analyze_ticker_performance,
+    SentimentPerformance,
+    SignalPerformance,
+    TickerPerformance,
     analyze_confidence_correlation,
+    analyze_sentiment_performance,
+    analyze_signal_categories,
+    analyze_ticker_performance,
+    generate_pattern_report,
     get_best_performing_signals,
     get_worst_performing_signals,
-    generate_pattern_report,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

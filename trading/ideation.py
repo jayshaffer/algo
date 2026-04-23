@@ -6,18 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from .context import get_portfolio_context, get_macro_context
+from .context import get_macro_context, get_portfolio_context
 from .db import (
+    close_thesis,
     get_active_theses,
+    get_positions,
     insert_thesis,
     update_thesis,
-    close_thesis,
-    get_positions,
 )
 from .executor import get_account_info
-from .market_data import get_market_snapshot, format_market_snapshot
+from .market_data import format_market_snapshot, get_market_snapshot
 from .ollama import chat_json
-
 
 IDEATION_SYSTEM_PROMPT = """You are an investment ideation agent. Your job is to review existing trade theses and generate new trade ideas.
 
@@ -71,7 +70,7 @@ class ThesisReview:
     thesis_id: int
     action: str  # keep, update, invalidate, expire
     reason: str
-    updates: Optional[dict] = None
+    updates: dict | None = None
 
 
 @dataclass
@@ -199,7 +198,7 @@ Exclude these tickers (already have active thesis): {', '.join(active_thesis_tic
             theses_created=0,
         )
 
-    print(f"  Received response")
+    print("  Received response")
     print(f"  Market observations: {response.get('market_observations', '')[:100]}...")
 
     # Step 4: Process reviews

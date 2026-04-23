@@ -2,18 +2,18 @@
 
 import json
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import Optional
 
-from .claude_client import get_claude_client, _call_with_retry
+from .claude_client import _call_with_retry, get_claude_client
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
 
 
-def _safe_int(value) -> Optional[int]:
+def _safe_int(value) -> int | None:
     """Coerce a value to int, returning None if not possible."""
     if value is None:
         return None

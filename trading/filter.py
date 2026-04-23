@@ -3,8 +3,7 @@
 from dataclasses import dataclass
 
 from .news import NewsItem
-from .ollama import embed, embed_batch, cosine_similarity_batch
-
+from .ollama import cosine_similarity_batch, embed, embed_batch
 
 # Default strategy context for relevance filtering
 DEFAULT_STRATEGY_CONTEXT = """

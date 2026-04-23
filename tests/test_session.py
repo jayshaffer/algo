@@ -6,12 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trading.session import SessionResult, run_session
-from trading.pipeline import PipelineStats
 from trading.ideation_claude import ClaudeIdeationResult
+from trading.pipeline import PipelineStats
+from trading.session import SessionResult, run_session
 from trading.trader import TradingSessionResult
 from trading.twitter import TwitterStageResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

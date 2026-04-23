@@ -5,6 +5,7 @@ This is the single source of truth for signal metrics.
 """
 
 from dataclasses import dataclass
+
 from .database.connection import get_cursor
 
 

@@ -1,20 +1,18 @@
 """Tests for trading/filter.py - Embedding-based relevance filtering."""
 
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_news_item
 from trading.filter import (
+    DEFAULT_STRATEGY_CONTEXT,
     FilteredNewsItem,
     filter_by_relevance,
     filter_news_batch,
-    DEFAULT_STRATEGY_CONTEXT,
 )
 from trading.news import NewsItem
-
-from tests.conftest import make_news_item
-
 
 # ---------------------------------------------------------------------------
 # FilteredNewsItem dataclass tests

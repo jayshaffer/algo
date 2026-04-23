@@ -35,7 +35,7 @@ def get_news_client() -> NewsClient:
 
 def fetch_news(
     hours: int = 24,
-    symbols: Optional[list[str]] = None,
+    symbols: list[str] | None = None,
     limit: int = 50
 ) -> list[NewsItem]:
     """

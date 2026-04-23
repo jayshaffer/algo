@@ -7,21 +7,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trading.market_data import (
-    SECTOR_ETFS,
     INDEX_ETFS,
+    SECTOR_ETFS,
+    MarketSnapshot,
     SectorPerformance,
     StockMover,
-    MarketSnapshot,
+    format_market_snapshot,
     get_bar_change,
-    get_sector_performance,
+    get_default_universe,
     get_index_levels,
+    get_market_snapshot,
+    get_sector_performance,
     get_top_movers,
     get_unusual_volume,
-    get_default_universe,
-    get_market_snapshot,
-    format_market_snapshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

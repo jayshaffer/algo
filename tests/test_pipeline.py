@@ -2,17 +2,15 @@
 
 import logging
 from datetime import datetime
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from trading.pipeline import PipelineStats, run_pipeline, check_dependencies
-from trading.classifier import ClassificationResult, TickerSignal, MacroSignal
-from trading.filter import FilteredNewsItem, DEFAULT_STRATEGY_CONTEXT
-from trading.news import NewsItem
-
 from tests.conftest import make_news_item
-
+from trading.classifier import ClassificationResult, MacroSignal, TickerSignal
+from trading.filter import DEFAULT_STRATEGY_CONTEXT, FilteredNewsItem
+from trading.news import NewsItem
+from trading.pipeline import PipelineStats, check_dependencies, run_pipeline
 
 SAMPLE_PUBLISHED_AT = datetime(2025, 1, 15, 10, 0, 0)
 

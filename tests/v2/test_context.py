@@ -29,8 +29,8 @@ class TestBuildExecutorInput:
             [],
         ]
 
-        from v2.context import build_executor_input
         from v2.agent import ExecutorInput
+        from v2.context import build_executor_input
         with patch("v2.executor.get_latest_price", return_value=Decimal("150.00")):
             result = build_executor_input(
                 account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"), "portfolio_value": Decimal("100000")},

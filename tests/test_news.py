@@ -1,12 +1,11 @@
 """Tests for trading/news.py - Alpaca news fetching."""
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-from trading.news import NewsItem, get_news_client, fetch_news, fetch_broad_news, fetch_ticker_news
-
+from trading.news import NewsItem, fetch_broad_news, fetch_news, fetch_ticker_news, get_news_client
 
 # ---------------------------------------------------------------------------
 # NewsItem dataclass tests

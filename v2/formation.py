@@ -9,9 +9,9 @@ import logging
 from datetime import date
 
 from .database.trading_db import (
-    get_recent_decisions,
-    get_positions,
     get_active_theses,
+    get_positions,
+    get_recent_decisions,
 )
 
 logger = logging.getLogger(__name__)

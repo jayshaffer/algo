@@ -1,23 +1,22 @@
 """Tests for trading/ollama.py - Ollama client for embeddings and LLM inference."""
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from trading.ollama import (
-    get_ollama_url,
-    embed,
-    embed_batch,
     chat,
     chat_json,
+    check_ollama_health,
     cosine_similarity,
     cosine_similarity_batch,
-    check_ollama_health,
+    embed,
+    embed_batch,
+    get_ollama_url,
     list_models,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_ollama_url

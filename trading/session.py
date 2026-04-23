@@ -16,10 +16,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .log_config import setup_logging
-from .pipeline import PipelineStats, run_pipeline, check_dependencies
-from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .agent import DEFAULT_EXECUTOR_MODEL
+from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
+from .log_config import setup_logging
+from .pipeline import PipelineStats, check_dependencies, run_pipeline
 from .trader import TradingSessionResult, run_trading_session
 from .twitter import TwitterStageResult, run_twitter_stage
 
@@ -30,15 +30,15 @@ logger = logging.getLogger("session")
 class SessionResult:
     """Combined result of a full daily session."""
 
-    pipeline_result: Optional[PipelineStats] = None
-    strategist_result: Optional[ClaudeIdeationResult] = None
-    trading_result: Optional[TradingSessionResult] = None
-    twitter_result: Optional[TwitterStageResult] = None
+    pipeline_result: PipelineStats | None = None
+    strategist_result: ClaudeIdeationResult | None = None
+    trading_result: TradingSessionResult | None = None
+    twitter_result: TwitterStageResult | None = None
 
-    pipeline_error: Optional[str] = None
-    strategist_error: Optional[str] = None
-    trading_error: Optional[str] = None
-    twitter_error: Optional[str] = None
+    pipeline_error: str | None = None
+    strategist_error: str | None = None
+    trading_error: str | None = None
+    twitter_error: str | None = None
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False

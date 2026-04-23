@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import make_playbook_row, make_attribution_row
+from tests.conftest import make_attribution_row, make_playbook_row
 
 
 class TestFullCycle:
@@ -20,7 +20,7 @@ class TestFullCycle:
         2. Executor reads the playbook via get_playbook
         3. Context builder formats playbook into trading context
         """
-        from trading.db import upsert_playbook, get_playbook
+        from trading.db import get_playbook, upsert_playbook
 
         # Mock cursor for upsert
         mock_cursor = MagicMock()

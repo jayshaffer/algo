@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from v2.entertainment import (
+    ENTERTAINMENT_SYSTEM_PROMPT,
+    EntertainmentResult,
     gather_market_context,
     generate_entertainment_tweet,
-    EntertainmentResult,
     run_entertainment_pipeline,
-    ENTERTAINMENT_SYSTEM_PROMPT,
 )
 
 

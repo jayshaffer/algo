@@ -5,10 +5,10 @@ import os
 import time
 from datetime import date, datetime
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.enums import DataFeed
 from alpaca.trading.client import TradingClient
 
 logger = logging.getLogger(__name__)

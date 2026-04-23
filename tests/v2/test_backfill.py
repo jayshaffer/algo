@@ -2,9 +2,9 @@
 
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from v2.backfill import trading_day_offset, calculate_outcome, backfill_outcomes
+from v2.backfill import backfill_outcomes, calculate_outcome, trading_day_offset
 
 
 class TestTradingDayOffset:

@@ -1,18 +1,18 @@
 """Tests for Claude strategist."""
-from unittest.mock import patch, MagicMock
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 from v2.ideation_claude import (
-    run_strategist_loop,
-    run_strategist_session,
-    run_ideation_claude,
-    ClaudeIdeationResult,
-    StrategistResult,
-    count_actions,
+    _STRATEGIST_TEMPLATE,
     CLAUDE_IDEATION_SYSTEM,
     CLAUDE_SESSION_STRATEGIST_SYSTEM,
     CLAUDE_STRATEGIST_SYSTEM,
-    _STRATEGIST_TEMPLATE,
+    ClaudeIdeationResult,
+    StrategistResult,
+    count_actions,
+    run_ideation_claude,
+    run_strategist_loop,
+    run_strategist_session,
 )
 
 

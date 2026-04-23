@@ -1,9 +1,10 @@
 """Tests for v2 signal attribution engine."""
 
-import pytest
 from contextlib import contextmanager
 from decimal import Decimal
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, call, patch
+
+import pytest
 
 
 class TestBuildAttributionConstraints:

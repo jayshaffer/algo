@@ -9,19 +9,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.conftest import (
-    make_position_row,
-    make_snapshot_row,
-    make_thesis_row,
-    make_decision_row,
-    make_news_signal_row,
-    make_macro_signal_row,
-    make_playbook_row,
     make_attribution_row,
+    make_decision_row,
+    make_macro_signal_row,
+    make_news_signal_row,
     make_open_order_row,
     make_playbook_action_row,
-    make_strategy_state_row,
-    make_strategy_rule_row,
+    make_playbook_row,
+    make_position_row,
+    make_snapshot_row,
     make_strategy_memo_row,
+    make_strategy_rule_row,
+    make_strategy_state_row,
+    make_thesis_row,
     make_tweet_row,
 )
 

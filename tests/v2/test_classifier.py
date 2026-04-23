@@ -1,25 +1,24 @@
 """Tests for v2/classifier.py - News classification with Claude Haiku."""
 
-import json
 import inspect
+import json
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from v2.classifier import (
-    TickerSignal,
-    MacroSignal,
-    ClassificationResult,
     CLASSIFICATION_MODEL,
+    ClassificationResult,
+    MacroSignal,
+    TickerSignal,
     _build_classification_result,
+    _classify_batch,
     _strip_code_fences,
     classify_news,
     classify_news_batch,
-    _classify_batch,
     classify_ticker_news,
 )
-
 
 SAMPLE_PUBLISHED_AT = datetime(2025, 1, 15, 10, 0, 0)
 

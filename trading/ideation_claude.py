@@ -5,9 +5,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from .backfill import run_backfill
 from .attribution import compute_signal_attribution, get_attribution_summary
-from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
+from .backfill import run_backfill
+from .claude_client import extract_final_text, get_claude_client, run_agentic_loop
 from .tools import TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session
 
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ def _print_cost_summary(label, result, created, updated, closed, summary):
     print(f"  Theses created: {created}")
     print(f"  Theses updated: {updated}")
     print(f"  Theses closed: {closed}")
-    print(f"\nToken usage:")
+    print("\nToken usage:")
     print(f"  Input tokens: {result.input_tokens:,}")
     if result.cache_read_input_tokens:
         print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")

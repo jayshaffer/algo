@@ -17,14 +17,14 @@ import time
 
 import pytest
 
-from trading.ollama import chat, chat_json, check_ollama_health, list_models
 from trading.agent import TRADING_SYSTEM_PROMPT
 from trading.classifier import (
+    BATCH_CLASSIFICATION_PROMPT,
     CLASSIFICATION_PROMPT,
     TICKER_CLASSIFICATION_PROMPT,
-    BATCH_CLASSIFICATION_PROMPT,
 )
 from trading.ideation import IDEATION_SYSTEM_PROMPT
+from trading.ollama import chat, chat_json, check_ollama_health, list_models
 
 logger = logging.getLogger("test_model_integration")
 

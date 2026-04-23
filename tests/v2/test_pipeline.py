@@ -1,11 +1,10 @@
 """Tests for v2/pipeline.py — news pipeline orchestrator."""
 
-from unittest.mock import patch, MagicMock
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
-from v2.pipeline import run_pipeline, PipelineStats
-from v2.classifier import ClassificationResult, TickerSignal, MacroSignal
-
+from v2.classifier import ClassificationResult, MacroSignal, TickerSignal
+from v2.pipeline import PipelineStats, run_pipeline
 
 SAMPLE_PUBLISHED_AT = datetime(2025, 6, 15, 10, 0, 0)
 

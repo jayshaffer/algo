@@ -1,21 +1,20 @@
 """Tests for trading/db.py - Database CRUD operations."""
 
 from contextlib import contextmanager
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from tests.conftest import (
-    make_news_signal_row,
-    make_macro_signal_row,
-    make_snapshot_row,
     make_decision_row,
+    make_macro_signal_row,
+    make_news_signal_row,
     make_position_row,
+    make_snapshot_row,
     make_thesis_row,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_connection

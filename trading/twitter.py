@@ -6,8 +6,8 @@ Posts market commentary and session recaps.
 
 import logging
 import os
-from datetime import date
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 from . import db
@@ -24,9 +24,9 @@ def insert_tweet(
     session_date: date,
     tweet_type: str,
     tweet_text: str,
-    tweet_id: Optional[str] = None,
+    tweet_id: str | None = None,
     posted: bool = False,
-    error: Optional[str] = None,
+    error: str | None = None,
 ) -> int:
     """Insert a tweet record and return its id."""
     with db.get_cursor() as cur:
@@ -52,7 +52,7 @@ def get_tweets_for_date(session_date: date) -> list:
 # Context gathering
 # ---------------------------------------------------------------------------
 
-def gather_tweet_context(session_date: Optional[date] = None) -> str:
+def gather_tweet_context(session_date: date | None = None) -> str:
     """Build a plain-text summary of today's trading session for tweet generation.
 
     Queries decisions, positions, active theses, latest snapshot, and latest
@@ -289,7 +289,7 @@ class TwitterStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_twitter_stage(session_date: Optional[date] = None) -> TwitterStageResult:
+def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
     """Run the full tweet pipeline: context -> generate -> post -> log.
 
     Args:

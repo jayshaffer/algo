@@ -4,11 +4,11 @@ import os
 import sys
 from datetime import datetime
 
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetAssetsRequest
-from alpaca.trading.enums import AssetClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import AssetClass
+from alpaca.trading.requests import GetAssetsRequest
 
 
 def get_trading_client() -> TradingClient:

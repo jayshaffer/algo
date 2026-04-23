@@ -1,14 +1,13 @@
 """News classification using qwen2.5:14b with batch support."""
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import re
-
-from .ollama import chat, chat_json
 from .filter import FilteredNewsItem
+from .ollama import chat, chat_json
 
 
 def _sanitize_headline(headline: str) -> str:
@@ -49,7 +48,7 @@ class ClassificationResult:
     """Result of news classification."""
     news_type: str  # ticker_specific, macro_political, sector, noise
     ticker_signals: list[TickerSignal]
-    macro_signal: Optional[MacroSignal]
+    macro_signal: MacroSignal | None
 
 
 CLASSIFICATION_PROMPT = """Classify this news headline for stock trading relevance.

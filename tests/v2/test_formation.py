@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from v2.formation import is_formation_mode, FORMATION_TRADE_THRESHOLD
+from v2.formation import FORMATION_TRADE_THRESHOLD, is_formation_mode
 
 
 class TestIsFormationMode:
@@ -54,7 +54,7 @@ class TestIsFormationMode:
         assert is_formation_mode() is True
 
 
-from v2.formation import get_orphan_positions, build_formation_context
+from v2.formation import build_formation_context, get_orphan_positions
 
 
 class TestGetOrphanPositions:

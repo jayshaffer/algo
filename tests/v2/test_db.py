@@ -1,9 +1,10 @@
 """Tests for v2 database layer."""
-import pytest
-from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestGetConnection:
@@ -43,9 +44,8 @@ class TestGetCursor:
 
         with patch("v2.database.connection.get_connection", return_value=mock_conn):
             from v2.database.connection import get_cursor
-            with pytest.raises(RuntimeError):
-                with get_cursor() as cur:
-                    raise RuntimeError("test error")
+            with pytest.raises(RuntimeError), get_cursor() as cur:
+                raise RuntimeError("test error")
             mock_conn.rollback.assert_called_once()
             mock_conn.close.assert_called_once()
 
@@ -427,8 +427,8 @@ class TestPlaybookActionStatus:
         assert params == ("failed", 5)
 
     def test_get_pending_playbook_actions(self, mock_db, mock_cursor):
-        from v2.database.trading_db import get_pending_playbook_actions
         from tests.v2.conftest import make_playbook_action_row
+        from v2.database.trading_db import get_pending_playbook_actions
         mock_cursor.fetchall.return_value = [make_playbook_action_row()]
         result = get_pending_playbook_actions(playbook_id=1)
         sql = mock_cursor.execute.call_args[0][0]

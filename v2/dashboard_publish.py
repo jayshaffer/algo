@@ -126,7 +126,7 @@ def _enrich_snapshots_with_deposits(snapshots: list[dict], deposit_history: list
                 s["cumulative_deposits"] += credit
 
 
-def gather_dashboard_data(session_date: date, net_deposits: Optional[Decimal] = None) -> dict:
+def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = None) -> dict:
     """Gather all dashboard data in a single DB connection.
 
     Args:
@@ -418,7 +418,7 @@ class DashboardStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_dashboard_stage(session_date: Optional[date] = None) -> DashboardStageResult:
+def run_dashboard_stage(session_date: date | None = None) -> DashboardStageResult:
     """Run the full dashboard publish pipeline: gather -> assemble -> deploy."""
     if session_date is None:
         session_date = date.today()

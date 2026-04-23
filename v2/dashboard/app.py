@@ -1,22 +1,22 @@
 """Alpaca Learning Platform - Dashboard"""
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 from v2.database.dashboard_db import (
-    get_positions,
-    get_latest_snapshot,
-    get_today_playbook,
-    get_signal_attribution,
-    get_recent_ticker_signals,
-    get_recent_macro_signals,
-    get_signal_summary,
-    get_recent_decisions,
+    close_thesis,
     get_decision_stats,
     get_equity_curve,
+    get_latest_snapshot,
     get_performance_metrics,
-    get_thesis_stats,
+    get_positions,
+    get_recent_decisions,
+    get_recent_macro_signals,
+    get_recent_ticker_signals,
+    get_signal_attribution,
+    get_signal_summary,
     get_theses,
-    close_thesis,
+    get_thesis_stats,
+    get_today_playbook,
 )
 
 app = Flask(__name__)

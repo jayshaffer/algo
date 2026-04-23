@@ -1,25 +1,24 @@
 """Tests for trading/executor.py - trade execution and position management."""
 
-from decimal import Decimal
-from unittest.mock import patch, MagicMock, PropertyMock
 from datetime import datetime
+from decimal import Decimal
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+from tests.conftest import make_position_row
 from trading.executor import (
     OrderResult,
-    get_trading_client,
-    get_account_info,
-    take_account_snapshot,
-    sync_positions_from_alpaca,
-    sync_orders_from_alpaca,
-    execute_market_order,
-    execute_limit_order,
-    get_latest_price,
     calculate_position_size,
+    execute_limit_order,
+    execute_market_order,
+    get_account_info,
+    get_latest_price,
+    get_trading_client,
+    sync_orders_from_alpaca,
+    sync_positions_from_alpaca,
+    take_account_snapshot,
 )
-from tests.conftest import make_position_row
-
 
 # ---------------------------------------------------------------------------
 # OrderResult dataclass

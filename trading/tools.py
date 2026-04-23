@@ -5,19 +5,19 @@ from datetime import date, datetime
 from typing import Optional
 
 from .attribution import get_attribution_summary
-from .market_data import get_market_snapshot, format_market_snapshot
-from .context import get_portfolio_context, get_macro_context
-from .executor import get_account_info
+from .context import get_macro_context, get_portfolio_context
 from .db import (
+    close_thesis,
     get_active_theses,
     get_news_signals,
+    get_positions,
     get_recent_decisions,
     insert_thesis,
     update_thesis,
-    close_thesis,
-    get_positions,
     upsert_playbook,
 )
+from .executor import get_account_info
+from .market_data import format_market_snapshot, get_market_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def tool_get_portfolio_state() -> str:
         return f"Error getting portfolio state: {e}"
 
 
-def tool_get_active_theses(ticker: Optional[str] = None) -> str:
+def tool_get_active_theses(ticker: str | None = None) -> str:
     """Get active theses."""
     logger.info(f"Getting active theses (ticker filter: {ticker})")
     theses = get_active_theses(ticker=ticker)
@@ -118,11 +118,11 @@ def tool_create_thesis(
 
 def tool_update_thesis(
     thesis_id: int,
-    thesis: Optional[str] = None,
-    entry_trigger: Optional[str] = None,
-    exit_trigger: Optional[str] = None,
-    invalidation: Optional[str] = None,
-    confidence: Optional[str] = None,
+    thesis: str | None = None,
+    entry_trigger: str | None = None,
+    exit_trigger: str | None = None,
+    invalidation: str | None = None,
+    confidence: str | None = None,
 ) -> str:
     """Update an existing thesis."""
     logger.info(f"Updating thesis ID {thesis_id}")

@@ -1,10 +1,10 @@
 """Tests for trading session executor."""
 from datetime import datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from v2.trader import run_trading_session, TradingSessionResult
-from v2.agent import ExecutorInput, ExecutorDecision, AgentResponse, PlaybookAction
+from v2.agent import AgentResponse, ExecutorDecision, ExecutorInput, PlaybookAction
+from v2.trader import TradingSessionResult, run_trading_session
 
 
 class TestRunTradingSession:

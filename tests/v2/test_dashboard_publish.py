@@ -10,8 +10,8 @@ import pytest
 
 from v2.dashboard_publish import (
     DashboardStageResult,
-    _DecimalEncoder,
     _build_summary,
+    _DecimalEncoder,
     assemble_deploy_dir,
     deploy_to_cloudflare,
     fetch_spy_benchmark,
@@ -546,9 +546,8 @@ class TestDeployToCloudflare:
     def test_raises_on_wrangler_failure(self, mock_run):
         """RuntimeError raised when wrangler exits non-zero."""
         mock_run.return_value = MagicMock(returncode=1, stderr="Auth failed")
-        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
-            with pytest.raises(RuntimeError, match="Auth failed"):
-                deploy_to_cloudflare("/tmp/deploy")
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}), pytest.raises(RuntimeError, match="Auth failed"):
+            deploy_to_cloudflare("/tmp/deploy")
 
     def test_raises_when_project_not_set(self):
         """RuntimeError raised when CLOUDFLARE_PAGES_PROJECT missing."""

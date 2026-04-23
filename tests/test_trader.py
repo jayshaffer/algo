@@ -1,23 +1,22 @@
 """Tests for trading/trader.py - trading session orchestrator."""
 
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from tests.conftest import make_agent_response, make_trading_decision
+from trading.agent import (
+    AgentResponse,
+    ThesisInvalidation,
+    TradingDecision,
+)
 from trading.trader import (
     TradeResult,
     TradingSessionResult,
     run_trading_session,
 )
-from trading.agent import (
-    TradingDecision,
-    ThesisInvalidation,
-    AgentResponse,
-)
-from tests.conftest import make_trading_decision, make_agent_response
-
 
 # ---------------------------------------------------------------------------
 # Dataclass construction

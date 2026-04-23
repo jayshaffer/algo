@@ -1,8 +1,8 @@
 """Tests for signal attribution computation."""
 
+from contextlib import contextmanager
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-from contextlib import contextmanager
 
 import pytest
 

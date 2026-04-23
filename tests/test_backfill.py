@@ -3,20 +3,19 @@
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from trading.backfill import (
-    get_data_client,
-    get_price_on_date,
-    get_decisions_needing_backfill,
-    calculate_outcome,
-    update_outcome,
     backfill_outcomes,
+    calculate_outcome,
+    get_data_client,
+    get_decisions_needing_backfill,
+    get_price_on_date,
     run_backfill,
+    update_outcome,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_data_client

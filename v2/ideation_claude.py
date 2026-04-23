@@ -5,15 +5,20 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from .claude_client import get_claude_client, run_agentic_loop, extract_final_text
+from .claude_client import extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
 from .formation import build_formation_context, get_orphan_positions
 from .tools import (
-    TOOL_DEFINITIONS, TOOL_HANDLERS, reset_session,
-    tool_get_portfolio_state, tool_get_active_theses,
-    tool_get_decision_history, tool_get_signal_attribution,
-    tool_get_strategy_identity, tool_get_strategy_rules,
+    TOOL_DEFINITIONS,
+    TOOL_HANDLERS,
+    reset_session,
+    tool_get_active_theses,
+    tool_get_decision_history,
+    tool_get_portfolio_state,
+    tool_get_signal_attribution,
     tool_get_strategy_history,
+    tool_get_strategy_identity,
+    tool_get_strategy_rules,
 )
 
 logger = logging.getLogger(__name__)
@@ -238,7 +243,7 @@ def _print_cost_summary(label, result, created, updated, closed, summary):
     print(f"  Theses created: {created}")
     print(f"  Theses updated: {updated}")
     print(f"  Theses closed: {closed}")
-    print(f"\nToken usage:")
+    print("\nToken usage:")
     print(f"  Input tokens: {result.input_tokens:,}")
     if result.cache_read_input_tokens:
         print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")

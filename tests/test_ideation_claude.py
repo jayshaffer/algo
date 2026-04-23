@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from trading.claude_client import AgenticLoopResult
 from trading.ideation_claude import (
     CLAUDE_SESSION_STRATEGIST_SYSTEM,
     CLAUDE_STRATEGIST_SYSTEM,
@@ -15,8 +16,6 @@ from trading.ideation_claude import (
     run_strategist_loop,
     run_strategist_session,
 )
-from trading.claude_client import AgenticLoopResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

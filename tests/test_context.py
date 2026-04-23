@@ -1,33 +1,32 @@
 """Tests for trading/context.py - context builder for trading agent."""
 
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trading.context import (
-    get_portfolio_context,
-    get_macro_context,
-    get_ticker_signals_context,
-    get_signal_trend_context,
-    get_decision_outcomes_context,
-    get_theses_context,
-    get_playbook_context,
-    get_attribution_context,
-    build_trading_context,
-    _sanitize_text,
-)
 from tests.conftest import (
+    make_attribution_row,
+    make_decision_row,
+    make_macro_signal_row,
+    make_news_signal_row,
+    make_playbook_row,
     make_position_row,
     make_thesis_row,
-    make_decision_row,
-    make_news_signal_row,
-    make_macro_signal_row,
-    make_playbook_row,
-    make_attribution_row,
 )
-
+from trading.context import (
+    _sanitize_text,
+    build_trading_context,
+    get_attribution_context,
+    get_decision_outcomes_context,
+    get_macro_context,
+    get_playbook_context,
+    get_portfolio_context,
+    get_signal_trend_context,
+    get_theses_context,
+    get_ticker_signals_context,
+)
 
 # ---------------------------------------------------------------------------
 # get_portfolio_context

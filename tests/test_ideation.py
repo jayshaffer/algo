@@ -2,19 +2,18 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from tests.conftest import make_position_row, make_thesis_row
 from trading.ideation import (
-    ThesisReview,
-    NewThesis,
     IdeationResult,
+    NewThesis,
+    ThesisReview,
     build_ideation_context,
     run_ideation,
 )
-from tests.conftest import make_thesis_row, make_position_row
-
 
 # ---------------------------------------------------------------------------
 # build_ideation_context

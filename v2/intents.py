@@ -37,7 +37,7 @@ class IntentError(ValueError):
 @dataclass
 class SellIntent:
     type: str
-    magnitude: Optional[Decimal]  # None for exit_full; pct or dollars otherwise
+    magnitude: Decimal | None  # None for exit_full; pct or dollars otherwise
 
 
 @dataclass
@@ -46,7 +46,7 @@ class BuyIntent:
     magnitude: Decimal  # dollars or pct — required
 
 
-def _require_pct(magnitude: Optional[Decimal], label: str) -> Decimal:
+def _require_pct(magnitude: Decimal | None, label: str) -> Decimal:
     if magnitude is None:
         raise IntentError(f"{label} requires magnitude (percentage)")
     if magnitude < 0 or magnitude > 100:
@@ -54,7 +54,7 @@ def _require_pct(magnitude: Optional[Decimal], label: str) -> Decimal:
     return magnitude
 
 
-def _require_dollar(magnitude: Optional[Decimal], label: str) -> Decimal:
+def _require_dollar(magnitude: Decimal | None, label: str) -> Decimal:
     if magnitude is None or magnitude <= 0:
         raise IntentError(f"{label} requires positive dollar magnitude")
     return magnitude

@@ -1,15 +1,15 @@
 """Tests for executor LLM integration."""
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from v2.agent import (
-    ExecutorInput,
-    ExecutorDecision,
-    PlaybookAction,
+    DEFAULT_EXECUTOR_MODEL,
     AgentResponse,
+    ExecutorDecision,
+    ExecutorInput,
+    PlaybookAction,
     ThesisInvalidation,
     get_trading_decisions,
-    DEFAULT_EXECUTOR_MODEL,
 )
 
 

@@ -1,5 +1,5 @@
 """Database queries for dashboard views."""
-from .connection import get_cursor, get_connection
+from .connection import get_connection, get_cursor
 
 
 def get_positions():

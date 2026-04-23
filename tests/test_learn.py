@@ -1,7 +1,7 @@
 """Tests for trading/learn.py - Learning loop orchestrator."""
 
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,7 +9,6 @@ from trading.learn import (
     LearningResult,
     run_learning_loop,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

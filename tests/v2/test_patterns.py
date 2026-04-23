@@ -1,22 +1,23 @@
 """Tests for v2.patterns — pattern analysis with decision_signals FK."""
 
-import pytest
 from contextlib import contextmanager
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.patterns import (
-    SignalPerformance,
-    SentimentPerformance,
-    TickerPerformance,
     ConfidenceCorrelation,
-    analyze_signal_categories,
-    analyze_sentiment_performance,
-    analyze_ticker_performance,
+    SentimentPerformance,
+    SignalPerformance,
+    TickerPerformance,
     analyze_confidence_correlation,
+    analyze_sentiment_performance,
+    analyze_signal_categories,
+    analyze_ticker_performance,
+    generate_pattern_report,
     get_best_performing_signals,
     get_worst_performing_signals,
-    generate_pattern_report,
 )
 
 

@@ -21,44 +21,52 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .log_config import setup_logging
-from .backfill import run_backfill
-from .attribution import compute_signal_attribution, build_attribution_constraints
-from .pipeline import PipelineStats, run_pipeline
-from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .agent import DEFAULT_EXECUTOR_MODEL
-from .trader import TradingSessionResult, run_trading_session
-from .strategy import StrategyReflectionResult, run_strategy_reflection, DEFAULT_REFLECTION_MODEL
-from .twitter import TwitterStageResult, run_twitter_stage
+from .attribution import build_attribution_constraints, compute_signal_attribution
+from .backfill import run_backfill
 from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 from .database.trading_db import (
-    get_session_for_date, insert_session_record, complete_session, fail_session,
-    insert_session_stage, complete_session_stage, fail_session_stage, get_completed_stages,
-    insert_strategy_memo, get_current_strategy_state, get_playbook,
+    complete_session,
+    complete_session_stage,
+    fail_session,
+    fail_session_stage,
+    get_completed_stages,
+    get_current_strategy_state,
+    get_playbook,
+    get_session_for_date,
+    insert_session_record,
+    insert_session_stage,
+    insert_strategy_memo,
 )
+from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
+from .log_config import setup_logging
+from .pipeline import PipelineStats, run_pipeline
+from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
+from .trader import TradingSessionResult, run_trading_session
+from .twitter import TwitterStageResult, run_twitter_stage
 
 logger = logging.getLogger("session")
 
 
 @dataclass
 class SessionResult:
-    pipeline_result: Optional[PipelineStats] = None
-    strategist_result: Optional[ClaudeIdeationResult] = None
-    trading_result: Optional[TradingSessionResult] = None
-    strategy_result: Optional[StrategyReflectionResult] = None
-    twitter_result: Optional[TwitterStageResult] = None
-    bluesky_result: Optional[BlueskyStageResult] = None
-    dashboard_result: Optional[DashboardStageResult] = None
+    pipeline_result: PipelineStats | None = None
+    strategist_result: ClaudeIdeationResult | None = None
+    trading_result: TradingSessionResult | None = None
+    strategy_result: StrategyReflectionResult | None = None
+    twitter_result: TwitterStageResult | None = None
+    bluesky_result: BlueskyStageResult | None = None
+    dashboard_result: DashboardStageResult | None = None
 
-    learning_error: Optional[str] = None     # V3: Stage 0
-    pipeline_error: Optional[str] = None
-    strategist_error: Optional[str] = None
-    trading_error: Optional[str] = None
-    strategy_error: Optional[str] = None
-    twitter_error: Optional[str] = None
-    bluesky_error: Optional[str] = None
-    dashboard_error: Optional[str] = None
+    learning_error: str | None = None     # V3: Stage 0
+    pipeline_error: str | None = None
+    strategist_error: str | None = None
+    trading_error: str | None = None
+    strategy_error: str | None = None
+    twitter_error: str | None = None
+    bluesky_error: str | None = None
+    dashboard_error: str | None = None
 
     skipped_pipeline: bool = False
     skipped_ideation: bool = False

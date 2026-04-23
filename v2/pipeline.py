@@ -3,9 +3,9 @@
 import logging
 from dataclasses import dataclass
 
-from .news import fetch_broad_news
 from .classifier import classify_news_batch
-from .database.trading_db import insert_news_signals_batch, insert_macro_signals_batch
+from .database.trading_db import insert_macro_signals_batch, insert_news_signals_batch
+from .news import fetch_broad_news
 
 logger = logging.getLogger("pipeline")
 
@@ -78,6 +78,7 @@ def main():
     """CLI entry point for news pipeline."""
     import argparse
     import sys
+
     from .log_config import setup_logging
 
     setup_logging()

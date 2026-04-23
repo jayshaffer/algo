@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -121,7 +121,7 @@ class TestComputeAlpha:
         assert compute_alpha(None, None) is None
 
 
-from dashboard.benchmark import get_spy_benchmark, _clear_cache
+from dashboard.benchmark import _clear_cache, get_spy_benchmark
 
 
 class TestGetSpyBenchmark:
@@ -201,9 +201,9 @@ class TestGetSpyBenchmark:
 
 
 from dashboard.benchmark import (
+    _clear_deposit_cache,
     enrich_snapshots_with_deposits,
     get_deposit_history,
-    _clear_deposit_cache,
 )
 
 

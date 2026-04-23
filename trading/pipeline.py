@@ -2,13 +2,13 @@
 
 import logging
 import sys
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
 
-from .news import fetch_broad_news, NewsItem
-from .filter import filter_by_relevance, FilteredNewsItem, DEFAULT_STRATEGY_CONTEXT
 from .classifier import classify_news_batch
-from .db import insert_news_signals_batch, insert_macro_signals_batch
+from .db import insert_macro_signals_batch, insert_news_signals_batch
+from .filter import DEFAULT_STRATEGY_CONTEXT, FilteredNewsItem, filter_by_relevance
+from .news import NewsItem, fetch_broad_news
 from .ollama import check_ollama_health, list_models
 
 logger = logging.getLogger("pipeline")
@@ -183,6 +183,7 @@ def check_dependencies() -> bool:
 def main():
     """CLI entry point for news pipeline."""
     import argparse
+
     from .log_config import setup_logging
 
     setup_logging()

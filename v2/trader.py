@@ -3,36 +3,45 @@
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
 
-from .context import build_executor_input
-from .executor import (
-    get_account_info,
-    take_account_snapshot,
-    sync_positions_from_alpaca,
-    sync_orders_from_alpaca,
-    execute_market_order,
-    get_latest_price,
-    calculate_position_size,
-    is_market_open,
-    wait_for_fill,
-    get_live_available_qty,
-)
 from .agent import (
-    get_trading_decisions,
-    validate_signal_refs,
-    format_decisions_for_logging,
+    DEFAULT_EXECUTOR_MODEL,
     AgentResponse,
     ExecutorDecision,
-    DEFAULT_EXECUTOR_MODEL,
+    format_decisions_for_logging,
+    get_trading_decisions,
+    validate_signal_refs,
+)
+from .context import build_executor_input
+from .database.trading_db import (
+    check_decision_exists,
+    close_thesis,
+    get_open_orders,
+    get_positions,
+    insert_decision,
+    insert_decision_signals_batch,
+)
+from .executor import (
+    calculate_position_size,
+    execute_market_order,
+    get_account_info,
+    get_latest_price,
+    get_live_available_qty,
+    is_market_open,
+    sync_orders_from_alpaca,
+    sync_positions_from_alpaca,
+    take_account_snapshot,
+    wait_for_fill,
 )
 from .intents import (
-    SellIntent, BuyIntent,
-    resolve_sell_intent, resolve_buy_intent,
+    BuyIntent,
     IntentError,
+    SellIntent,
+    resolve_buy_intent,
+    resolve_sell_intent,
 )
-from .database.trading_db import insert_decision, check_decision_exists, get_positions, close_thesis, insert_decision_signals_batch, get_open_orders
 
 logger = logging.getLogger("trader")
 
@@ -126,8 +135,9 @@ def run_trading_session(
         )
 
     # Create a shared data client for price lookups
-    from alpaca.data.historical import StockHistoricalDataClient
     import os
+
+    from alpaca.data.historical import StockHistoricalDataClient
     data_client = StockHistoricalDataClient(
         os.environ.get("ALPACA_API_KEY"),
         os.environ.get("ALPACA_SECRET_KEY"),
@@ -567,6 +577,7 @@ def run_trading_session(
 def main():
     """CLI entry point for trading agent."""
     import argparse
+
     from .log_config import setup_logging
 
     setup_logging()

@@ -4,18 +4,17 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trading.news import NewsItem
+from trading.agent import AgentResponse, ThesisInvalidation, TradingDecision
+from trading.classifier import ClassificationResult, MacroSignal, TickerSignal
 from trading.filter import FilteredNewsItem
-from trading.classifier import TickerSignal, MacroSignal, ClassificationResult
-from trading.agent import TradingDecision, ThesisInvalidation, AgentResponse
-
+from trading.news import NewsItem
 
 # ---------------------------------------------------------------------------
 # Integration test logging
