@@ -1,11 +1,63 @@
 """Shared test fixtures and factory functions for v2 module."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# --- Network safety net ---
+#
+# Background: tests in this directory have historically called
+# ``v2.session.run_session`` or ``v2.entertainment.run_entertainment_pipeline``
+# without patching every outbound I/O function. When prod credentials are
+# present in the container env, the unmocked paths post to real X / Bluesky
+# and burn Anthropic tokens. One afternoon of missed mocks produced 200+
+# live posts before it was caught.
+#
+# This autouse fixture pre-patches the session/entertainment hooks that
+# make network calls. Tests that want finer-grained behaviour still win —
+# their own ``@patch`` decorators override these defaults for the duration
+# of the test.
+# Targets whose default patched return is MagicMock (structure doesn't matter
+# to callers, they just need a truthy mock).
+_NETWORK_PATCH_TARGETS = (
+    # Session stage wrappers (import-site names used by v2.session.run_session)
+    "v2.session.run_twitter_stage",
+    "v2.session.run_bluesky_stage",
+    "v2.session.run_strategy_reflection",
+    "v2.session.run_dashboard_stage",
+    "v2.session.run_pipeline",
+    "v2.session.run_strategist_loop",
+    "v2.session.run_trading_session",
+    "v2.session.run_backfill",
+    "v2.session.compute_signal_attribution",
+    # Entertainment pipeline I/O (posts to X + Bluesky, calls Claude)
+    "v2.entertainment.post_tweet",
+    "v2.entertainment.post_to_bluesky",
+    "v2.entertainment.generate_entertainment_tweet",
+    "v2.entertainment.generate_bluesky_entertainment_post",
+)
+
+# Client factories must default to returning None so the production
+# "no credentials → skip" path runs unless a test explicitly wires up a client.
+_NETWORK_PATCH_NONE_TARGETS = (
+    "v2.entertainment.get_twitter_client",
+    "v2.entertainment.get_bluesky_client",
+)
+
+
+@pytest.fixture(autouse=True)
+def _block_social_and_llm_calls():
+    """Defensive net: any v2 test that reaches real posting/LLM code is blocked."""
+    with ExitStack() as stack:
+        for target in _NETWORK_PATCH_TARGETS:
+            stack.enter_context(patch(target))
+        for target in _NETWORK_PATCH_NONE_TARGETS:
+            stack.enter_context(patch(target, return_value=None))
+        yield
+
 
 # --- Core DB Fixtures ---
 

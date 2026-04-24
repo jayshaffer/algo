@@ -19,6 +19,14 @@ logger = logging.getLogger("bluesky")
 
 def get_bluesky_client():
     """Create an atproto Client logged into Bluesky from env vars."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALGO_TEST_UNSAFE_CLIENT_FACTORY"):
+        raise RuntimeError(
+            "get_bluesky_client() must be mocked in tests. "
+            "Real Bluesky posts from the test suite have caused spam incidents; "
+            "patch v2.bluesky.get_bluesky_client (or the relevant import-site) in your test. "
+            "Tests that specifically exercise this factory may set "
+            "ALGO_TEST_UNSAFE_CLIENT_FACTORY=1."
+        )
     try:
         from atproto import Client
     except ImportError:

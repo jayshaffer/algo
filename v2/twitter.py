@@ -216,6 +216,14 @@ def generate_tweet(context: str, model: str = "claude-haiku-4-5-20251001") -> di
 
 def get_twitter_client():
     """Create a tweepy Client from environment variables."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALGO_TEST_UNSAFE_CLIENT_FACTORY"):
+        raise RuntimeError(
+            "get_twitter_client() must be mocked in tests. "
+            "Real Twitter posts from the test suite have caused spam incidents; "
+            "patch v2.twitter.get_twitter_client (or the relevant import-site) in your test. "
+            "Tests that specifically exercise this factory may set "
+            "ALGO_TEST_UNSAFE_CLIENT_FACTORY=1."
+        )
     try:
         import tweepy
     except ImportError:
