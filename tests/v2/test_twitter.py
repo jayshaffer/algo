@@ -5,6 +5,8 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.database.trading_db import get_tweets_for_date, insert_tweet
 from v2.twitter import (
     TwitterStageResult,
@@ -302,6 +304,10 @@ class TestGenerateTweet:
 
 class TestGetTwitterClient:
     """Verify get_twitter_client credential handling."""
+
+    @pytest.fixture(autouse=True)
+    def _allow_factory(self, monkeypatch):
+        monkeypatch.setenv("ALGO_TEST_UNSAFE_CLIENT_FACTORY", "1")
 
     def test_returns_client_with_creds(self, monkeypatch):
         monkeypatch.setenv("TWITTER_API_KEY", "key")

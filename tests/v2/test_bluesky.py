@@ -4,6 +4,8 @@ import os
 from datetime import date
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.bluesky import (
     _DASHBOARD_LINK_TEXT,
     _PROMPT_BUFFER,
@@ -24,6 +26,10 @@ from v2.bluesky import (
 
 class TestGetBlueskyClient:
     """Verify get_bluesky_client credential handling."""
+
+    @pytest.fixture(autouse=True)
+    def _allow_factory(self, monkeypatch):
+        monkeypatch.setenv("ALGO_TEST_UNSAFE_CLIENT_FACTORY", "1")
 
     def test_returns_client_with_creds(self, monkeypatch):
         monkeypatch.setenv("BLUESKY_HANDLE", "test.bsky.social")
