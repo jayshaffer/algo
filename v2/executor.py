@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
@@ -375,6 +375,40 @@ def get_latest_price(
                 return None
 
         return ask
+    except Exception:
+        return None
+
+
+def get_latest_trade_price(
+    ticker: str,
+    client: StockHistoricalDataClient = None,
+) -> Decimal | None:
+    """Get the last tape-print (trade) price for a ticker.
+
+    Use this for reference pricing (e.g. logging a HOLD decision, valuing
+    positions) where we want *a* current price but don't need the tight
+    bid/ask spread validation required before submitting an order. The free
+    IEX feed produces wide quote spreads near the close as market makers
+    withdraw, which causes get_latest_price to reject quotes even though
+    the last trade print is fine — so paths that don't need spread
+    discipline should call this instead.
+
+    For order submission, keep using get_latest_price so stale/wide quotes
+    still block bad fills.
+    """
+    if client is None:
+        api_key = os.environ.get("ALPACA_API_KEY")
+        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        client = StockHistoricalDataClient(api_key, secret_key)
+    request = StockLatestTradeRequest(symbol_or_symbols=ticker)
+
+    try:
+        trades = client.get_stock_latest_trade(request)
+        trade = trades[ticker]
+        price = Decimal(str(trade.price))
+        if price == 0:
+            return None
+        return price
     except Exception:
         return None
 

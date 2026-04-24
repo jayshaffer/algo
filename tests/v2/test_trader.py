@@ -70,6 +70,7 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
             market_summary="", risk_assessment="",
         )),
         "get_latest_price": MagicMock(return_value=Decimal("150")),
+        "get_latest_trade_price": MagicMock(return_value=Decimal("150")),
         "get_live_available_qty": MagicMock(return_value=Decimal("1000")),
         "execute_market_order": MagicMock(return_value=MagicMock(
             success=True, order_id="ord-1", error=None,
@@ -730,11 +731,14 @@ class TestContextBuild:
     def test_position_loop_skips_ticker_when_price_is_none(self, mock_db, mock_cursor):
         """The loop that builds position_values for sector check skips tickers
         whose price lookup returns None (covers the 'if price:' False branch).
+        Position valuation uses the trade-price helper (not the quote-based
+        one) so wide IEX spreads near the close don't silently drop positions
+        from the sector concentration check.
         """
         with ExitStack() as stack:
             mocks = _happy_path(stack, overrides={
                 "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("10")}]),
-                "get_latest_price": MagicMock(return_value=None),
+                "get_latest_trade_price": MagicMock(return_value=None),
                 "check_sector_concentration": MagicMock(return_value=[]),
             })
             run_trading_session(dry_run=True)
@@ -1237,22 +1241,16 @@ class TestDecisionLoggingBranches:
     def test_price_is_none_for_buy_skips_log(self, mock_db, mock_cursor):
         """Price lookup returns None for a buy/sell in the logging loop → skip,
         append error (L488-490).
+
+        The logging loop uses get_latest_trade_price (trade-price reference)
+        while _prepare_decision still uses get_latest_price (quote+spread check
+        before an order). Simulate a successful buy whose order returned no
+        filled_avg_price, then a None trade-price lookup during logging.
         """
-        decision = _make_decision(action="hold", intent_magnitude=None)  # hold avoids exec path
-        # Then mutate to "buy" AFTER decision loop (not possible here cleanly).
-        # Easier approach: execute a buy, leave order_results with no fill price,
-        # and have get_latest_price also return None in the logging loop.
-        # Use two calls: first returns 150 (for resolver), then None (logging loop).
-        calls = [0]
-
-        def price_then_none(*a, **kw):
-            calls[0] += 1
-            return Decimal("150") if calls[0] == 1 else None
-
         decision = _make_decision(ticker="AAPL", action="buy")
         with ExitStack() as stack:
             mocks = _happy_path(stack, decisions=[decision], overrides={
-                "get_latest_price": MagicMock(side_effect=price_then_none),
+                "get_latest_trade_price": MagicMock(return_value=None),
                 "execute_market_order": MagicMock(return_value=MagicMock(
                     success=True, order_id="o", error=None,
                     filled_qty=None, filled_avg_price=None,

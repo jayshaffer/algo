@@ -154,6 +154,87 @@ class TestGetLatestPriceClientReuse:
         mock_client_cls.assert_called_once()
 
 
+class TestGetLatestTradePrice:
+    """Trade-price lookup path used for reference pricing (logging HOLDs,
+    valuing positions for sector concentration). Unlike get_latest_price,
+    this does NOT enforce a bid-ask spread — the free IEX feed produces wide
+    quote spreads near the close, but the last-trade print remains accurate.
+    """
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_returns_trade_price(self, mock_data_client_cls):
+        mock_trade = MagicMock()
+        mock_trade.price = 178.12
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_trade.return_value = {"CRM": mock_trade}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            from v2.executor import get_latest_trade_price
+            price = get_latest_trade_price("CRM")
+
+        assert price == Decimal("178.12")
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_returns_none_for_zero_price(self, mock_data_client_cls):
+        mock_trade = MagicMock()
+        mock_trade.price = 0
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_trade.return_value = {"CRM": mock_trade}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            from v2.executor import get_latest_trade_price
+            price = get_latest_trade_price("CRM")
+
+        assert price is None
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_returns_none_on_api_error(self, mock_data_client_cls):
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_trade.side_effect = Exception("API error")
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            from v2.executor import get_latest_trade_price
+            price = get_latest_trade_price("CRM")
+
+        assert price is None
+
+    def test_does_not_reject_wide_spread(self):
+        """Regression: trade-price lookup should ignore bid-ask spread entirely.
+
+        This is the whole point of having a separate helper — the IEX-only free
+        feed gives wide spreads near close but the last trade is fine, and paths
+        that only need reference pricing (HOLD logging, position valuation)
+        shouldn't be gated on quote quality.
+        """
+        from v2.executor import get_latest_trade_price
+        mock_trade = MagicMock()
+        mock_trade.price = 100.0
+        external_client = MagicMock()
+        external_client.get_stock_latest_trade.return_value = {"ANET": mock_trade}
+
+        price = get_latest_trade_price("ANET", client=external_client)
+
+        assert price == Decimal("100.0")
+        # Quote API must not be consulted — the whole premise is to bypass it.
+        external_client.get_stock_latest_quote.assert_not_called()
+
+    def test_uses_provided_client(self):
+        from v2.executor import get_latest_trade_price
+        mock_trade = MagicMock()
+        mock_trade.price = 42.0
+        external_client = MagicMock()
+        external_client.get_stock_latest_trade.return_value = {"SPY": mock_trade}
+
+        with patch("v2.executor.StockHistoricalDataClient") as mock_cls:
+            result = get_latest_trade_price("SPY", client=external_client)
+
+        assert result == Decimal("42.0")
+        mock_cls.assert_not_called()
+
+
 class TestWaitForFill:
     @patch("v2.executor.get_trading_client")
     def test_returns_filled_order(self, mock_client):

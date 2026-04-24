@@ -31,6 +31,7 @@ from .executor import (
     execute_market_order,
     get_account_info,
     get_latest_price,
+    get_latest_trade_price,
     get_live_available_qty,
     is_market_open,
     sync_orders_from_alpaca,
@@ -151,7 +152,7 @@ def _build_executor_context(account_info: dict, data_client, errors: list[str]) 
 
     position_values = {}
     for p in get_positions():
-        price = get_latest_price(p["ticker"], client=data_client)
+        price = get_latest_trade_price(p["ticker"], client=data_client)
         if price:
             position_values[p["ticker"]] = p["shares"] * price
     sector_warnings = check_sector_concentration(position_values, account_info["portfolio_value"])
@@ -616,7 +617,7 @@ def _log_decisions(
             result = order_results.get(i)
             price = (
                 result.filled_avg_price if result and result.filled_avg_price
-                else get_latest_price(decision.ticker, client=data_client)
+                else get_latest_trade_price(decision.ticker, client=data_client)
             )
             if price is None and decision.action in ("buy", "sell"):
                 errors.append(f"No price available for {decision.ticker} — skipping decision log")

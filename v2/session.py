@@ -219,6 +219,15 @@ def _run_strategist_stage(
             attribution_constraints=attribution_constraints,
         )
         _persist_strategist_memo(result, session_date)
+        # The agentic loop can end without calling write_playbook (max_tokens,
+        # max_turns, or the model just decides it's done). Treat a missing
+        # playbook as a stage failure so the executor guard kicks in instead
+        # of running blind against yesterday's (or no) playbook.
+        if get_playbook(session_date) is None:
+            raise RuntimeError(
+                f"Strategist finished without writing a playbook for {session_date} "
+                "(likely hit max_tokens or max_turns before calling write_playbook)"
+            )
         _complete_stage(session_id, "strategist")
     except Exception as e:
         result.strategist_error = str(e)
