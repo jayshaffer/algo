@@ -16,9 +16,15 @@ def _bypass_session_idempotency():
 
     The production idempotency check reads the live Postgres `sessions` row for
     today's date; leaving that intact makes tests flaky against shared DB state.
+
+    Also stubs get_playbook so the strategist-stage playbook-check assertion
+    (added to catch max_tokens / max_turns early-exits that leave no playbook)
+    passes by default. Tests that want to simulate "strategist wrote no
+    playbook" patch get_playbook to return None inside the test body.
     """
     with patch("v2.session.get_session_for_date", return_value=None), \
-         patch("v2.session.get_completed_stages", return_value=set()):
+         patch("v2.session.get_completed_stages", return_value=set()), \
+         patch("v2.session.get_playbook", return_value={"id": 1}):
         yield
 
 
@@ -746,6 +752,55 @@ class TestExecutorPlaybookDependency:
 
             result = run_session(dry_run=True)
 
+        mock_trade.assert_called_once()
+
+
+class TestStrategistMissingPlaybook:
+    """If run_strategist_loop returns without raising but never called
+    write_playbook (e.g. it hit max_tokens mid-tool-call), the stage must
+    still be recorded as a failure so the executor guard skips.
+    """
+
+    def test_missing_playbook_marks_strategist_failed(self):
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop") as mock_strat, \
+             patch("v2.session.get_playbook", return_value=None), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_strat.return_value = MagicMock(final_summary=None)
+
+            result = run_session(dry_run=True)
+
+        assert result.strategist_error is not None
+        assert "no playbook" in result.strategist_error.lower() or "write_playbook" in result.strategist_error
+        mock_trade.assert_not_called()
+        assert result.skipped_executor is True
+
+    def test_playbook_written_completes_stage_normally(self):
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop") as mock_strat, \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_strat.return_value = MagicMock(final_summary="all good")
+
+            result = run_session(dry_run=True)
+
+        assert result.strategist_error is None
         mock_trade.assert_called_once()
 
 
