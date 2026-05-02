@@ -246,6 +246,12 @@ class TestBlueskyStageResult:
 class TestRunBlueskyStage:
     """Verify run_bluesky_stage orchestration."""
 
+    @pytest.fixture(autouse=True)
+    def _no_prior_post(self):
+        """Default: no posted bluesky tweet exists yet (i.e., not a rerun)."""
+        with patch("v2.bluesky.posted_tweet_exists", return_value=False) as m:
+            yield m
+
     @patch("v2.bluesky.insert_tweet")
     @patch("v2.bluesky.post_to_bluesky")
     @patch("v2.bluesky.generate_bluesky_post")
@@ -316,6 +322,9 @@ class TestRunBlueskyStage:
     @patch("v2.bluesky.gather_tweet_context")
     @patch("v2.bluesky.get_bluesky_client")
     def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+        """P1.9: when post lands but DB log fails, stage records the error AND
+        does NOT claim success. See parallel test in test_twitter.py.
+        """
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
         mock_generate.return_value = {"text": "Post", "type": "recap"}
@@ -325,9 +334,26 @@ class TestRunBlueskyStage:
         }
         mock_insert.side_effect = Exception("DB write failed")
         result = run_bluesky_stage(date(2026, 2, 15))
-        assert result.post_posted is True
+        assert result.post_posted is False
         assert len(result.errors) == 1
         assert "Failed to log" in result.errors[0]
+
+    @patch("v2.bluesky.posted_tweet_exists")
+    @patch("v2.bluesky.post_to_bluesky")
+    @patch("v2.bluesky.generate_bluesky_post")
+    @patch("v2.bluesky.gather_tweet_context")
+    @patch("v2.bluesky.get_bluesky_client")
+    def test_skips_when_recap_already_posted(self, mock_client, mock_context,
+                                              mock_generate, mock_post, mock_exists):
+        """P1.9: rerun on the same session must not re-post."""
+        mock_client.return_value = MagicMock()
+        mock_exists.return_value = True
+        result = run_bluesky_stage(date(2026, 2, 15))
+        assert result.skipped is True
+        assert result.post_posted is False
+        mock_context.assert_not_called()
+        mock_generate.assert_not_called()
+        mock_post.assert_not_called()
 
 
 class TestGenerateBlueskyEntertainmentPost:

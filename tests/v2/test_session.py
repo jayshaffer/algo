@@ -46,7 +46,7 @@ class TestRunSession:
             mock_strat.side_effect = lambda **kw: call_order.append("strategist")
             mock_trade.side_effect = lambda **kw: call_order.append("trader")
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         assert call_order.index("backfill") < call_order.index("pipeline")
         assert call_order.index("attribution") < call_order.index("strategist")
@@ -60,7 +60,7 @@ class TestRunSession:
              patch("v2.session.run_strategist_loop") as mock_strat, \
              patch("v2.session.run_trading_session"):
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         mock_strat.assert_called_once()
         assert "STRONG: earnings" in str(mock_strat.call_args)
@@ -72,7 +72,7 @@ class TestRunSession:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.learning_error is not None
         assert "DB error" in result.learning_error
@@ -86,7 +86,7 @@ class TestRunSession:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"):
 
-            result = run_session(dry_run=True, skip_pipeline=True)
+            result = run_session(dry_run=False, skip_pipeline=True)
 
         mock_pipeline.assert_not_called()
         assert result.skipped_pipeline is True
@@ -100,7 +100,7 @@ class TestRunSession:
              patch("v2.session.run_strategist_loop") as mock_strat, \
              patch("v2.session.run_trading_session"):
 
-            result = run_session(dry_run=True, skip_ideation=True)
+            result = run_session(dry_run=False, skip_ideation=True)
 
         mock_strat.assert_not_called()
         assert result.skipped_ideation is True
@@ -122,7 +122,7 @@ class TestRunSession:
              patch("v2.session.run_strategist_loop") as mock_strat, \
              patch("v2.session.run_trading_session") as mock_trade:
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_pipeline.assert_called_once()
         mock_strat.assert_called_once()
@@ -173,7 +173,7 @@ class TestStage4StrategyReflection:
             mock_trade.side_effect = lambda **kw: call_order.append("trader")
             mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         assert call_order.index("trader") < call_order.index("reflection")
 
@@ -192,7 +192,7 @@ class TestStage4StrategyReflection:
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection", return_value=mock_reflection_result):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategy_result is not None
         assert result.strategy_result.rules_proposed == 1
@@ -207,7 +207,7 @@ class TestStage4StrategyReflection:
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection", side_effect=Exception("Opus down")):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategy_error == "Opus down"
         assert result.strategy_result is None
@@ -227,7 +227,7 @@ class TestStage4StrategyReflection:
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection") as mock_reflect:
 
-            result = run_session(dry_run=True, skip_strategy=True)
+            result = run_session(dry_run=False, skip_strategy=True)
 
         mock_reflect.assert_not_called()
         assert result.skipped_strategy is True
@@ -250,7 +250,7 @@ class TestStage5Twitter:
             mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
             mock_twitter.side_effect = lambda: call_order.append("twitter")
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         assert call_order.index("reflection") < call_order.index("twitter")
 
@@ -267,7 +267,7 @@ class TestStage5Twitter:
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_twitter_stage", return_value=mock_twitter_result):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.twitter_result is not None
         assert result.twitter_result.tweet_posted is True
@@ -283,7 +283,7 @@ class TestStage5Twitter:
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_twitter_stage", side_effect=Exception("Tweepy down")):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.twitter_error == "Tweepy down"
         assert result.twitter_result is None
@@ -304,7 +304,7 @@ class TestStage5Twitter:
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_twitter_stage") as mock_twitter:
 
-            result = run_session(dry_run=True, skip_twitter=True)
+            result = run_session(dry_run=False, skip_twitter=True)
 
         mock_twitter.assert_not_called()
         assert result.skipped_twitter is True
@@ -328,7 +328,7 @@ class TestStage5Bluesky:
             mock_twitter.side_effect = lambda: call_order.append("twitter")
             mock_bluesky.side_effect = lambda: call_order.append("bluesky")
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         assert call_order.index("twitter") < call_order.index("bluesky")
 
@@ -346,7 +346,7 @@ class TestStage5Bluesky:
              patch("v2.session.run_twitter_stage"), \
              patch("v2.session.run_bluesky_stage", return_value=mock_bluesky_result):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.bluesky_result is not None
         assert result.bluesky_result.post_posted is True
@@ -363,7 +363,7 @@ class TestStage5Bluesky:
              patch("v2.session.run_twitter_stage"), \
              patch("v2.session.run_bluesky_stage", side_effect=Exception("atproto down")):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.bluesky_error == "atproto down"
         assert result.bluesky_result is None
@@ -385,7 +385,7 @@ class TestStage5Bluesky:
              patch("v2.session.run_twitter_stage"), \
              patch("v2.session.run_bluesky_stage") as mock_bluesky:
 
-            result = run_session(dry_run=True, skip_bluesky=True)
+            result = run_session(dry_run=False, skip_bluesky=True)
 
         mock_bluesky.assert_not_called()
         assert result.skipped_bluesky is True
@@ -410,7 +410,7 @@ class TestStage6Dashboard:
             mock_bluesky.side_effect = lambda: call_order.append("bluesky")
             mock_dashboard.side_effect = lambda: call_order.append("dashboard")
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         assert call_order.index("bluesky") < call_order.index("dashboard")
 
@@ -429,7 +429,7 @@ class TestStage6Dashboard:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", return_value=mock_dashboard_result):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.dashboard_result is not None
         assert result.dashboard_result.published is True
@@ -447,7 +447,7 @@ class TestStage6Dashboard:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", side_effect=Exception("gh-pages down")):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.dashboard_error == "gh-pages down"
         assert result.dashboard_result is None
@@ -470,7 +470,7 @@ class TestStage6Dashboard:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage") as mock_dashboard:
 
-            result = run_session(dry_run=True, skip_dashboard=True)
+            result = run_session(dry_run=False, skip_dashboard=True)
 
         mock_dashboard.assert_not_called()
         assert result.skipped_dashboard is True
@@ -487,7 +487,7 @@ class TestSessionIdempotency:
 
             mock_get.return_value = {"id": 1, "status": "completed"}
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_pipeline.assert_not_called()
         assert result.has_errors or result.skipped_executor
@@ -508,7 +508,7 @@ class TestSessionIdempotency:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_pipeline.assert_called_once()
 
@@ -530,7 +530,7 @@ class TestSessionIdempotency:
 
             mock_get.return_value = {"id": 1, "status": "failed"}
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_pipeline.assert_called_once()
 
@@ -552,7 +552,7 @@ class TestSessionIdempotency:
 
             mock_get.return_value = {"id": 1, "status": "completed"}
 
-            result = run_session(dry_run=True, force=True)
+            result = run_session(dry_run=False, force=True)
 
         mock_pipeline.assert_called_once()
 
@@ -579,7 +579,7 @@ class TestPerStageResume:
 
             mock_get.return_value = {"id": 1, "status": "failed"}
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         # Pipeline and strategist were completed before — should be skipped
         mock_pipeline.assert_not_called()
@@ -606,7 +606,7 @@ class TestPerStageResume:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         # Should have called insert_session_stage for each stage
         stage_names_inserted = [call[0][1] for call in mock_insert_stage.call_args_list]
@@ -638,7 +638,7 @@ class TestPerStageResume:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.pipeline_error == "fetch error"
         mock_fail_stage.assert_any_call(5, "pipeline", "fetch error")
@@ -662,7 +662,7 @@ class TestPerStageResume:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         # Pipeline should still have run despite tracking failures
         mock_pipeline.assert_called_once()
@@ -689,7 +689,7 @@ class TestStrategistMemoPersistence:
              patch("v2.session.insert_strategy_memo") as mock_memo, \
              patch("v2.session.get_current_strategy_state", return_value={"id": 1}):
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         mock_memo.assert_called_once()
         assert "strategist_notes" in str(mock_memo.call_args)
@@ -710,9 +710,38 @@ class TestStrategistMemoPersistence:
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.insert_strategy_memo") as mock_memo:
 
-            run_session(dry_run=True)
+            run_session(dry_run=False)
 
         mock_memo.assert_not_called()
+
+    def test_strategist_memo_not_written_when_playbook_missing(self):
+        """P2.24: when run_strategist_loop completes but never wrote a playbook
+        (max_tokens / max_turns), the validation must fail BEFORE the memo is
+        committed. Otherwise a rerun would insert a duplicate memo on the
+        retry, and reflection would double-count the strategist's voice.
+        """
+        mock_ideation_result = MagicMock()
+        mock_ideation_result.final_summary = "Strategist would-be summary"
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
+             patch("v2.session.get_playbook", return_value=None), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
+             patch("v2.session.insert_strategy_memo") as mock_memo:
+
+            result = run_session(dry_run=False)
+
+        mock_memo.assert_not_called()
+        assert result.strategist_error is not None
+        assert "without writing a playbook" in result.strategist_error
 
 
 class TestExecutorPlaybookDependency:
@@ -730,7 +759,7 @@ class TestExecutorPlaybookDependency:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_trade.assert_not_called()
         assert result.skipped_executor is True
@@ -750,9 +779,36 @@ class TestExecutorPlaybookDependency:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         mock_trade.assert_called_once()
+
+    def test_executor_skipped_on_resume_when_playbook_missing(self):
+        """P2.23: on a resume run where the strategist completed in a prior
+        invocation but the playbook was manually deleted (or otherwise
+        vanished), the executor must skip rather than crash with TypeError
+        from `get_pending_playbook_actions(playbook["id"])` against None.
+        """
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.get_playbook", return_value=None), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.get_session_for_date", return_value={"id": 1, "status": "in_progress"}), \
+             patch("v2.session.get_completed_stages", return_value={"strategist"}), \
+             patch("v2.session.insert_session_record", return_value=1):
+
+            result = run_session(dry_run=False)
+
+        mock_trade.assert_not_called()
+        assert result.skipped_executor is True
+        # No strategist invocation this run, so no strategist_error.
+        assert result.strategist_error is None
 
 
 class TestStrategistMissingPlaybook:
@@ -776,7 +832,7 @@ class TestStrategistMissingPlaybook:
 
             mock_strat.return_value = MagicMock(final_summary=None)
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategist_error is not None
         assert "no playbook" in result.strategist_error.lower() or "write_playbook" in result.strategist_error
@@ -798,7 +854,7 @@ class TestStrategistMissingPlaybook:
 
             mock_strat.return_value = MagicMock(final_summary="all good")
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategist_error is None
         mock_trade.assert_called_once()
@@ -832,7 +888,7 @@ class TestSessionIdempotencyExceptionHandler:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         # Idempotency exception is swallowed; session ran end-to-end.
         assert not result.has_errors
@@ -861,7 +917,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.pipeline_error == "pipeline broke"
 
@@ -882,7 +938,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.pipeline_error == "pipeline broke"
 
@@ -904,7 +960,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategist_error == "strat broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -927,7 +983,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.trading_error == "trader broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -950,7 +1006,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.strategy_error == "reflection broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -973,7 +1029,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.twitter_error == "twitter broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -996,7 +1052,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage", side_effect=Exception("bluesky broke")), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.bluesky_error == "bluesky broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -1019,7 +1075,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", side_effect=Exception("dash broke")):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.dashboard_error == "dash broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
@@ -1042,7 +1098,7 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         assert result.trading_error == "trader broke"
 
@@ -1068,10 +1124,97 @@ class TestFinalSessionStatusExceptionHandler:
              patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
-            result = run_session(dry_run=True)
+            result = run_session(dry_run=False)
 
         # fail_session itself threw — run_session must still return normally.
         assert result.has_errors
+
+
+class TestDryRunSkipPromotion:
+    """P1.12: --dry-run must skip every stage that would mutate strategy state
+    or be visible to the outside world. Previously dry_run was forwarded only
+    to the executor, so strategist/reflection still wrote DB rows and the
+    Twitter/Bluesky/Dashboard publishers still posted.
+    """
+
+    def _all_mocks(self):
+        return [
+            patch("v2.session.run_backfill"),
+            patch("v2.session.compute_signal_attribution", return_value=[]),
+            patch("v2.session.build_attribution_constraints", return_value=""),
+            patch("v2.session.run_pipeline"),
+            patch("v2.session.run_strategist_loop"),
+            patch("v2.session.run_trading_session"),
+            patch("v2.session.run_strategy_reflection"),
+            patch("v2.session.run_twitter_stage"),
+            patch("v2.session.run_bluesky_stage"),
+            patch("v2.session.run_dashboard_stage"),
+        ]
+
+    def test_dry_run_skips_strategist(self):
+        ctxs = self._all_mocks()
+        mocks = [c.start() for c in ctxs]
+        try:
+            result = run_session(dry_run=True)
+            mock_strat = mocks[4]  # run_strategist_loop
+            mock_strat.assert_not_called()
+            assert result.skipped_ideation is True
+        finally:
+            for c in ctxs:
+                c.stop()
+
+    def test_dry_run_skips_reflection(self):
+        ctxs = self._all_mocks()
+        mocks = [c.start() for c in ctxs]
+        try:
+            result = run_session(dry_run=True)
+            mock_refl = mocks[6]  # run_strategy_reflection
+            mock_refl.assert_not_called()
+            assert result.skipped_strategy is True
+        finally:
+            for c in ctxs:
+                c.stop()
+
+    def test_dry_run_skips_socials_and_dashboard(self):
+        ctxs = self._all_mocks()
+        mocks = [c.start() for c in ctxs]
+        try:
+            result = run_session(dry_run=True)
+            mock_tw, mock_bs, mock_dash = mocks[7], mocks[8], mocks[9]
+            mock_tw.assert_not_called()
+            mock_bs.assert_not_called()
+            mock_dash.assert_not_called()
+            assert result.skipped_twitter is True
+            assert result.skipped_bluesky is True
+            assert result.skipped_dashboard is True
+        finally:
+            for c in ctxs:
+                c.stop()
+
+    def test_dry_run_still_runs_executor_in_dry_mode(self):
+        """The executor still runs — but in dry mode (no order submission)."""
+        ctxs = self._all_mocks()
+        mocks = [c.start() for c in ctxs]
+        try:
+            run_session(dry_run=True)
+            mock_trade = mocks[5]  # run_trading_session
+            mock_trade.assert_called_once()
+            assert mock_trade.call_args.kwargs.get("dry_run") is True
+        finally:
+            for c in ctxs:
+                c.stop()
+
+    def test_dry_run_still_runs_pipeline(self):
+        """News pipeline observes new headlines — not a strategy mutation."""
+        ctxs = self._all_mocks()
+        mocks = [c.start() for c in ctxs]
+        try:
+            run_session(dry_run=True)
+            mock_pipeline = mocks[3]
+            mock_pipeline.assert_called_once()
+        finally:
+            for c in ctxs:
+                c.stop()
 
 
 class TestCliMain:

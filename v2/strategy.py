@@ -208,9 +208,15 @@ def tool_get_session_summary(days: int = 30) -> str:
 
     decisions = get_recent_decisions(days=days)
     if decisions:
-        # Fetch signal linkage for these decisions
+        # P2.25: cap the displayed slice and make the slice explicit in the
+        # header so reflection knows it's reading the most-recent sample, not
+        # the full 30-day set. Previously the header said "Decisions (37):"
+        # while only 10 rows were rendered, biasing rule proposals toward
+        # recency without the LLM realising.
+        display_limit = 10
+        shown = decisions[:display_limit]
         from .database.connection import get_cursor
-        decision_ids = [d["id"] for d in decisions[:10]]
+        decision_ids = [d["id"] for d in shown]
         signal_map: dict[int, list[str]] = {}
         if decision_ids:
             with get_cursor() as cur:
@@ -229,8 +235,11 @@ def tool_get_session_summary(days: int = 30) -> str:
                         label += f":{row['signal_category']}"
                     signal_map.setdefault(did, []).append(label)
 
-        lines.append(f"Decisions ({len(decisions)}):")
-        for d in decisions[:10]:
+        if len(decisions) > display_limit:
+            lines.append(f"Decisions (latest {display_limit} of {len(decisions)} in last {days}d):")
+        else:
+            lines.append(f"Decisions ({len(decisions)} in last {days}d):")
+        for d in shown:
             outcome_7d = f"{d['outcome_7d']:+.1f}%" if d.get("outcome_7d") is not None else "-"
             outcome_30d = f"{d['outcome_30d']:+.1f}%" if d.get("outcome_30d") is not None else "-"
             off_pb = " [OFF-PLAYBOOK]" if d.get("is_off_playbook") else ""

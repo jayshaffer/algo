@@ -218,16 +218,17 @@ def _run_strategist_stage(
             max_turns=max_turns,
             attribution_constraints=attribution_constraints,
         )
-        _persist_strategist_memo(result, session_date)
-        # The agentic loop can end without calling write_playbook (max_tokens,
-        # max_turns, or the model just decides it's done). Treat a missing
-        # playbook as a stage failure so the executor guard kicks in instead
-        # of running blind against yesterday's (or no) playbook.
+        # P2.24: validate playbook BEFORE persisting the memo. The previous
+        # order committed the memo first, then raised on missing playbook;
+        # the failure path didn't complete the stage, so the next run re-ran
+        # the strategist and inserted a *second* memo for the same date.
+        # Validate first → fail fast → no memo on failure → no duplicates.
         if get_playbook(session_date) is None:
             raise RuntimeError(
                 f"Strategist finished without writing a playbook for {session_date} "
                 "(likely hit max_tokens or max_turns before calling write_playbook)"
             )
+        _persist_strategist_memo(result, session_date)
         _complete_stage(session_id, "strategist")
     except Exception as e:
         result.strategist_error = str(e)
@@ -244,16 +245,22 @@ def _run_executor_stage(
     executor_model: str,
     session_date,
 ) -> None:
-    # Short-circuit: strategist failed AND no playbook → flip to skipped before
-    # falling through to the skip log. Preserves log parity with the pre-extract
-    # body which emitted both the warning and the "SKIPPED" log line.
+    # P2.23: short-circuit on missing playbook regardless of strategist_error.
+    # The previous condition required `result.strategist_error` to flip to
+    # skipped — but on a resume run where strategist was completed in a prior
+    # invocation, strategist_error is None even if the playbook was manually
+    # deleted. The executor would then try to read get_pending_playbook_actions
+    # against a None row and crash with TypeError. The truthy check below is
+    # the right contract: "if no playbook for today, skip the executor."
     if (
         not skip
         and "executor" not in completed_stages
-        and result.strategist_error
         and get_playbook(session_date) is None
     ):
-        logger.warning("Strategist failed and no playbook exists for %s — skipping executor", session_date)
+        if result.strategist_error:
+            logger.warning("Strategist failed and no playbook exists for %s — skipping executor", session_date)
+        else:
+            logger.warning("No playbook exists for %s (resume + manual cleanup?) — skipping executor", session_date)
         skip = True
         result.skipped_executor = True
 
@@ -398,6 +405,21 @@ def run_session(
     force: bool = False,
 ) -> SessionResult:
     start = time.monotonic()
+
+    # P1.12: --dry-run was misleading — it only gated the executor's order
+    # submission, leaving the strategist (writes theses/playbooks/memos) and
+    # reflection (writes rules/memos/identity) and the social/dashboard
+    # publishers free to mutate state and post publicly. Promote dry_run to
+    # the skip flags for any stage that would otherwise mutate strategy state
+    # or be visible to the outside world. Pipeline is left running (it just
+    # observes new news; not a strategy mutation).
+    if dry_run:
+        skip_ideation = True
+        skip_strategy = True
+        skip_twitter = True
+        skip_bluesky = True
+        skip_dashboard = True
+
     result = SessionResult(
         skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation,
         skipped_executor=skip_executor, skipped_strategy=skip_strategy,

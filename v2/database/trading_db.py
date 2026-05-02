@@ -22,15 +22,26 @@ def insert_news_signal(ticker, headline, category, sentiment, confidence, publis
 
 
 def insert_news_signals_batch(signals: list[tuple]) -> int:
+    """Batch-insert news_signals rows.
+
+    Tuple shape: (ticker, headline, category, sentiment, confidence, published_at, alpaca_id?).
+    For backward compatibility with 6-element tuples (no alpaca_id), we pad with None.
+    """
     if not signals:
         return 0
+    # P2.16: tolerate the legacy 6-tuple shape until all callers are updated.
+    normalized = [
+        (*s, None) if len(s) == 6 else s
+        for s in signals
+    ]
     with get_cursor() as cur:
         execute_values(cur, """
-            INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at)
+            INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at, alpaca_id)
             VALUES %s
             ON CONFLICT DO NOTHING
-        """, signals)
-        return len(signals)
+        """, normalized)
+        # P2.21: report what was actually inserted, not the input count.
+        return cur.rowcount if cur.rowcount is not None else 0
 
 
 def get_news_signals(ticker=None, days=7) -> list:
@@ -63,15 +74,25 @@ def insert_macro_signal(headline, category, affected_sectors, sentiment, publish
 
 
 def insert_macro_signals_batch(signals: list[tuple]) -> int:
+    """Batch-insert macro_signals rows.
+
+    Tuple shape: (headline, category, affected_sectors, sentiment, published_at, alpaca_id?).
+    """
     if not signals:
         return 0
+    # P2.16: pad legacy 5-tuples with None for alpaca_id.
+    normalized = [
+        (*s, None) if len(s) == 5 else s
+        for s in signals
+    ]
     with get_cursor() as cur:
         execute_values(cur, """
-            INSERT INTO macro_signals (headline, category, affected_sectors, sentiment, published_at)
+            INSERT INTO macro_signals (headline, category, affected_sectors, sentiment, published_at, alpaca_id)
             VALUES %s
             ON CONFLICT DO NOTHING
-        """, signals)
-        return len(signals)
+        """, normalized)
+        # P2.21: report what was actually inserted, not the input count.
+        return cur.rowcount if cur.rowcount is not None else 0
 
 
 def get_macro_signals(category=None, days=7) -> list:
@@ -429,6 +450,63 @@ def delete_playbook_actions(playbook_id) -> int:
         return cur.rowcount
 
 
+def replace_playbook_actions_atomic(
+    playbook_date, market_outlook, priority_actions, watch_list, risk_notes,
+    actions: list[dict],
+) -> tuple[int, int]:
+    """P2.22: atomic upsert-playbook + clear-old-actions + insert-new-actions.
+
+    The previous tool_write_playbook flow used three separate `get_cursor()`
+    contexts (own connection, own transaction). Mid-loop failure left the
+    playbook row + half the actions in DB with no rollback, so the executor
+    traded on incomplete intent. Wrapping it in one transaction makes the
+    operation truly all-or-nothing.
+
+    Returns (playbook_id, action_count).
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO playbooks (date, market_outlook, priority_actions, watch_list, risk_notes)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (date) DO UPDATE SET
+                market_outlook = EXCLUDED.market_outlook,
+                priority_actions = EXCLUDED.priority_actions,
+                watch_list = EXCLUDED.watch_list,
+                risk_notes = EXCLUDED.risk_notes,
+                created_at = NOW()
+            RETURNING id
+        """, (playbook_date, market_outlook, Json(priority_actions), watch_list, risk_notes))
+        playbook_id = cur.fetchone()["id"]
+
+        cur.execute(
+            "UPDATE decisions SET playbook_action_id = NULL "
+            "WHERE playbook_action_id IN (SELECT id FROM playbook_actions WHERE playbook_id = %s)",
+            (playbook_id,),
+        )
+        cur.execute("DELETE FROM playbook_actions WHERE playbook_id = %s", (playbook_id,))
+
+        from decimal import Decimal as _Decimal
+        for i, action in enumerate(actions):
+            intent_magnitude = action.get("intent_magnitude")
+            cur.execute("""
+                INSERT INTO playbook_actions
+                    (playbook_id, ticker, action, thesis_id, reasoning,
+                     confidence, intent_type, intent_magnitude, priority)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                playbook_id,
+                action.get("ticker"),
+                action.get("action"),
+                action.get("thesis_id"),
+                action.get("reasoning", ""),
+                action.get("confidence", "medium"),
+                action.get("intent_type"),
+                _Decimal(str(intent_magnitude)) if intent_magnitude is not None else None,
+                i + 1,
+            ))
+    return playbook_id, len(actions)
+
+
 # --- Decision Signals ---
 
 def insert_thesis_signals(thesis_id: int, signal_refs: list[dict]) -> int:
@@ -490,19 +568,25 @@ def get_decision_signals(decision_id) -> list:
 
 # --- Signal Attribution ---
 
-def upsert_signal_attribution(category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d):
+def upsert_signal_attribution(category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d, sample_size_30d=None):
+    """P2.17: sample_size_30d is the count of decisions with both 7d AND 30d
+    outcomes. The 7d-only `sample_size` is preserved for backward compatibility.
+    """
+    if sample_size_30d is None:
+        sample_size_30d = sample_size  # legacy fallback
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO signal_attribution (category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO signal_attribution (category, sample_size, sample_size_30d, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (category) DO UPDATE SET
                 sample_size = EXCLUDED.sample_size,
+                sample_size_30d = EXCLUDED.sample_size_30d,
                 avg_outcome_7d = EXCLUDED.avg_outcome_7d,
                 avg_outcome_30d = EXCLUDED.avg_outcome_30d,
                 win_rate_7d = EXCLUDED.win_rate_7d,
                 win_rate_30d = EXCLUDED.win_rate_30d,
                 updated_at = NOW()
-        """, (category, sample_size, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d))
+        """, (category, sample_size, sample_size_30d, avg_outcome_7d, avg_outcome_30d, win_rate_7d, win_rate_30d))
 
 
 def get_signal_attribution() -> list:
@@ -640,6 +724,27 @@ def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=Fal
             RETURNING id
         """, (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform))
         return cur.fetchone()["id"]
+
+
+def posted_tweet_exists(session_date, tweet_type: str, platform: str) -> bool:
+    """Return True if a posted=TRUE tweet already exists for this slot.
+
+    Used by Twitter/Bluesky stages to short-circuit on rerun and avoid
+    re-generating + re-posting an already-published tweet (P1.9).
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM tweets
+            WHERE session_date = %s
+              AND tweet_type = %s
+              AND platform = %s
+              AND posted = TRUE
+            LIMIT 1
+            """,
+            (session_date, tweet_type, platform),
+        )
+        return cur.fetchone() is not None
 
 
 def get_tweets_for_date(session_date) -> list:

@@ -333,7 +333,7 @@ class TestGeneratePatternReport:
 
         assert report.startswith("Pattern Analysis Report (90 days)")
         assert "=" * 50 in report
-        assert "Signal Category Performance:" in report
+        assert "Signal Category Performance" in report  # P2.19: header now reads "(alpha vs SPY)"
         assert "news_signal:earnings" in report
 
     def test_empty_data(self, mock_db):

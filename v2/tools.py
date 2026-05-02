@@ -9,7 +9,6 @@ from .context import get_macro_context, get_portfolio_context
 from .agent import validate_signal_refs
 from .database.trading_db import (
     close_thesis,
-    delete_playbook_actions,
     get_active_strategy_rules,
     get_active_theses,
     get_current_strategy_state,
@@ -18,11 +17,10 @@ from .database.trading_db import (
     get_positions,
     get_recent_decisions,
     get_recent_strategy_memos,
-    insert_playbook_action,
     insert_thesis,
     insert_thesis_signals,
+    replace_playbook_actions_atomic,
     update_thesis,
-    upsert_playbook,
 )
 from .executor import get_account_info
 from .market_data import format_market_snapshot, get_market_snapshot
@@ -373,36 +371,17 @@ def tool_write_playbook(
 
     try:
         playbook_date = date.today()
-
-        # Write playbook row (upsert)
-        playbook_id = upsert_playbook(
+        # P2.22: single transaction for upsert + delete + N inserts. The
+        # previous flow had three separate connections, so a mid-loop failure
+        # left the playbook row + a subset of actions with no rollback.
+        playbook_id, action_count = replace_playbook_actions_atomic(
             playbook_date=playbook_date,
             market_outlook=market_outlook,
             priority_actions=priority_actions,
             watch_list=watch_list,
             risk_notes=risk_notes,
+            actions=priority_actions,
         )
-
-        # Delete old playbook_actions for this playbook
-        delete_playbook_actions(playbook_id)
-
-        # Insert new playbook_actions rows
-        for i, action in enumerate(priority_actions):
-            intent_type = action.get("intent_type")
-            intent_magnitude = action.get("intent_magnitude")
-            insert_playbook_action(
-                playbook_id=playbook_id,
-                ticker=action.get("ticker"),
-                action=action.get("action"),
-                thesis_id=action.get("thesis_id"),
-                reasoning=action.get("reasoning", ""),
-                confidence=action.get("confidence", "medium"),
-                intent_type=intent_type,
-                intent_magnitude=Decimal(str(intent_magnitude)) if intent_magnitude is not None else None,
-                priority=i + 1,
-            )
-
-        action_count = len(priority_actions)
         return (
             f"Playbook written for {playbook_date} "
             f"(ID: {playbook_id}, {action_count} actions)"

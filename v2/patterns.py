@@ -49,7 +49,11 @@ class ConfidenceCorrelation:
 
 def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
     """Analyze which signal categories lead to profitable trades.
-    Uses decision_signals FK as single source of truth."""
+    Uses decision_signals FK as single source of truth.
+
+    P2.19: reports alpha (outcome - benchmark) instead of raw outcome so
+    pattern labels stay coherent with attribution.py during bull/bear runs.
+    """
     with get_cursor() as cur:
         cur.execute("""
             SELECT
@@ -61,10 +65,10 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
                     ELSE ds.signal_type
                 END AS category,
                 COUNT(DISTINCT ds.decision_id) as total_signals,
-                AVG(d.outcome_7d) as avg_outcome_7d,
-                AVG(d.outcome_30d) as avg_outcome_30d,
-                AVG(CASE WHEN d.outcome_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d,
-                AVG(CASE WHEN d.outcome_30d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_30d
+                AVG(d.outcome_7d - d.benchmark_7d) as avg_outcome_7d,
+                AVG(d.outcome_30d - d.benchmark_30d) as avg_outcome_30d,
+                AVG(CASE WHEN d.outcome_7d - d.benchmark_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d,
+                AVG(CASE WHEN d.outcome_30d - d.benchmark_30d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_30d
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
@@ -73,6 +77,7 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
               AND d.action IN ('buy', 'sell')
               AND d.outcome_7d IS NOT NULL
+              AND d.benchmark_7d IS NOT NULL
               AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
               AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
               AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
@@ -94,15 +99,18 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
 
 
 def analyze_sentiment_performance(days: int = 90) -> list[SentimentPerformance]:
-    """Analyze performance by signal sentiment. JOINs through decision_signals FK."""
+    """Analyze performance by signal sentiment. JOINs through decision_signals FK.
+
+    P2.19: alpha (outcome - benchmark), aligned with attribution.py.
+    """
     with get_cursor() as cur:
         cur.execute("""
             SELECT
                 ns.sentiment,
                 COUNT(DISTINCT ds.decision_id) as total_decisions,
-                AVG(d.outcome_7d) as avg_outcome_7d,
-                AVG(d.outcome_30d) as avg_outcome_30d,
-                AVG(CASE WHEN d.outcome_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d
+                AVG(d.outcome_7d - d.benchmark_7d) as avg_outcome_7d,
+                AVG(d.outcome_30d - d.benchmark_30d) as avg_outcome_30d,
+                AVG(CASE WHEN d.outcome_7d - d.benchmark_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
@@ -110,6 +118,7 @@ def analyze_sentiment_performance(days: int = 90) -> list[SentimentPerformance]:
               AND d.action IN ('buy', 'sell')
               AND ns.sentiment IS NOT NULL
               AND d.outcome_7d IS NOT NULL
+              AND d.benchmark_7d IS NOT NULL
             GROUP BY ns.sentiment
             ORDER BY avg_outcome_7d DESC NULLS LAST
         """, (days,))
@@ -162,14 +171,14 @@ def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
 
 def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation]:
     """Correlation between stated confidence and actual outcomes.
-    JOINs through decision_signals FK."""
+    JOINs through decision_signals FK. P2.19: alpha not raw outcome."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT
                 ns.confidence,
                 COUNT(DISTINCT ds.decision_id) as total_decisions,
-                AVG(d.outcome_7d) as avg_outcome_7d,
-                AVG(CASE WHEN d.outcome_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d
+                AVG(d.outcome_7d - d.benchmark_7d) as avg_outcome_7d,
+                AVG(CASE WHEN d.outcome_7d - d.benchmark_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
@@ -177,6 +186,7 @@ def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation
               AND d.action IN ('buy', 'sell')
               AND ns.confidence IS NOT NULL
               AND d.outcome_7d IS NOT NULL
+              AND d.benchmark_7d IS NOT NULL
             GROUP BY ns.confidence
             ORDER BY
                 CASE ns.confidence
@@ -233,24 +243,24 @@ def generate_pattern_report(days: int = 90) -> str:
         "",
     ]
 
-    # Signal categories
+    # Signal categories — P2.19: alpha labelling matches attribution.py.
     signal_perf = analyze_signal_categories(days)
     if signal_perf:
-        lines.append("Signal Category Performance:")
+        lines.append("Signal Category Performance (alpha vs SPY):")
         for sp in signal_perf:
             outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d else "N/A"
             win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d else "N/A"
-            lines.append(f"  {sp.category}: {outcome} avg (win rate: {win_rate}, n={sp.total_signals})")
+            lines.append(f"  {sp.category}: {outcome} avg alpha (beat-market rate: {win_rate}, n={sp.total_signals})")
         lines.append("")
 
     # Sentiment performance
     sentiment_perf = analyze_sentiment_performance(days)
     if sentiment_perf:
-        lines.append("Sentiment Performance:")
+        lines.append("Sentiment Performance (alpha vs SPY):")
         for sp in sentiment_perf:
             outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d else "N/A"
             win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d else "N/A"
-            lines.append(f"  {sp.sentiment}: {outcome} avg (win rate: {win_rate}, n={sp.total_decisions})")
+            lines.append(f"  {sp.sentiment}: {outcome} avg alpha (beat-market rate: {win_rate}, n={sp.total_decisions})")
         lines.append("")
 
     # Top tickers
@@ -265,11 +275,11 @@ def generate_pattern_report(days: int = 90) -> str:
     # Confidence correlation
     conf_perf = analyze_confidence_correlation(days)
     if conf_perf:
-        lines.append("Confidence vs Outcomes:")
+        lines.append("Confidence vs Alpha:")
         for cp in conf_perf:
             outcome = f"{cp.avg_outcome_7d:+.2f}%" if cp.avg_outcome_7d else "N/A"
             win_rate = f"{cp.win_rate_7d:.0f}%" if cp.win_rate_7d else "N/A"
-            lines.append(f"  {cp.confidence}: {outcome} avg (win rate: {win_rate})")
+            lines.append(f"  {cp.confidence}: {outcome} avg alpha (beat-market rate: {win_rate})")
         lines.append("")
 
     # Best/worst signals

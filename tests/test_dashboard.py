@@ -513,11 +513,16 @@ class TestPerformancePageBenchmark:
 class TestApiCloseThesis:
     """Tests for POST /api/theses/<id>/close."""
 
+    # P1.10: dashboard mutating endpoints require X-Requested-With: dashboard
+    # as defense-in-depth against cross-origin form-based CSRF.
+    HEADERS = {"X-Requested-With": "dashboard"}
+
     def test_close_thesis_invalidated(self, client):
         mock_queries.close_thesis.return_value = True
         resp = client.post(
             "/api/theses/1/close",
             json={"status": "invalidated", "reason": "Revenue declined"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -529,6 +534,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/5/close",
             json={"status": "expired", "reason": "Thesis aged out"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -539,6 +545,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/1/close",
             json={"status": "active"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 400
         data = resp.get_json()
@@ -550,6 +557,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/1/close",
             json={"reason": "some reason"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 400
         data = resp.get_json()
@@ -560,6 +568,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/999/close",
             json={"status": "invalidated"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 404
         data = resp.get_json()
@@ -570,6 +579,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/1/close",
             json={"status": "invalidated"},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 500
         data = resp.get_json()
@@ -580,6 +590,7 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/1/close",
             json={"status": "invalidated", "reason": "   "},
+            headers=self.HEADERS,
         )
         assert resp.status_code == 200
         mock_queries.close_thesis.assert_called_once_with(1, "invalidated", None)
@@ -588,8 +599,28 @@ class TestApiCloseThesis:
         resp = client.post(
             "/api/theses/1/close",
             content_type="application/json",
+            headers=self.HEADERS,
         )
         assert resp.status_code == 400
+
+    def test_close_thesis_without_csrf_header_returns_403(self, client):
+        """P1.10: missing X-Requested-With must reject before any DB work."""
+        resp = client.post(
+            "/api/theses/1/close",
+            json={"status": "invalidated"},
+        )
+        assert resp.status_code == 403
+        mock_queries.close_thesis.assert_not_called()
+
+    def test_close_thesis_with_wrong_csrf_header_returns_403(self, client):
+        """P1.10: a wrong header value must also reject."""
+        resp = client.post(
+            "/api/theses/1/close",
+            json={"status": "invalidated"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        assert resp.status_code == 403
+        mock_queries.close_thesis.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

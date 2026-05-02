@@ -228,7 +228,10 @@ async function confirmClose() {
     try {
         const response = await fetch(`/api/theses/${currentThesisId}/close`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'dashboard',
+            },
             body: JSON.stringify({ status: currentStatus, reason: reason || null })
         });
 

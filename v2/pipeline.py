@@ -35,7 +35,8 @@ def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False) -> Pi
     # Step 2: Classify with Haiku (batched)
     headlines = [item.headline for item in news_items]
     published_ats = [item.published_at for item in news_items]
-    results = classify_news_batch(headlines, published_ats)
+    alpaca_ids = [item.id for item in news_items]
+    results = classify_news_batch(headlines, published_ats, alpaca_ids=alpaca_ids)
 
     # Step 3: Store signals
     ticker_signals_batch = []
@@ -49,14 +50,15 @@ def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False) -> Pi
         for signal in result.ticker_signals:
             ticker_signals_batch.append((
                 signal.ticker, signal.headline, signal.category,
-                signal.sentiment, signal.confidence, signal.published_at
+                signal.sentiment, signal.confidence, signal.published_at,
+                signal.alpaca_id,
             ))
 
         if result.macro_signal:
             s = result.macro_signal
             macro_signals_batch.append((
                 s.headline, s.category, s.affected_sectors,
-                s.sentiment, s.published_at
+                s.sentiment, s.published_at, s.alpaca_id,
             ))
 
     if not dry_run:

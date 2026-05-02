@@ -11,7 +11,7 @@ from datetime import date
 
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor
-from .database.trading_db import insert_tweet
+from .database.trading_db import insert_tweet, posted_tweet_exists
 from .executor import get_net_deposits
 
 logger = logging.getLogger("twitter")
@@ -291,6 +291,19 @@ def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
         logger.info("Twitter stage skipped — no credentials")
         return result
 
+    # P1.9: short-circuit reruns. If a tweet for this session+platform was
+    # already posted, skip generate + post entirely. Avoids both the API spend
+    # and the duplicate-post risk that motivated the audit finding.
+    try:
+        if posted_tweet_exists(session_date, "recap", "twitter"):
+            result.skipped = True
+            logger.info("Twitter stage skipped — recap tweet already posted for %s", session_date)
+            return result
+    except Exception as e:
+        # Don't block on a transient DB error here — fall through to the
+        # post path; insert failure later will surface in result.errors.
+        logger.warning("Twitter stage: posted_tweet_exists check failed (%s); proceeding", e)
+
     # Gather context
     try:
         context = gather_tweet_context(session_date)
@@ -320,6 +333,7 @@ def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
         return result
 
     # Log result to DB
+    db_logged = True
     try:
         insert_tweet(
             session_date=session_date,
@@ -330,10 +344,14 @@ def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
             error=post_result.get("error"),
         )
     except Exception as e:
+        db_logged = False
         result.errors.append(f"Failed to log tweet: {e}")
         logger.error("Failed to log tweet to DB: %s", e)
 
-    result.tweet_posted = post_result["posted"]
+    # P1.9: don't claim success when the post landed but DB record failed.
+    # The post is real on the platform, but we have no audit trail and a rerun
+    # would re-post. Operator must inspect platform vs DB and reconcile.
+    result.tweet_posted = post_result["posted"] and db_logged
 
     logger.info(
         "Twitter stage complete: posted=%s",

@@ -60,6 +60,10 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
             SELECT
                 category,
                 COUNT(DISTINCT decision_id) AS sample_size,
+                -- P2.17: 30d cohort is a subset; track its size separately so
+                -- consumers don't read sample_size as supporting both metrics.
+                COUNT(DISTINCT CASE WHEN alpha_30d IS NOT NULL THEN decision_id END)
+                    AS sample_size_30d,
                 AVG(alpha_7d) AS avg_outcome_7d,
                 AVG(alpha_30d) AS avg_outcome_30d,
                 AVG(CASE WHEN alpha_7d > 0 THEN 1.0 ELSE 0.0 END) AS win_rate_7d,
@@ -76,6 +80,7 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
         upsert_signal_attribution(
             category=row["category"],
             sample_size=row["sample_size"],
+            sample_size_30d=row.get("sample_size_30d") or 0,
             avg_outcome_7d=row["avg_outcome_7d"] or Decimal(0),
             avg_outcome_30d=row["avg_outcome_30d"] or Decimal(0),
             win_rate_7d=row["win_rate_7d"] or Decimal(0),

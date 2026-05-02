@@ -111,7 +111,8 @@ tasks:
     desc: Run full daily session on paper trading
     deps: [paper:up]
     cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --skip-twitter --skip-bluesky --skip-dashboard {{.CLI_ARGS}} --force
+      # P1.11: --force was bypassing session idempotency, duplicating decisions/snapshots/etc on rerun. Pass --force via {{.CLI_ARGS}} when intentional.
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --skip-twitter --skip-bluesky --skip-dashboard {{.CLI_ARGS}}
 
   paper:session:dry-run:
     desc: Dry-run the full daily session on paper trading

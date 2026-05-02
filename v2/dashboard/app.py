@@ -22,6 +22,13 @@ from v2.database.dashboard_db import (
 app = Flask(__name__)
 
 
+# P1.10: see comment in dashboard/app.py — defense-in-depth header check.
+def _require_dashboard_origin():
+    if request.headers.get("X-Requested-With") != "dashboard":
+        return jsonify({"error": "Forbidden"}), 403
+    return None
+
+
 @app.route("/")
 def portfolio():
     """Portfolio overview page."""
@@ -124,6 +131,10 @@ def performance():
 @app.route("/api/theses/<int:thesis_id>/close", methods=["POST"])
 def api_close_thesis(thesis_id):
     """Close a thesis with status and optional reason."""
+    forbidden = _require_dashboard_origin()
+    if forbidden:
+        return forbidden
+
     data = request.get_json() or {}
     status = data.get("status")
     reason = data.get("reason", "").strip() or None

@@ -63,11 +63,35 @@ class TestNewsSignals:
 
     @patch("v2.database.trading_db.execute_values")
     def test_insert_news_signals_batch(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.21: returns cur.rowcount, not len(signals)."""
+        mock_cursor.rowcount = 1
         from v2.database.trading_db import insert_news_signals_batch
         signals = [("AAPL", "Test", "earnings", "bullish", "high", datetime.now())]
         result = insert_news_signals_batch(signals)
         assert result == 1
         mock_exec_values.assert_called_once()
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_insert_news_signals_batch_skipped_rows_reflected(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.21: ON CONFLICT DO NOTHING skipped rows must lower the returned count."""
+        mock_cursor.rowcount = 0  # all 2 rows conflict
+        from v2.database.trading_db import insert_news_signals_batch
+        signals = [
+            ("AAPL", "Test", "earnings", "bullish", "high", datetime.now()),
+            ("AAPL", "Test2", "earnings", "bullish", "high", datetime.now()),
+        ]
+        assert insert_news_signals_batch(signals) == 0
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_insert_news_signals_batch_with_alpaca_id(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.16: 7-tuple form including alpaca_id is accepted."""
+        mock_cursor.rowcount = 1
+        from v2.database.trading_db import insert_news_signals_batch
+        signals = [("AAPL", "Test", "earnings", "bullish", "high", datetime.now(), "news-id-123")]
+        insert_news_signals_batch(signals)
+        # The SQL must reference alpaca_id; pad of legacy tuples didn't change the column list.
+        sql = mock_exec_values.call_args[0][1]
+        assert "alpaca_id" in sql
 
     def test_get_news_signals(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"id": 1, "ticker": "AAPL"}]
@@ -96,6 +120,8 @@ class TestMacroSignals:
 
     @patch("v2.database.trading_db.execute_values")
     def test_insert_macro_signals_batch(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.21: returns cur.rowcount, not len(signals)."""
+        mock_cursor.rowcount = 1
         from v2.database.trading_db import insert_macro_signals_batch
         signals = [("Fed holds", "fed", ["finance"], "neutral", datetime.now())]
         result = insert_macro_signals_batch(signals)

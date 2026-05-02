@@ -11,7 +11,7 @@ from datetime import date
 
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
-from .database.trading_db import insert_tweet
+from .database.trading_db import insert_tweet, posted_tweet_exists
 from .twitter import gather_tweet_context
 
 logger = logging.getLogger("bluesky")
@@ -336,6 +336,15 @@ def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
         logger.info("Bluesky stage skipped — no credentials")
         return result
 
+    # P1.9: short-circuit reruns — see equivalent guard in v2/twitter.py.
+    try:
+        if posted_tweet_exists(session_date, "recap", "bluesky"):
+            result.skipped = True
+            logger.info("Bluesky stage skipped — recap post already published for %s", session_date)
+            return result
+    except Exception as e:
+        logger.warning("Bluesky stage: posted_tweet_exists check failed (%s); proceeding", e)
+
     # Gather context (reuse from twitter module)
     try:
         context = gather_tweet_context(session_date)
@@ -365,6 +374,7 @@ def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
         return result
 
     # Log result to DB
+    db_logged = True
     try:
         insert_tweet(
             session_date=session_date,
@@ -376,10 +386,12 @@ def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
             platform="bluesky",
         )
     except Exception as e:
+        db_logged = False
         result.errors.append(f"Failed to log post: {e}")
         logger.error("Failed to log Bluesky post to DB: %s", e)
 
-    result.post_posted = post_result["posted"]
+    # P1.9: don't claim success when DB record failed — see twitter.py.
+    result.post_posted = post_result["posted"] and db_logged
 
     logger.info("Bluesky stage complete: posted=%s", result.post_posted)
 

@@ -34,6 +34,17 @@ from queries import (
 app = Flask(__name__)
 
 
+# P1.10: dashboard mutating endpoints (close-thesis et al.) rely on docker
+# port mapping for network isolation (compose binds to 127.0.0.1:3000). This
+# header check is defense-in-depth: blocks cross-origin browser POSTs that
+# send form-urlencoded bodies (which don't trigger a CORS preflight) by
+# requiring a custom header that cross-origin scripts can't add without one.
+def _require_dashboard_origin():
+    if request.headers.get("X-Requested-With") != "dashboard":
+        return jsonify({"error": "Forbidden"}), 403
+    return None
+
+
 @app.route("/")
 def portfolio():
     """Portfolio overview page."""
@@ -181,6 +192,10 @@ def tweets():
 @app.route("/api/theses/<int:thesis_id>/close", methods=["POST"])
 def api_close_thesis(thesis_id):
     """Close a thesis with status and optional reason."""
+    forbidden = _require_dashboard_origin()
+    if forbidden:
+        return forbidden
+
     data = request.get_json() or {}
     status = data.get("status")
     reason = data.get("reason", "").strip() or None

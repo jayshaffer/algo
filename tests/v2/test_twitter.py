@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from v2.database.trading_db import get_tweets_for_date, insert_tweet
+from v2.database.trading_db import get_tweets_for_date, insert_tweet, posted_tweet_exists
 from v2.twitter import (
     TwitterStageResult,
     gather_tweet_context,
@@ -94,6 +94,21 @@ class TestGetTweetsForDate:
         mock_db.fetchall.return_value = []
         result = get_tweets_for_date(date(2026, 2, 15))
         assert result == []
+
+
+class TestPostedTweetExists:
+    """P1.9: pre-stage rerun guard helper."""
+
+    def test_returns_true_when_posted_row_exists(self, mock_db):
+        mock_db.fetchone.return_value = {"?column?": 1}
+        assert posted_tweet_exists(date(2026, 2, 15), "recap", "twitter") is True
+        sql = mock_db.execute.call_args[0][0]
+        assert "posted = TRUE" in sql
+        assert "platform = %s" in sql
+
+    def test_returns_false_when_no_row(self, mock_db):
+        mock_db.fetchone.return_value = None
+        assert posted_tweet_exists(date(2026, 2, 15), "recap", "twitter") is False
 
 
 class TestGatherTweetContext:
@@ -381,6 +396,14 @@ class TestPostTweet:
 class TestRunTwitterStage:
     """Verify run_twitter_stage orchestration."""
 
+    @pytest.fixture(autouse=True)
+    def _no_prior_post(self):
+        """Default: no posted tweet exists yet (i.e., not a rerun). Tests that
+        want the rerun-skip path patch v2.twitter.posted_tweet_exists locally.
+        """
+        with patch("v2.twitter.posted_tweet_exists", return_value=False) as m:
+            yield m
+
     @patch("v2.twitter.insert_tweet")
     @patch("v2.twitter.post_tweet")
     @patch("v2.twitter.generate_tweet")
@@ -446,6 +469,11 @@ class TestRunTwitterStage:
     @patch("v2.twitter.gather_tweet_context")
     @patch("v2.twitter.get_twitter_client")
     def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+        """P1.9: when post lands but DB log fails, stage records the error AND
+        does NOT claim success. The tweet is real on Twitter but we have no
+        audit trail — operator must reconcile. Claiming `tweet_posted=True`
+        would let a rerun re-post (no DB row visible in the rerun's pre-check).
+        """
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
         mock_generate.return_value = {"text": "Tweet", "type": "recap"}
@@ -454,9 +482,51 @@ class TestRunTwitterStage:
         }
         mock_insert.side_effect = Exception("DB write failed")
         result = run_twitter_stage(date(2026, 2, 15))
-        assert result.tweet_posted is True
+        assert result.tweet_posted is False
         assert len(result.errors) == 1
         assert "Failed to log tweet" in result.errors[0]
+
+    @patch("v2.twitter.posted_tweet_exists")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_skips_when_recap_already_posted(self, mock_client, mock_context,
+                                              mock_generate, mock_post, mock_exists):
+        """P1.9: rerun on the same session must not re-post. The pre-stage
+        check fires before generate/post so we don't burn Anthropic spend either.
+        """
+        mock_client.return_value = MagicMock()
+        mock_exists.return_value = True
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.skipped is True
+        assert result.tweet_posted is False
+        mock_context.assert_not_called()
+        mock_generate.assert_not_called()
+        mock_post.assert_not_called()
+
+    @patch("v2.twitter.insert_tweet")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.posted_tweet_exists")
+    @patch("v2.twitter.get_twitter_client")
+    def test_proceeds_when_pre_check_raises(self, mock_client, mock_exists,
+                                             mock_context, mock_generate, mock_post, mock_insert):
+        """A transient DB error on the pre-check should not block posting —
+        the post path itself is the source of truth, and a duplicate insert
+        will surface in the result errors. (Defense in depth.)
+        """
+        mock_client.return_value = MagicMock()
+        mock_exists.side_effect = Exception("db down")
+        mock_context.return_value = "ctx"
+        mock_generate.return_value = {"text": "Tweet", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Tweet", "type": "recap", "posted": True, "tweet_id": "1", "error": None,
+        }
+        result = run_twitter_stage(date(2026, 2, 15))
+        assert result.tweet_posted is True
+        mock_post.assert_called_once()
 
 
 class TestTwitterStageResult:

@@ -336,6 +336,8 @@ class TestWaitForFillCancellation:
         """On timeout, cancel_order_by_id should be called to prevent ghost fills."""
         mock_order = MagicMock()
         mock_order.status.value = "accepted"
+        mock_order.filled_qty = None
+        mock_order.filled_avg_price = None
         mock_client.return_value.get_order_by_id.return_value = mock_order
 
         from v2.executor import wait_for_fill
@@ -350,6 +352,8 @@ class TestWaitForFillCancellation:
         """If cancel fails, should still return timeout error (not raise)."""
         mock_order = MagicMock()
         mock_order.status.value = "accepted"
+        mock_order.filled_qty = None
+        mock_order.filled_avg_price = None
         mock_client.return_value.get_order_by_id.return_value = mock_order
         mock_client.return_value.cancel_order_by_id.side_effect = Exception("API error")
 
@@ -359,6 +363,79 @@ class TestWaitForFillCancellation:
         assert result.success is False
         assert "cancel attempted" in result.error.lower()
         mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
+
+
+class TestWaitForFillPartialFillOnTimeout:
+    """P1.13: timeout must capture any qty that filled before cancel landed,
+    so the decision-to-fill link survives. Previously the executor returned
+    `filled_qty=None` and the decision row was logged with `order_id=None` —
+    position sync saw the shares but attribution couldn't trace them.
+    """
+
+    @patch("v2.executor.get_trading_client")
+    def test_timeout_with_partial_fill_returns_success(self, mock_client):
+        """Order timed out with 50/100 filled before cancel → return success
+        with the partial qty so the decision row records the actual fill."""
+        # Same mock returned for both poll-loop reads and the post-cancel refetch.
+        mock_order = MagicMock()
+        mock_order.status.value = "accepted"  # poll loop sees still-active order
+        mock_order.filled_qty = "50"
+        mock_order.filled_avg_price = "150.25"
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is True
+        assert result.filled_qty == Decimal("50")
+        assert result.filled_avg_price == Decimal("150.25")
+        assert result.order_id == "order-abc"
+        assert "partial fill" in result.error.lower()
+        mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
+
+    @patch("v2.executor.get_trading_client")
+    def test_timeout_with_zero_fill_returns_failure(self, mock_client):
+        """No fill before cancel → preserve the prior failure semantics so
+        the trader marks the trade as failed and doesn't log a phantom row."""
+        mock_order = MagicMock()
+        mock_order.status.value = "accepted"
+        mock_order.filled_qty = "0"
+        mock_order.filled_avg_price = None
+        mock_client.return_value.get_order_by_id.return_value = mock_order
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert result.filled_qty is None
+        assert "cancel attempted" in result.error.lower()
+
+    @patch("v2.executor.get_trading_client")
+    def test_post_cancel_refetch_failure_falls_through_to_timeout(self, mock_client):
+        """If the post-cancel refetch raises (rate limit, network), don't crash —
+        return the standard timeout failure. We didn't see a fill we can prove."""
+        mock_pending = MagicMock()
+        mock_pending.status.value = "accepted"
+        mock_pending.filled_qty = None
+        mock_pending.filled_avg_price = None
+        # Tie the refetch failure to the cancel happening — once cancel fires,
+        # any subsequent get_order_by_id call (the post-cancel refetch) raises.
+        cancelled = []
+        def cancel_se(_):
+            cancelled.append(True)
+        def get_order_se(_):
+            if cancelled:
+                raise RuntimeError("rate limit")
+            return mock_pending
+        mock_client.return_value.cancel_order_by_id.side_effect = cancel_se
+        mock_client.return_value.get_order_by_id.side_effect = get_order_se
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert result.filled_qty is None
+        assert "cancel attempted" in result.error.lower()
 
 
 class TestQuantityPrecision:
@@ -398,6 +475,42 @@ class TestQuantityPrecision:
 
         request = mock_client.return_value.submit_order.call_args.args[0]
         assert request.qty == 0.987654321
+
+
+class TestClientOrderId:
+    """P1.6: client_order_id is plumbed to Alpaca for broker-side idempotency."""
+
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_passes_client_order_id(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_market_order
+        execute_market_order("AAPL", "buy", Decimal("1"), client_order_id="algo-20260502-b-AAPL-42")
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        assert request.client_order_id == "algo-20260502-b-AAPL-42"
+
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_omits_client_order_id_when_none(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_market_order
+        execute_market_order("AAPL", "buy", Decimal("1"))
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        # alpaca-py defaults unset client_order_id to None — verify we don't set it.
+        assert request.client_order_id is None
+
+    @patch("v2.executor.get_trading_client")
+    def test_limit_order_passes_client_order_id(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_limit_order
+        execute_limit_order("AAPL", "sell", Decimal("1"), Decimal("150"),
+                            client_order_id="algo-20260502-s-AAPL-7")
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        assert request.client_order_id == "algo-20260502-s-AAPL-7"
 
 
 class TestDryRunPrice:

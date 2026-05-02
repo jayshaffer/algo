@@ -27,6 +27,19 @@ logger = logging.getLogger("dashboard_publish")
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public_dashboard")
 
 
+def _redact_order_id(order_id):
+    """Truncate full Alpaca order UUIDs before publishing to the public dashboard.
+
+    The frontend already truncates for display; the unredacted UUIDs were still
+    being shipped in the publicly-fetchable JSON (P1.8). Match the frontend's
+    `shortOrderId` shape (8 chars + '...') so display is unchanged.
+    """
+    if order_id is None:
+        return None
+    s = str(order_id)
+    return s[:8] + "..." if len(s) > 12 else s
+
+
 class _DecimalEncoder(json.JSONEncoder):
     """JSON encoder that handles Decimal, date, and datetime types."""
 
@@ -272,7 +285,10 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         "summary": summary,
         "snapshots": snapshot_dicts,
         "positions": [dict(r) for r in positions],
-        "decisions": [dict(r) for r in decisions],
+        "decisions": [
+            {**dict(r), "order_id": _redact_order_id(dict(r).get("order_id"))}
+            for r in decisions
+        ],
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
     }

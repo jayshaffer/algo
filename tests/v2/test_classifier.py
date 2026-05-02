@@ -469,9 +469,9 @@ class TestClassifyBatch:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         response_text = json.dumps([
-            {"type": "ticker_specific", "tickers": ["AAPL"], "category": "earnings",
+            {"index": 1, "type": "ticker_specific", "tickers": ["AAPL"], "category": "earnings",
              "sentiment": "bullish", "confidence": "high"},
-            {"type": "noise"},
+            {"index": 2, "type": "noise"},
         ])
         mock_client.messages.create.return_value = _make_mock_response(response_text)
 
@@ -487,7 +487,7 @@ class TestClassifyBatch:
     def test_handles_markdown_code_block(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        inner = json.dumps([{"type": "noise"}])
+        inner = json.dumps([{"index": 1, "type": "noise"}])
         mock_client.messages.create.return_value = _make_mock_response(
             f"```json\n{inner}\n```"
         )
@@ -501,7 +501,7 @@ class TestClassifyBatch:
     def test_handles_plain_code_block(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        inner = json.dumps([{"type": "noise"}])
+        inner = json.dumps([{"index": 1, "type": "noise"}])
         mock_client.messages.create.return_value = _make_mock_response(
             f"```\n{inner}\n```"
         )
@@ -512,10 +512,10 @@ class TestClassifyBatch:
 
     @patch("v2.classifier.get_claude_client")
     def test_pads_missing_results_with_noise(self, mock_get_client):
-        """If LLM returns fewer results than headlines, pad with noise."""
+        """If LLM returns fewer results than headlines, missing indices become noise."""
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        response_text = json.dumps([{"type": "ticker_specific", "tickers": ["AAPL"],
+        response_text = json.dumps([{"index": 1, "type": "ticker_specific", "tickers": ["AAPL"],
                                      "category": "earnings", "sentiment": "bullish",
                                      "confidence": "high"}])
         mock_client.messages.create.return_value = _make_mock_response(response_text)
@@ -531,19 +531,65 @@ class TestClassifyBatch:
 
     @patch("v2.classifier.get_claude_client")
     def test_truncates_extra_results(self, mock_get_client):
-        """If LLM returns more results than headlines, truncate."""
+        """If LLM returns indices beyond the headline count, those entries are ignored."""
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         response_text = json.dumps([
-            {"type": "noise"},
-            {"type": "noise"},
-            {"type": "noise"},
+            {"index": 1, "type": "noise"},
+            {"index": 2, "type": "noise"},
+            {"index": 3, "type": "noise"},
         ])
         mock_client.messages.create.return_value = _make_mock_response(response_text)
 
         results = _classify_batch(["only one"], [SAMPLE_PUBLISHED_AT])
 
         assert len(results) == 1
+
+    @patch("v2.classifier.get_claude_client")
+    def test_index_based_mapping_handles_reordering(self, mock_get_client):
+        """P2.15: when Haiku reorders the array, results still align with the
+        original headlines via the explicit index field. Previously this would
+        misalign — AAPL classification ending up on MSFT headline etc."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        # Reverse the response order.
+        response_text = json.dumps([
+            {"index": 3, "type": "ticker_specific", "tickers": ["GOOG"],
+             "category": "earnings", "sentiment": "bullish", "confidence": "high"},
+            {"index": 1, "type": "ticker_specific", "tickers": ["AAPL"],
+             "category": "earnings", "sentiment": "bullish", "confidence": "high"},
+            {"index": 2, "type": "noise"},
+        ])
+        mock_client.messages.create.return_value = _make_mock_response(response_text)
+
+        headlines = ["AAPL news", "MSFT news", "GOOG news"]
+        dates = [SAMPLE_PUBLISHED_AT] * 3
+        results = _classify_batch(headlines, dates)
+
+        assert results[0].ticker_signals[0].ticker == "AAPL"
+        assert results[0].ticker_signals[0].headline == "AAPL news"
+        assert results[1].news_type == "noise"
+        assert results[2].ticker_signals[0].ticker == "GOOG"
+        assert results[2].ticker_signals[0].headline == "GOOG news"
+
+    @patch("v2.classifier.get_claude_client")
+    def test_entry_without_index_skipped(self, mock_get_client):
+        """An entry missing the `index` field can't be safely assigned —
+        the corresponding headline becomes noise rather than risking a
+        mis-attribution."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        response_text = json.dumps([
+            {"type": "ticker_specific", "tickers": ["AAPL"], "category": "earnings",
+             "sentiment": "bullish", "confidence": "high"},  # no index
+            {"index": 2, "type": "noise"},
+        ])
+        mock_client.messages.create.return_value = _make_mock_response(response_text)
+
+        results = _classify_batch(["AAPL news", "MSFT news"], [SAMPLE_PUBLISHED_AT] * 2)
+
+        assert results[0].news_type == "noise"  # would-be AAPL classification dropped
+        assert results[1].news_type == "noise"
 
     @patch("v2.classifier.get_claude_client")
     def test_raises_on_non_array_response(self, mock_get_client):

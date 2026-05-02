@@ -210,6 +210,19 @@ def _resolve_decision_qty(
     raise IntentError(f"unsupported action: {decision.action}")
 
 
+def _client_order_id(decision: ExecutorDecision, session_date: date) -> str:
+    """P1.6: deterministic broker-side idempotency key.
+
+    Format: ``algo-YYYYMMDD-{b/s}-{TICKER}-{playbook_action_id|"op"}``. Same
+    decision → same key, so an Alpaca submission retry after our DB write
+    failed will be rejected by the broker as a duplicate (no double order).
+    Alpaca's max length is 48 chars; the format above stays well under that
+    for any plausible ticker (max ~6) + playbook id.
+    """
+    pba = decision.playbook_action_id if decision.playbook_action_id is not None else "op"
+    return f"algo-{session_date.strftime('%Y%m%d')}-{decision.action[:1]}-{decision.ticker}-{pba}"
+
+
 def _precheck_sell_against_alpaca(
     decision: ExecutorDecision, held: Decimal, errors: list[str],
 ) -> bool:
@@ -220,20 +233,7 @@ def _precheck_sell_against_alpaca(
     Trim-to-available is not a rejection and returns True after mutating
     decision.quantity.
     """
-    try:
-        available = get_live_available_qty(decision.ticker)
-    except Exception as e:
-        logger.warning(
-            "%s: live availability check failed (%s) — proceeding",
-            decision.ticker, e,
-        )
-        return True
-
-    if available is None or available >= decision.quantity:
-        return True
-
-    if available <= Decimal("0.0001"):
-        reason = f"Alpaca reports 0 available shares (DB said {held})"
+    def _reject(reason: str) -> bool:
         errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
         logger.warning("%s: SKIP - %s", decision.ticker, reason)
         if decision.playbook_action_id:
@@ -244,6 +244,19 @@ def _precheck_sell_against_alpaca(
         decision.reasoning = f"[REJECTED: {reason}] {decision.reasoning}"
         decision.action = "invalid"
         return False
+
+    try:
+        available = get_live_available_qty(decision.ticker)
+    except Exception as e:
+        # Fail closed: skipping a legit sell is recoverable next session;
+        # submitting on stale state during Alpaca degradation is not.
+        return _reject(f"live availability check failed ({e})")
+
+    if available is None or available >= decision.quantity:
+        return True
+
+    if available <= Decimal("0.0001"):
+        return _reject(f"Alpaca reports 0 available shares (DB said {held})")
 
     logger.info(
         "%s: trimming sell from %s to %s (Alpaca available)",
@@ -284,6 +297,7 @@ def _execute_decision_order(
         qty=decision.quantity,
         dry_run=dry_run,
         simulated_price=price,
+        client_order_id=_client_order_id(decision, date.today()),
     )
 
     if not result.success:
@@ -479,6 +493,26 @@ def _prepare_decision(
         return None
 
     decision.quantity = resolved_qty
+
+    # P1.6: pre-submit dedup. The previous post-submit check left a window
+    # where a network blip mid-`insert_decision` after a successful submit,
+    # plus an operator rerun, would re-submit the order. The check here
+    # short-circuits at the DB row that the prior run did manage to write
+    # (or was about to). The broker-side `client_order_id` covers the
+    # narrower case where the prior run's DB write itself failed.
+    if not dry_run:
+        existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
+        if existing_id:
+            logger.warning(
+                "%s: duplicate %s decision today (existing id=%d) — skipping submit",
+                decision.ticker, decision.action, existing_id,
+            )
+            decision.reasoning = (
+                f"[REJECTED: duplicate decision today (existing id={existing_id})] {decision.reasoning}"
+            )
+            decision.action = "invalid"
+            totals.trades_failed += 1
+            return None
 
     # Defense-in-depth: pre-submit live Alpaca check for sells. Catches the
     # edge case where Alpaca disagrees with the DB (untracked orders, partial

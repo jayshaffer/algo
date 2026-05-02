@@ -12,6 +12,7 @@ from v2.dashboard_publish import (
     _build_summary,
     _DecimalEncoder,
     _enrich_snapshots_with_twr_value,
+    _redact_order_id,
     assemble_deploy_dir,
     deploy_to_cloudflare,
     fetch_spy_benchmark,
@@ -20,6 +21,21 @@ from v2.dashboard_publish import (
     write_json_files,
 )
 from v2.executor import get_net_deposits
+
+
+class TestRedactOrderId:
+    """P1.8: full Alpaca UUIDs must not appear in published decisions.json."""
+
+    def test_full_uuid_truncated(self):
+        full = "6f1eef85-83f0-4b6a-b8e6-37cba3d3318e"
+        assert _redact_order_id(full) == "6f1eef85..."
+
+    def test_short_id_unchanged(self):
+        # Short ids stay as-is (also matches frontend `shortOrderId` boundary at len > 12).
+        assert _redact_order_id("abc123") == "abc123"
+
+    def test_none_passes_through(self):
+        assert _redact_order_id(None) is None
 
 
 class TestDecimalEncoder:
@@ -106,6 +122,9 @@ class TestGatherDashboardData:
         # Verify decisions
         assert len(result["decisions"]) == 1
         assert result["decisions"][0]["action"] == "buy"
+        # P1.8: order_id stays short here (input is "abc123") — full UUID
+        # truncation is exercised in test_decisions_redact_full_order_uuid.
+        assert result["decisions"][0]["order_id"] == "abc123"
 
         # Verify theses
         assert len(result["theses"]) == 1
@@ -303,6 +322,27 @@ class TestGatherDashboardData:
         assert snaps[0]["twr_value"] == snaps[0]["portfolio_value"]
         # Day-2 twr_value reflects only trading gain, not the $5000 deposit.
         assert Decimal("2945") < snaps[1]["twr_value"] < Decimal("2955")
+
+    def test_decisions_redact_full_order_uuid(self, mock_benchmark, mock_db):
+        """P1.8: full Alpaca UUIDs in decision rows must be truncated in output."""
+        session_date = date(2025, 6, 15)
+        full_uuid = "6f1eef85-83f0-4b6a-b8e6-37cba3d3318e"
+        mock_db.fetchall.side_effect = [
+            [],  # snapshots
+            [],  # positions
+            [{"id": 1, "date": session_date, "ticker": "AAPL", "action": "buy",
+              "quantity": Decimal("5"), "price": Decimal("150"),
+              "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
+              "order_id": full_uuid}],
+            [],  # theses
+        ]
+        mock_db.fetchone.side_effect = [None, None, None]
+
+        result = gather_dashboard_data(session_date)
+
+        assert result["decisions"][0]["order_id"] == "6f1eef85..."
+        # Full UUID never appears anywhere in the published payload.
+        assert full_uuid not in json.dumps(result, cls=_DecimalEncoder)
 
     def test_includes_benchmark_key(self, mock_benchmark, mock_db):
         """gather_dashboard_data includes 'benchmark' key from fetch_spy_benchmark."""

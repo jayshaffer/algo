@@ -192,8 +192,15 @@ def execute_market_order(
     qty: Decimal,
     dry_run: bool = False,
     simulated_price: Decimal = None,
+    client_order_id: str | None = None,
 ) -> OrderResult:
-    """Execute a market order."""
+    """Execute a market order.
+
+    `client_order_id` (P1.6): if provided, Alpaca treats a duplicate submission
+    with the same id as already-submitted (broker-side idempotency). Combined
+    with the pre-submit DB dedup in trader.py, this prevents real duplicate
+    orders even when our DB write fails between submission and rerun.
+    """
     if dry_run:
         return OrderResult(
             success=True,
@@ -208,12 +215,15 @@ def execute_market_order(
 
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
 
-        order_request = MarketOrderRequest(
+        order_kwargs = dict(
             symbol=ticker,
             qty=float(_quantize_qty(qty)),
             side=order_side,
             time_in_force=TimeInForce.DAY,
         )
+        if client_order_id:
+            order_kwargs["client_order_id"] = client_order_id
+        order_request = MarketOrderRequest(**order_kwargs)
 
         order = client.submit_order(order_request)
 
@@ -240,9 +250,13 @@ def execute_limit_order(
     side: str,
     qty: Decimal,
     limit_price: Decimal,
-    dry_run: bool = False
+    dry_run: bool = False,
+    client_order_id: str | None = None,
 ) -> OrderResult:
-    """Execute a limit order."""
+    """Execute a limit order.
+
+    See `execute_market_order` for `client_order_id` semantics (P1.6).
+    """
     if dry_run:
         return OrderResult(
             success=True,
@@ -257,13 +271,16 @@ def execute_limit_order(
 
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
 
-        order_request = LimitOrderRequest(
+        order_kwargs = dict(
             symbol=ticker,
             qty=float(_quantize_qty(qty)),
             side=order_side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(limit_price),
         )
+        if client_order_id:
+            order_kwargs["client_order_id"] = client_order_id
+        order_request = LimitOrderRequest(**order_kwargs)
 
         order = client.submit_order(order_request)
 
@@ -327,6 +344,31 @@ def wait_for_fill(
         logger.warning("Order %s timed out after %.0fs — cancelled", order_id, timeout_seconds)
     except Exception as cancel_err:
         logger.error("Order %s timed out and cancel failed: %s — order may still be live", order_id, cancel_err)
+
+    # P1.13: re-fetch after cancel to catch partial fills that landed before
+    # the cancel took effect. The previous code returned filled_qty=None and
+    # the decision row in trader.py was logged with order_id=None — the link
+    # between the actual fill (visible in position sync) and the decision row
+    # was lost, breaking attribution for that trade.
+    try:
+        order = client.get_order_by_id(order_id)
+        filled_qty = Decimal(str(order.filled_qty)) if order.filled_qty else Decimal("0")
+        if filled_qty > 0:
+            logger.warning(
+                "Order %s timed out with partial fill: %s shares @ %s",
+                order_id, filled_qty, order.filled_avg_price,
+            )
+            return OrderResult(
+                success=True,
+                order_id=order_id,
+                filled_qty=filled_qty,
+                filled_avg_price=(
+                    Decimal(str(order.filled_avg_price)) if order.filled_avg_price else None
+                ),
+                error=f"Timeout with partial fill ({filled_qty} shares); order cancelled",
+            )
+    except Exception as fetch_err:
+        logger.error("Order %s post-cancel re-fetch failed: %s", order_id, fetch_err)
 
     return OrderResult(
         success=False,

@@ -909,9 +909,11 @@ class TestZeroResolvedQty:
 
 
 class TestAlpacaPrecheck:
-    def test_live_availability_check_exception_proceeds(self, mock_db, mock_cursor):
-        """If get_live_available_qty raises, the sell proceeds (defensive warn).
-        Covers the 'except Exception ... available = None' branch.
+    def test_live_availability_check_exception_skips_sell(self, mock_db, mock_cursor):
+        """P1.7: when get_live_available_qty raises a transient error, the sell
+        is skipped (fail-closed). Submitting without a precheck during Alpaca
+        degradation is exactly when stale state is most likely — would rather
+        skip a legit sell (recoverable) than submit a bad one.
         """
         decision = _make_decision(ticker="AAPL", action="sell",
                                   intent_type="exit_full", intent_magnitude=None)
@@ -921,8 +923,26 @@ class TestAlpacaPrecheck:
                 "get_live_available_qty": MagicMock(side_effect=RuntimeError("alpaca 500")),
             })
             result = run_trading_session(dry_run=False)
-        mocks["execute_market_order"].assert_called_once()
-        assert result.trades_executed == 1
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert "live availability check failed" in decision.reasoning
+        assert result.trades_executed == 0
+        assert result.trades_failed == 1
+
+    def test_live_availability_check_exception_updates_playbook_action(self, mock_db, mock_cursor):
+        """When precheck fails closed, the playbook action is marked skipped
+        so resume logic doesn't re-attempt it (mirrors zero-available branch).
+        """
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None,
+                                  playbook_action_id=42)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(side_effect=RuntimeError("alpaca 503")),
+            })
+            run_trading_session(dry_run=False)
+        mocks["update_playbook_action_status"].assert_called_with(42, "skipped")
 
     def test_sell_trimmed_to_alpaca_available(self, mock_db, mock_cursor):
         """DB says 10 shares but Alpaca reports 4 available → trim to 4."""
@@ -1396,6 +1416,93 @@ class TestTraderCliMain:
              patch("v2.trader.run_trading_session", return_value=ok) as mock_run:
             main()
         mock_run.assert_called_once()
+
+class TestPreSubmitDedup:
+    """P1.6: dedup must run BEFORE order submission. The previous post-submit
+    check left a window where insert_decision failure + operator rerun would
+    re-submit the order with no DB or broker-side guard.
+    """
+
+    def test_pre_submit_dedup_blocks_buy_when_decision_already_exists(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy",
+                                  intent_type="invest_dollar",
+                                  intent_magnitude=Decimal("500"))
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "check_decision_exists": MagicMock(return_value=99),
+            })
+            result = run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert "duplicate decision today" in decision.reasoning
+        assert result.trades_executed == 0
+        assert result.trades_failed == 1
+
+    def test_pre_submit_dedup_blocks_sell_when_decision_already_exists(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "check_decision_exists": MagicMock(return_value=42),
+            })
+            result = run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert result.trades_failed == 1
+
+    def test_dry_run_does_not_block_preview_on_existing_row(self, mock_db, mock_cursor):
+        """Dry-run never submits a real order, so the pre-submit dedup gate is
+        deliberately skipped — preview output should still reflect what *would*
+        happen even if a row was already logged today. (The post-log dedup at
+        step 6 still fires; that's expected, it just gates the duplicate insert.)
+        """
+        decision = _make_decision(ticker="AAPL", action="buy",
+                                  intent_type="invest_dollar",
+                                  intent_magnitude=Decimal("500"))
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "check_decision_exists": MagicMock(return_value=99),
+            })
+            run_trading_session(dry_run=True)
+        # Preview path runs in spite of the existing row (action stays "buy",
+        # the dry-run executor returns DRY_RUN). The pre-submit dedup is
+        # bypassed; the order_action is unchanged.
+        assert decision.action == "buy"
+        mocks["execute_market_order"].assert_called_once()
+
+
+class TestClientOrderIdPlumbing:
+    """P1.6: deterministic client_order_id sent to Alpaca for broker-side
+    idempotency. Same decision → same key → broker rejects duplicate submit.
+    """
+
+    def test_buy_passes_deterministic_client_order_id(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy",
+                                  intent_type="invest_dollar",
+                                  intent_magnitude=Decimal("500"),
+                                  playbook_action_id=42)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=False)
+        kwargs = mocks["execute_market_order"].call_args.kwargs
+        # Format: algo-YYYYMMDD-{action[0]}-{TICKER}-{playbook_action_id}
+        coid = kwargs["client_order_id"]
+        assert coid.startswith("algo-")
+        assert coid.endswith("-b-AAPL-42")
+
+    def test_off_playbook_decision_uses_op_marker(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="NVDA", action="buy",
+                                  intent_type="invest_dollar",
+                                  intent_magnitude=Decimal("500"),
+                                  playbook_action_id=None,
+                                  is_off_playbook=True)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=False)
+        coid = mocks["execute_market_order"].call_args.kwargs["client_order_id"]
+        assert coid.endswith("-b-NVDA-op")
+
 
     def test_main_exits_nonzero_on_errors(self, mock_db, mock_cursor):
         import sys as _sys

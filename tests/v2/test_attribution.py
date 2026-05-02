@@ -173,10 +173,11 @@ class TestComputeSignalAttribution:
             compute_signal_attribution()
 
         assert mock_upsert.call_count == 2
-        # First call: earnings
+        # First call: earnings — P2.17: sample_size_30d threaded through.
         mock_upsert.assert_any_call(
             category="news_signal:earnings",
             sample_size=10,
+            sample_size_30d=0,  # mock fixture lacks the field; defaults to 0.
             avg_outcome_7d=Decimal("2.0"),
             avg_outcome_30d=Decimal("3.0"),
             win_rate_7d=Decimal("0.60"),
@@ -186,6 +187,7 @@ class TestComputeSignalAttribution:
         mock_upsert.assert_any_call(
             category="macro_signal:fed",
             sample_size=5,
+            sample_size_30d=0,
             avg_outcome_7d=Decimal("-1.0"),
             avg_outcome_30d=Decimal(0),
             win_rate_7d=Decimal("0.40"),
