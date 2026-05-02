@@ -1,4 +1,17 @@
-"""Alpaca Learning Platform - Dashboard"""
+"""Alpaca Learning Platform - v2 Dashboard.
+
+Status: HTML routes (`/`, `/playbook`, `/attribution`, `/signals`, `/theses`,
+`/decisions`, `/performance`) require Jinja templates that have not yet been
+migrated from v1. The current `v2/dashboard/templates/` directory is empty,
+so HTML routes will 500 with `TemplateNotFound`. JSON-only routes
+(`/health`, `/api/portfolio`, `/api/signals`, `/api/theses/<id>/close`) work
+today and are the only ones exercised by tests.
+
+The live operator dashboard is still v1 (`dashboard/app.py`, container
+`dashboard:3000`); this module is here for the eventual cutover. Migrate
+templates from `dashboard/templates/` and update `Flask(__name__)` to use an
+explicit `template_folder` if the layout differs.
+"""
 
 from flask import Flask, jsonify, render_template, request
 

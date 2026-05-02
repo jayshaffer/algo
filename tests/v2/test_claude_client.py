@@ -1,26 +1,33 @@
 """Tests for v2/claude_client.py - agentic loop, max_tokens cap, and recovery."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import anthropic
+import httpx
 import pytest
 
-from v2.claude_client import run_agentic_loop
+from v2.claude_client import extract_final_text, run_agentic_loop
 
 
-def _text_block(text: str) -> MagicMock:
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    return block
+def _make_bad_request_error(message: str) -> anthropic.BadRequestError:
+    """Build a real anthropic.BadRequestError instance for tests. The SDK's
+    constructor requires an httpx.Response; we synthesize a 400."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status_code=400, request=request)
+    return anthropic.BadRequestError(message, response=response, body=None)
 
 
-def _tool_use_block(tool_id: str, name: str, input_data: dict) -> MagicMock:
-    block = MagicMock()
-    block.type = "tool_use"
-    block.id = tool_id
-    block.name = name
-    block.input = input_data
-    return block
+def _text_block(text: str) -> SimpleNamespace:
+    """A text content block. SimpleNamespace mirrors real anthropic content
+    blocks: only the attributes set are present, so `hasattr(block, "text")`
+    returns False on tool_use blocks (unlike bare MagicMock, which auto-creates
+    every attribute on access)."""
+    return SimpleNamespace(type="text", text=text)
+
+
+def _tool_use_block(tool_id: str, name: str, input_data: dict) -> SimpleNamespace:
+    return SimpleNamespace(type="tool_use", id=tool_id, name=name, input=input_data)
 
 
 def _make_response(
@@ -238,3 +245,158 @@ class TestMaxTokensRecovery:
             for m in result.messages
         )
         assert tool_result_present, "Tool-result message must be preserved"
+
+
+class TestContextLengthRecovery:
+    """When the API rejects a request for being too long, prune aggressively
+    and retry once. Without recovery, a single bloated context fails the
+    whole strategist stage with no graceful path back."""
+
+    def test_recovers_from_context_length_error(self):
+        """First call raises BadRequestError('prompt is too long...'); the
+        loop should drop most of the message history and retry, then
+        complete normally."""
+        # Build a fake history with several exchanges so aggressive prune
+        # can drop something.
+        long_history_sentinel = "old_tool_result_that_should_be_pruned"
+        first = _tool_use_block("t1", "fetch", {})
+        second = _tool_use_block("t2", "fetch", {})
+
+        recovered = _make_response(
+            content=[_text_block("Done after pruning.")],
+            stop_reason="end_turn",
+        )
+        client = MagicMock()
+        # Sequence: BadRequestError → success on retry.
+        client.messages.create.side_effect = [
+            _make_bad_request_error("prompt is too long: 250000 tokens > 200000 maximum"),
+            recovered,
+        ]
+
+        result = run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message=long_history_sentinel,
+            tools=[],
+            tool_handlers={},
+            max_turns=5,
+        )
+
+        assert result.stop_reason == "end_turn"
+        assert client.messages.create.call_count == 2
+
+    def test_second_context_length_error_propagates(self):
+        """If pruning didn't help (still over the limit), don't loop —
+        let the error propagate so the stage fails clearly."""
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_bad_request_error("prompt is too long"),
+            _make_bad_request_error("prompt is too long"),
+        ]
+
+        with pytest.raises(anthropic.BadRequestError):
+            run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[],
+                tool_handlers={},
+                max_turns=5,
+            )
+
+        # One initial attempt + one recovery attempt — no third try.
+        assert client.messages.create.call_count == 2
+
+    def test_unrelated_bad_request_error_is_not_retried(self):
+        """A 400 that isn't a context-length issue (e.g. invalid tool
+        schema) should propagate immediately — retrying with the same
+        prompt won't fix it and burns tokens."""
+        client = MagicMock()
+        client.messages.create.side_effect = [
+            _make_bad_request_error("invalid request: tool 'foo' is not defined"),
+        ]
+
+        with pytest.raises(anthropic.BadRequestError):
+            run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[],
+                tool_handlers={},
+                max_turns=5,
+            )
+
+        assert client.messages.create.call_count == 1
+
+
+class TestExtractFinalText:
+    """`extract_final_text` produces the strategist memo body. When a
+    tool-driven loop ends without a trailing narrative, the function used to
+    return None — the caller's `or "No summary available"` then stored a junk
+    placeholder as the strategist memo and reflection lost the signal."""
+
+    def test_returns_text_from_final_assistant_when_only_text(self):
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [_text_block("synthesis text")]},
+        ]
+        assert extract_final_text(msgs) == "synthesis text"
+
+    def test_walks_back_when_most_recent_assistant_is_tool_only(self):
+        """If the last assistant turn is pure tool_use (loop ended on
+        tool_use without an end_turn synthesis), use the most recent
+        assistant text block we can find."""
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [_text_block("preamble"), _tool_use_block("t1", "write_playbook", {})]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            {"role": "assistant", "content": [_tool_use_block("t2", "write_playbook", {})]},
+        ]
+        assert extract_final_text(msgs) == "preamble"
+
+    def test_returns_tool_summary_fallback_when_no_assistant_text(self):
+        """When every assistant message is tool_use-only, fall back to a
+        tool-name summary so the strategist memo still records what the
+        agent did. Must be non-None so the caller's `or 'No summary
+        available'` placeholder doesn't poison the memo."""
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [_tool_use_block("t1", "start_thesis", {})]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            {"role": "assistant", "content": [_tool_use_block("t2", "write_playbook", {})]},
+        ]
+        result = extract_final_text(msgs)
+        assert result is not None, (
+            "Should not return None when assistant messages exist — caller "
+            "falls back to a meaningless placeholder string"
+        )
+        assert "write_playbook" in result, (
+            "Tool-summary fallback should at least name the final tool calls"
+        )
+
+    def test_returns_none_when_no_assistant_messages_at_all(self):
+        """If literally no assistant message has been added (loop crashed
+        before first response), None is the right answer."""
+        msgs = [{"role": "user", "content": "hi"}]
+        assert extract_final_text(msgs) is None
+
+    def test_concatenates_multiple_text_blocks_in_final_message(self):
+        """Some responses split synthesis across multiple text blocks.
+        Returning only the first loses the rest."""
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    _text_block("Part one. "),
+                    _text_block("Part two."),
+                ],
+            },
+        ]
+        result = extract_final_text(msgs)
+        assert "Part one." in result and "Part two." in result, (
+            f"Expected both text blocks concatenated, got: {result!r}"
+        )

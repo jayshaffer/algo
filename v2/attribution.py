@@ -5,6 +5,20 @@ from decimal import Decimal
 from .database.connection import get_cursor
 from .database.trading_db import get_signal_attribution, upsert_signal_attribution
 
+# Per-session memo for `get_attribution_summary`. The attribution table is
+# refreshed once at the top of each session (`compute_signal_attribution` in
+# Stage 0) and read multiple times downstream — once by the strategist tool
+# loop and once by `build_trading_context` / `build_executor_input`. Caching
+# the formatted summary skips redundant DB roundtrips and Decimal formatting
+# work. Explicit clear so callers can invalidate after a recompute.
+_attribution_summary_cache: str | None = None
+
+
+def clear_attribution_summary_cache() -> None:
+    """Invalidate the memoized `get_attribution_summary` result."""
+    global _attribution_summary_cache
+    _attribution_summary_cache = None
+
 
 def compute_signal_attribution(days: int = 90) -> list[dict]:
     """
@@ -87,6 +101,10 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
             win_rate_30d=row["win_rate_30d"] or Decimal(0),
         )
 
+    # New attribution numbers — invalidate the formatted-summary memo so the
+    # next reader sees the fresh data.
+    clear_attribution_summary_cache()
+
     return results
 
 
@@ -95,7 +113,19 @@ def get_attribution_summary() -> str:
 
     All metrics are benchmark-relative (alpha vs SPY). A positive alpha means
     the signal outperformed the market; negative means it underperformed.
+
+    Memoized per process: the strategist tool loop and `build_trading_context`
+    both call this 1-2 times per session. Cache is invalidated by
+    `compute_signal_attribution` whenever the table is recomputed.
     """
+    global _attribution_summary_cache
+    if _attribution_summary_cache is not None:
+        return _attribution_summary_cache
+    _attribution_summary_cache = _format_attribution_summary()
+    return _attribution_summary_cache
+
+
+def _format_attribution_summary() -> str:
     rows = get_signal_attribution()
     if not rows:
         return "Signal Attribution:\n- No attribution data yet"

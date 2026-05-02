@@ -21,6 +21,7 @@ SECTOR_MAP = {
 }
 
 MAX_SECTOR_PCT = Decimal("0.40")
+MAX_POSITION_PCT = Decimal("0.10")  # max single-ticker exposure as a fraction of portfolio
 
 
 def check_sector_concentration(
@@ -54,3 +55,42 @@ def check_sector_concentration(
             )
 
     return warnings
+
+
+def check_sector_cap_for_buy(
+    ticker: str,
+    new_qty: Decimal,
+    price: Decimal,
+    position_values: dict[str, Decimal],
+    portfolio_value: Decimal,
+    cap: Decimal = MAX_SECTOR_PCT,
+) -> str | None:
+    """Hard pre-submit gate for sector concentration on buy orders.
+
+    Returns a breach message if buying `new_qty` of `ticker` at `price`
+    would push the ticker's sector over `cap`; otherwise None.
+
+    Companion to `check_sector_concentration`, which is advisory-only and
+    fed to the LLM as a string warning. The advisory path is brittle —
+    nothing prevents the executor LLM from ignoring it under context
+    pressure. This gate enforces the same threshold structurally so a
+    single LLM lapse can't run the book over the cap. Sells naturally
+    reduce sector exposure, so the gate only fires on buys.
+    """
+    if portfolio_value <= 0:
+        return None
+    sector = SECTOR_MAP.get(ticker, "other")
+    new_value = new_qty * price
+    sector_total = sum(
+        (v for t, v in position_values.items()
+         if SECTOR_MAP.get(t, "other") == sector),
+        Decimal(0),
+    )
+    projected = sector_total + new_value
+    pct = projected / portfolio_value
+    if pct > cap:
+        return (
+            f"Sector '{sector}' projected exposure {pct:.0%} would exceed "
+            f"{cap:.0%} cap (${projected:,.0f} of ${portfolio_value:,.0f})"
+        )
+    return None

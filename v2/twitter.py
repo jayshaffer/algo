@@ -12,7 +12,7 @@ from datetime import date
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor
 from .database.trading_db import insert_tweet, posted_tweet_exists
-from .executor import get_net_deposits
+from .executor import get_daily_deposit, get_net_deposits
 
 logger = logging.getLogger("twitter")
 
@@ -105,8 +105,13 @@ def _section_book_status(cur, position_count: int) -> str | None:
     ]
     if len(snapshots) == 2:
         prev = snapshots[1]['portfolio_value']
-        day_pnl = portfolio - prev
-        day_pct = (day_pnl / prev * 100) if prev else 0
+        try:
+            daily_deposit = get_daily_deposit(snapshots[1]['date'], today['date'])
+        except Exception:
+            daily_deposit = 0
+        day_pnl = portfolio - prev - daily_deposit
+        base = prev + daily_deposit
+        day_pct = (day_pnl / base * 100) if base else 0
         sign = "+" if day_pnl >= 0 else ""
         lines.append(f"  Today's P&L: {sign}${day_pnl:,.2f} ({sign}{day_pct:.2f}%)")
     _append_total_return(cur, lines, portfolio, today['date'])

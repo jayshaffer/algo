@@ -11,6 +11,7 @@ import pytest
 from v2.dashboard_publish import (
     _build_summary,
     _DecimalEncoder,
+    _enrich_snapshots_with_deposits,
     _enrich_snapshots_with_twr_value,
     _redact_order_id,
     assemble_deploy_dir,
@@ -433,6 +434,80 @@ class TestBuildSummary:
         assert summary["daily_pnl"] == Decimal("1000")
 
 
+class TestEnrichSnapshotsWithDeposits:
+    """`_enrich_snapshots_with_deposits` credits a deposit dated D to
+    snapshots dated strictly after D. The fallback adds deposits dated
+    on-or-before the first snapshot — but only the first snapshot was
+    actually missing them. Earlier code added the fallback credit to
+    *every* snapshot, double-counting cumulative_deposits for the entire
+    series and depressing TWR/Total Return %."""
+
+    def test_no_fallback_double_credit_for_later_snapshots(self):
+        """P3.28: deposit dated == first_snap_date.
+
+        First loop credits it to snapshots > first_snap_date (correct).
+        Fallback credits it to snapshot[0] (also correct).
+        Bug was: fallback also credited it to snapshots[1+], inflating
+        cumulative_deposits by exactly one extra deposit cycle.
+        """
+        snapshots = [
+            {"date": date(2026, 1, 1), "portfolio_value": Decimal("1000")},
+            {"date": date(2026, 1, 2), "portfolio_value": Decimal("1010")},
+            {"date": date(2026, 1, 3), "portfolio_value": Decimal("1020")},
+        ]
+        deposits = [{"date": "2026-01-01", "amount": Decimal("1000")}]
+
+        _enrich_snapshots_with_deposits(snapshots, deposits)
+
+        # Correct: first snapshot includes the same-day deposit (so
+        # cumulative_deposits matches portfolio_value); later snapshots
+        # see exactly the same $1000, not double.
+        assert snapshots[0]["cumulative_deposits"] == Decimal("1000")
+        assert snapshots[1]["cumulative_deposits"] == Decimal("1000"), (
+            f"Expected $1000, got {snapshots[1]['cumulative_deposits']} — fallback double-credited"
+        )
+        assert snapshots[2]["cumulative_deposits"] == Decimal("1000"), (
+            f"Expected $1000, got {snapshots[2]['cumulative_deposits']} — fallback double-credited"
+        )
+
+    def test_fallback_credits_only_first_when_multiple_pre_first_deposits(self):
+        """Two deposits dated before the first snapshot — both should
+        roll into the first snapshot's cumulative; later snapshots
+        should reflect that same total exactly once."""
+        snapshots = [
+            {"date": date(2026, 1, 5), "portfolio_value": Decimal("1500")},
+            {"date": date(2026, 1, 6), "portfolio_value": Decimal("1510")},
+        ]
+        deposits = [
+            {"date": "2026-01-01", "amount": Decimal("1000")},
+            {"date": "2026-01-03", "amount": Decimal("500")},
+        ]
+
+        _enrich_snapshots_with_deposits(snapshots, deposits)
+
+        assert snapshots[0]["cumulative_deposits"] == Decimal("1500")
+        assert snapshots[1]["cumulative_deposits"] == Decimal("1500"), (
+            f"Got {snapshots[1]['cumulative_deposits']} — should not be doubled"
+        )
+
+    def test_no_fallback_when_first_snapshot_already_credited(self):
+        """If the first deposit is dated *after* the first snapshot, the
+        fallback should not fire and cumulative_deposits should reflect
+        the first-loop result exactly."""
+        snapshots = [
+            {"date": date(2026, 1, 1), "portfolio_value": Decimal("1000")},
+            {"date": date(2026, 1, 5), "portfolio_value": Decimal("2010")},
+        ]
+        deposits = [{"date": "2026-01-03", "amount": Decimal("1000")}]
+
+        _enrich_snapshots_with_deposits(snapshots, deposits)
+
+        # First snapshot precedes any deposit → cum stays 0, fallback
+        # rule doesn't apply (first_dep_date > first_snap_date).
+        assert snapshots[0]["cumulative_deposits"] == Decimal("0")
+        assert snapshots[1]["cumulative_deposits"] == Decimal("1000")
+
+
 class TestEnrichSnapshotsWithTwrValue:
     """twr_value is the first snapshot's value compounded by daily TWR growth.
 
@@ -746,6 +821,35 @@ class TestDeployToCloudflare:
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("CLOUDFLARE_PAGES_PROJECT", None)
             with pytest.raises(RuntimeError, match="CLOUDFLARE_PAGES_PROJECT"):
+                deploy_to_cloudflare("/tmp/deploy")
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_passes_timeout_to_subprocess(self, mock_run):
+        """P3.39: a hung wrangler must not block the session forever.
+        subprocess.run should be invoked with a bounded timeout so the
+        stage fails loudly instead of stalling indefinitely."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="Published!")
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
+            deploy_to_cloudflare("/tmp/deploy")
+
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") is not None, (
+            "subprocess.run must be called with a bounded timeout — a hung "
+            "wrangler would otherwise block the session forever"
+        )
+        assert kwargs["timeout"] >= 60, (
+            f"timeout={kwargs['timeout']} is too tight for a real deploy"
+        )
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_raises_on_subprocess_timeout(self, mock_run):
+        """If wrangler hangs past the timeout, surface a RuntimeError with
+        a clear message — don't propagate the raw TimeoutExpired so the
+        session log says what actually happened."""
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired(cmd="wrangler", timeout=300)
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
+            with pytest.raises(RuntimeError, match="time"):
                 deploy_to_cloudflare("/tmp/deploy")
 
 

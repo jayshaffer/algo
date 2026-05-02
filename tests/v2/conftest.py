@@ -7,6 +7,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from v2.attribution import clear_attribution_summary_cache
+
+
+@pytest.fixture(autouse=True)
+def _isolate_attribution_summary_cache():
+    """`get_attribution_summary` is memoized per process. Without clearing
+    between tests, an earlier mocked result leaks into later tests."""
+    clear_attribution_summary_cache()
+    yield
+    clear_attribution_summary_cache()
+
 # --- Network safety net ---
 #
 # Background: tests in this directory have historically called

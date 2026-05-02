@@ -9,9 +9,9 @@ The trading-money path and the *learning-corruption* path are both top-tier — 
 - ✅ **P0:** 5/5 fixed
 - ✅ **P1:** 9/9 fixed (P1.6, P1.7, P1.8, P1.9, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)*)
 - ✅ **P2:** 12/12 fixed
-- ☐ **P3:** 0/15 fixed
+- ✅ **P3:** 15/15 fixed
 
-**Tests added so far:** +51 in v2 suite (704 → 753 passing); +2 in v1 dashboard suite for P1.10.
+**Tests added so far:** +88 in v2 suite (704 → 790 passing); +2 in v1 dashboard suite for P1.10.
 
 ---
 
@@ -223,68 +223,80 @@ Slow learning rot; impact measured in months of bad rule proposals.
 
 Clean up when adjacent code is touched.
 
-### ☐ P3.26 — Daily P&L tweet doesn't subtract deposits; dashboard does
+### ✅ P3.26 — Daily P&L tweet doesn't subtract deposits; dashboard does
 - **File:** `v2/twitter.py:106-111` vs `v2/dashboard_publish.py:311-314`
-- **Bug:** Tweet path computes `day_pnl = portfolio - prev` with no deposit adjustment. Dashboard path subtracts `daily_deposit`.
-- **Impact:** Disagreeing public numbers for the same day.
+- **Bug:** Tweet path computed `day_pnl = portfolio - prev` with no deposit adjustment; dashboard path subtracted `daily_deposit`. Public numbers disagreed by the size of any cash transfer in the gap day.
+- **Fix (2026-05-02):** New `get_daily_deposit(prev_date, today_date)` helper in `v2/executor.py` mirrors the dashboard's `cum[today] − cum[prev]` semantics by querying Alpaca CSD/CSW activities. `_section_book_status` in `v2/twitter.py` subtracts the result from the raw delta and uses `prev + daily_deposit` as the percentage base. On Alpaca lookup failure, falls back to the raw delta so the tweet stage doesn't crash. Tests: `test_day_pnl_subtracts_deposits`, `test_day_pnl_falls_back_when_daily_deposit_fails` in `TestGatherTweetContext`.
 
-### ☐ P3.27 — `INTERVAL '%s days'` parameterization fragile across psycopg drivers
-- **File:** `v2/database/dashboard_db.py:24, 34, 49`, `v2/database/trading_db.py:36-50, 77-91`
-- **Bug:** `INTERVAL '%s days'` relies on psycopg2 substituting `%s` *inside* a quoted SQL literal. Works on psycopg2; broken on psycopg3. Robust form: `INTERVAL '1 day' * %s`.
+### ✅ P3.27 — `INTERVAL '%s days'` parameterization fragile across psycopg drivers
+- **File:** `v2/database/dashboard_db.py:24,34,49,61,75,85,95`, `v2/database/trading_db.py:52,58,103,109,138,187`, `v2/patterns.py:77,117,151,185`
+- **Bug:** `INTERVAL '%s days'` relied on psycopg2 substituting `%s` *inside* a quoted SQL literal. Works on psycopg2; would break on psycopg3.
+- **Fix (2026-05-02):** Replaced all 17 occurrences with `INTERVAL '1 day' * %s` (parameter substituted as a normal value, then multiplied by a true INTERVAL). Smoke-tested against Postgres 16 + psycopg2.
 
-### ☐ P3.28 — `_enrich_snapshots_with_deposits` fallback can double-credit early deposits
+### ✅ P3.28 — `_enrich_snapshots_with_deposits` fallback double-credits early deposits
 - **File:** `v2/dashboard_publish.py:99-126`
-- **Bug:** First loop credits any deposit dated strictly before a snapshot. Fallback at lines 111-125 says "if first snapshot still has 0 cumulative, credit deposits on/before first snapshot" — but writes `credit` to *every* snapshot, including ones the first loop already credited.
-- **Impact:** TWR / Total Return calculations show inflated cost basis and depressed return %.
+- **Bug:** First loop credits any deposit dated strictly before a snapshot. Fallback for the "snapshot[0] still 0" case wrote `credit` to *every* snapshot, including ones the first loop already credited — inflating cum_deposits by exactly one extra round for snapshots[1+].
+- **Fix (2026-05-02):** Fallback now applies the credit only to snapshots whose date is `<= first_snap_date` (the snapshots the strict-< first loop missed). Tests: `TestEnrichSnapshotsWithDeposits` (3 cases).
 
-### ☐ P3.29 — `extract_final_text` returns `None` if final assistant message is tool_use-only
-- **File:** `v2/claude_client.py:285-296`
-- **Bug:** Iterates `reversed(messages)`, returns first text block. If strategist's final action is `write_playbook` with no trailing text, function returns `None` → memo silently skipped.
+### ✅ P3.29 — `extract_final_text` returns `None` if final assistant message is tool_use-only
+- **File:** `v2/claude_client.py:308-345`
+- **Bug:** `hasattr(block, "text")` was a loose check; the bigger issue was that when *every* assistant message in the loop was tool_use-only, the function returned `None` and the caller's `or "No summary available"` placeholder was stamped as the strategist memo, poisoning reflection's input.
+- **Fix (2026-05-02):** Switched to `block.type == "text"` (defensive against future SDK shape changes); concatenated all text blocks in the most-recent assistant message that has any (some responses split synthesis across blocks); fall back to a tool-name summary (`"[no narrative summary; final tool calls: write_playbook]"`) when no assistant message has text. Tests: `TestExtractFinalText` (5 cases).
 
-### ☐ P3.30 — Sector concentration is advisory-only — no hard gate at order-submit
-- **File:** `v2/trader.py:497-548`, `v2/risk.py`
-- **Bug:** Sector concentration computed at context-build and injected as a *string warning* into `risk_notes`. Trader never blocks a trade that violates concentration.
+### ✅ P3.30 — Sector concentration is advisory-only — no hard gate at order-submit
+- **File:** `v2/trader.py:495-516`, `v2/risk.py:60-88`
+- **Bug:** Sector concentration was injected as a *string warning* into `risk_notes`. Nothing structurally prevented the executor LLM from emitting a buy that ran the book over the cap.
+- **Fix (2026-05-02):** New `check_sector_cap_for_buy(ticker, new_qty, price, position_values, portfolio_value, cap)` helper in `v2/risk.py` returns a breach message if a buy would push the ticker's sector over `MAX_SECTOR_PCT`. Wired into `_prepare_decision` after qty resolution: on breach, the decision is marked `invalid` with a `[REJECTED: sector ...]` reason and `trades_failed += 1`. Sells aren't gated (they reduce sector exposure). `_execute_decisions` pre-computes `position_values` once per session and threads it through. Tests: `TestCheckSectorCapForBuy` (5 cases) + `TestSectorCapHardGate` (3 cases — buy rejected, buy under cap allowed, sell not blocked).
 
-### ☐ P3.31 — `_call_with_retry` doesn't catch `BadRequestError`/context-length-exceeded
-- **File:** `v2/claude_client.py:21-25`
-- **Bug:** Only `RateLimitError`, `InternalServerError`, `APIConnectionError` are retryable. Context-length-exceeded propagates up, captured as `strategist_error` with no graceful degradation.
+### ✅ P3.31 — `_call_with_retry` doesn't catch `BadRequestError`/context-length-exceeded
+- **File:** `v2/claude_client.py:115-130, 199-237`
+- **Bug:** Only `RateLimitError`, `InternalServerError`, `APIConnectionError` were retryable. A 400 for "prompt is too long" propagated up and failed the strategist stage hard — no graceful degradation despite the loop already having a `_truncate_old_tool_results` pruning helper.
+- **Fix (2026-05-02):** Added `_aggressive_prune` (drops everything except the initial user prompt + the most recent exchange) and `_looks_like_context_length_error` (matches "too long" / "context length" / "context_length" in the error string). On the first context-length `BadRequestError` per loop, prune aggressively and continue (retry the same turn). Bounded to 1 recovery to prevent runaway costs; second hit propagates. Unrelated `BadRequestError`s still propagate immediately so we don't burn tokens retrying a known-broken request. Tests: `TestContextLengthRecovery` (3 cases).
 
-### ☐ P3.32 — `get_attribution_summary` recomputed 3+ times per session, no memoization
-- **File:** `v2/context.py:348-350`, `v2/tools.py:320-323`
-- **Bug:** No caching; called from strategist tool loop AND from `build_trading_context`/`build_executor_input`.
-- **Impact:** Cost (latency, DB load); not correctness.
+### ✅ P3.32 — `get_attribution_summary` recomputed 3+ times per session, no memoization
+- **File:** `v2/attribution.py:10-26, 108-129`
+- **Bug:** Every call (strategist tool loop + `build_trading_context` + `build_executor_input`) re-read the table and re-formatted the Decimal arithmetic.
+- **Fix (2026-05-02):** Module-level `_attribution_summary_cache` populated on first read; `compute_signal_attribution` calls `clear_attribution_summary_cache()` after upsert so the next reader sees fresh numbers. Tests: `test_memoizes_within_process`, `test_recompute_invalidates_memo`. Test isolation: autouse fixture in `tests/v2/conftest.py` clears the cache between tests.
 
-### ☐ P3.33 — `_count_actions` substring match treats soft-guard rejections as successful identity updates
-- **File:** `v2/strategy.py:356-380`
-- **Bug:** `tool_update_strategy_identity`'s soft-guard returns a string containing `"identity was updated"` (line 117). Heuristic `"identity updated" in result_text.lower()` matches — reflection result reports `identity_updated=True` even when the guard rejected the update.
+### ✅ P3.33 — `_count_actions` substring match treats soft-guard rejections as successful identity updates
+- **File:** `v2/strategy.py:356-389`
+- **Bug:** Heuristic `"identity updated" in result_text.lower()` was brittle — the current soft-guard string ("Identity *was* updated...") doesn't actually contain "identity updated" as a substring (the audit's literal claim was wrong) but any future rephrasing without the "was" gap would silently flip `identity_updated=True` on a rejected update.
+- **Fix (2026-05-02):** Tightened the match to the unique success-message prefix `"Strategy identity updated to version"`. Test: `test_soft_guard_warning_does_not_count_as_identity_update`, exercising both the actual current warning and a hypothetical rephrasing.
 
-### ☐ P3.34 — `MAX_POSITION_PCT` defined in two places
-- **File:** `v2/intents.py:15` ("mirror v2/agent.py")
-- **Bug:** Drift risk acknowledged in code comment.
+### ✅ P3.34 — `MAX_POSITION_PCT` defined in two places
+- **File:** `v2/intents.py:15`, `v2/risk.py:24`
+- **Bug:** Constant duplicated; the comment "mirror v2/agent.py" pointed at a sibling that had since been removed (the constant only appears in `agent.py` as a string token inside a prompt). v1's `trading/agent.py` still has its own copy, but v1 is sunset.
+- **Fix (2026-05-02):** Moved `MAX_POSITION_PCT = Decimal("0.10")` to `v2/risk.py` (already the home for `MAX_SECTOR_PCT`); `v2/intents.py` now imports it. v1 left untouched.
 
-### ☐ P3.35 — `setup_logging` no-ops if root has handlers
-- **File:** `v2/log_config.py:17-18`
-- **Bug:** `if root.handlers: return` — if any third-party library added a handler before `setup_logging`, per-file handlers and console handler skipped, `os.makedirs(log_dir)` not run. Logs vanish silently.
+### ✅ P3.35 — `setup_logging` no-ops if root has handlers
+- **File:** `v2/log_config.py:13-58`
+- **Bug:** `if root.handlers: return` — any third-party library that registered a root handler before `setup_logging` would cause us to skip console + file handler setup AND `os.makedirs(log_dir)`. Logs would vanish silently.
+- **Fix (2026-05-02):** Tag our handlers with a sentinel attribute (`_algo_owned = True`) and only short-circuit when *our* tag is present. Per-file handler installation is now also idempotent (skip the named logger if it already has an algo handler). `os.makedirs` runs unconditionally. Tests: 3 cases in new `tests/v2/test_log_config.py`.
 
-### ☐ P3.36 — `_session_retirements` module-level global
-- **File:** `v2/strategy.py:29-30, 176-185`
-- **Bug:** State leaks between concurrent invocations. If paper + prod ever import `strategy.py` in one Python process, retirements clobber each other.
+### ✅ P3.36 — `_session_retirements` module-level global
+- **File:** `v2/strategy.py:28-49, 184-191`
+- **Bug:** Module-level list shared across all imports. If paper + prod ever ran in one Python process, retirements would clobber the same counter and the `MAX_RETIREMENTS_PER_SESSION` cap would behave unpredictably.
+- **Fix (2026-05-02):** Replaced the list with a `ContextVar`. `reset_session()` calls `.set([])`; the read path uses a small `_get_session_retirements()` helper that handles the per-context first-access. ContextVar gives each thread / asyncio task / explicit `Context.run` its own copy. Test: `test_session_retirements_isolated_across_threads` (two threads run the cap concurrently; each retires 2 rules and hits its own cap on the 3rd, no leakage).
 
-### ☐ P3.37 — v2 Flask dashboard references `templates/` that doesn't exist
-- **File:** `v2/dashboard/app.py:32, 44, 51, 62, 78, 93, 117`
-- **Bug:** `Flask(__name__)` defaults `template_folder='templates'` (relative). No `v2/dashboard/templates/` directory. Likely dead code or undocumented template path config.
+### ✅ P3.37 — v2 Flask dashboard references `templates/` that doesn't exist
+- **File:** `v2/dashboard/app.py`
+- **Bug:** `v2/dashboard/templates/` directory exists but is empty; HTML routes (`/`, `/playbook`, `/attribution`, `/signals`, `/theses`, `/decisions`, `/performance`) call `render_template` and would 500 with `TemplateNotFound`. JSON-only routes work today.
+- **Fix (2026-05-02):** Documented current state in the module docstring — the v2 dashboard is intended for the eventual cutover from v1; HTML routes need template migration from `dashboard/templates/`. The live operator dashboard remains v1 (`dashboard:3000`); no functional change.
 
-### ☐ P3.38 — `success_rate=None` placeholder in `get_thesis_stats`
-- **File:** `v2/database/dashboard_db.py:154`
-- **Bug:** Stub returned to v2 dashboard.
+### ✅ P3.38 — `success_rate=None` placeholder in `get_thesis_stats`
+- **File:** `v2/database/dashboard_db.py:141-163`, `dashboard/queries.py:319-335`
+- **Bug:** Both v1 and v2 returned `'success_rate': None`. Templates rendered as "N/A".
+- **Fix (2026-05-02):** Compute execution conversion rate as `executed / (executed + invalidated + expired) * 100`. None when no theses are closed yet (avoids divide-by-zero / artificial 0). The audit's note about a more rigorous "success" (executed + outperformed-SPY via decision_signals join) is preserved as a follow-up; this cheap count is the baseline. Tests: 2 cases in `TestDashboardQueries`.
 
-### ☐ P3.39 — `subprocess.run(["wrangler", ...])` has no timeout
-- **File:** `v2/dashboard_publish.py:443-450`
-- **Bug:** No `timeout=` kwarg. A hung `wrangler` blocks the session indefinitely.
+### ✅ P3.39 — `subprocess.run(["wrangler", ...])` has no timeout
+- **File:** `v2/dashboard_publish.py:447-470`
+- **Bug:** No `timeout=` kwarg. A hung `wrangler` would block the session indefinitely.
+- **Fix (2026-05-02):** `subprocess.run` now passes `timeout=300` (5 min). `subprocess.TimeoutExpired` is caught and converted to `RuntimeError("Wrangler deploy timed out after Xs — bailing rather than blocking the session")` so the operator log clearly identifies the cause. Tests: `test_passes_timeout_to_subprocess`, `test_raises_on_subprocess_timeout`.
 
-### ☐ P3.40 — Haiku ticker extraction has no allowlist
-- **File:** `v2/classifier.py:150-159`
-- **Bug:** `tickers = entry.get("tickers", [])` iterated raw with only `.upper()` sanitization. Common-word false-positives ("ARE", "IT", "ON", "SO", "GO") become rows. Hallucinated tickers like "FAANG" or "$TSLA" also persist — no FK to a known ticker universe.
+### ✅ P3.40 — Haiku ticker extraction has no allowlist
+- **File:** `v2/classifier.py:35-83, 184-186`
+- **Bug:** `tickers = entry.get("tickers", [])` accepted any string Haiku emitted with only `.upper()` sanitization. `$TSLA`-prefixed strings, group acronyms (FAANG, MAANG, MAGS), and generic acronyms (CEO, GDP, ETF) all became rows in `news_signals` and polluted attribution joins.
+- **Fix (2026-05-02):** New `_validate_ticker(raw)` returns the cleaned ticker (`$` stripped, uppercased) or `None`. Filter chain: regex `^[A-Z]{1,5}(\.[A-Z])?$` (catches BRK.B, rejects long alphanumeric junk) + a `_TICKER_BLOCKLIST` of group/agency/economic-indicator acronyms that are never tradable. Did *not* block 2-letter common-word lookalikes (BE, ON, SO, GO, AI) since those *are* real tickers — without an Alpaca-asset allowlist we can't disambiguate. Tests: `TestTickerValidation` (6 cases).
 
 ---
 

@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from v2.attribution import clear_attribution_summary_cache
+
 
 class TestBuildAttributionConstraints:
     def test_formats_strong_and_weak_categories(self):
@@ -264,6 +266,58 @@ class TestGetAttributionSummary:
         assert "30% beat-market rate" in result
         assert "-1.00% avg 7d alpha" in result
         assert "n=15" in result
+
+    def test_memoizes_within_process(self):
+        """P3.32: `get_attribution_summary` is called 3+ times per session
+        (strategist tool loop + context builders). Memo skips redundant
+        DB roundtrips."""
+        mock_rows = [
+            {
+                "category": "news_signal:earnings",
+                "sample_size": 10,
+                "avg_outcome_7d": Decimal("1.0"),
+                "avg_outcome_30d": Decimal("2.0"),
+                "win_rate_7d": Decimal("0.6"),
+                "win_rate_30d": Decimal("0.55"),
+            },
+        ]
+        with patch(
+            "v2.attribution.get_signal_attribution", return_value=mock_rows
+        ) as mock_get:
+            from v2.attribution import get_attribution_summary
+            r1 = get_attribution_summary()
+            r2 = get_attribution_summary()
+            r3 = get_attribution_summary()
+
+        assert r1 == r2 == r3
+        assert mock_get.call_count == 1, (
+            f"Expected one DB hit across three reads, got {mock_get.call_count}"
+        )
+
+    def test_recompute_invalidates_memo(self):
+        """`compute_signal_attribution` writes new rows; the cached
+        summary must be invalidated so subsequent readers see fresh data."""
+        first_rows = [
+            {"category": "news_signal:earnings", "sample_size": 10,
+             "avg_outcome_7d": Decimal("1.0"), "avg_outcome_30d": Decimal("2.0"),
+             "win_rate_7d": Decimal("0.6"), "win_rate_30d": Decimal("0.55")},
+        ]
+        second_rows = [
+            {"category": "news_signal:earnings", "sample_size": 20,
+             "avg_outcome_7d": Decimal("3.0"), "avg_outcome_30d": Decimal("4.0"),
+             "win_rate_7d": Decimal("0.8"), "win_rate_30d": Decimal("0.75")},
+        ]
+
+        with patch("v2.attribution.get_signal_attribution", return_value=first_rows):
+            from v2.attribution import get_attribution_summary
+            r1 = get_attribution_summary()
+        # Simulate a recompute clearing the cache.
+        clear_attribution_summary_cache()
+        with patch("v2.attribution.get_signal_attribution", return_value=second_rows):
+            r2 = get_attribution_summary()
+
+        assert "n=10" in r1
+        assert "n=20" in r2, "Cache must be invalidated so second read sees new data"
 
 
 class TestExpectedValueConstraints:

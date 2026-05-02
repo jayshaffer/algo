@@ -74,7 +74,7 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
             LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
             LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
-            WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE d.date > CURRENT_DATE - INTERVAL '1 day' * %s
               AND d.action IN ('buy', 'sell')
               AND d.outcome_7d IS NOT NULL
               AND d.benchmark_7d IS NOT NULL
@@ -114,7 +114,7 @@ def analyze_sentiment_performance(days: int = 90) -> list[SentimentPerformance]:
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
-            WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE d.date > CURRENT_DATE - INTERVAL '1 day' * %s
               AND d.action IN ('buy', 'sell')
               AND ns.sentiment IS NOT NULL
               AND d.outcome_7d IS NOT NULL
@@ -148,7 +148,7 @@ def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
                 AVG(outcome_30d) as avg_outcome_30d,
                 SUM(outcome_7d) as total_pnl_7d
             FROM decisions
-            WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
               AND action IN ('buy', 'sell')
               AND outcome_7d IS NOT NULL
             GROUP BY ticker
@@ -182,7 +182,7 @@ def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
-            WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE d.date > CURRENT_DATE - INTERVAL '1 day' * %s
               AND d.action IN ('buy', 'sell')
               AND ns.confidence IS NOT NULL
               AND d.outcome_7d IS NOT NULL
