@@ -642,6 +642,61 @@ class TestBuyingPowerRefresh:
         # get_account_info should be called twice: once at snapshot, once after fill
         assert call_count[0] >= 2
 
+    def test_each_decision_logged_with_account_state_at_trade_time(self, mock_db, mock_cursor):
+        """Each decision row's account_equity/buying_power must reflect the live
+        account state at the moment that trade executed, not the pre-session
+        snapshot. Without this, every row in a multi-trade session shares the
+        same pre-session figures and corrupts the historical signal that
+        strategy reflection learns from.
+        """
+        decision_a = _make_decision(
+            ticker="AAPL", playbook_action_id=1,
+            intent_type="invest_dollar", intent_magnitude=Decimal("150"),
+        )
+        decision_b = _make_decision(
+            ticker="MSFT", playbook_action_id=2,
+            intent_type="invest_dollar", intent_magnitude=Decimal("150"),
+        )
+
+        pre_session = {
+            "portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
+            "buying_power": Decimal("50000"),
+        }
+        after_first_fill = {
+            "portfolio_value": Decimal("99850"), "cash": Decimal("49850"),
+            "buying_power": Decimal("49850"),
+        }
+        after_second_fill = {
+            "portfolio_value": Decimal("99700"), "cash": Decimal("49700"),
+            "buying_power": Decimal("49700"),
+        }
+        account_returns = iter([
+            pre_session, after_first_fill, after_second_fill, after_second_fill,
+        ])
+
+        with ExitStack() as stack:
+            mocks = _happy_path(
+                stack,
+                decisions=[decision_a, decision_b],
+                overrides={
+                    "get_account_info": MagicMock(
+                        side_effect=lambda: next(account_returns),
+                    ),
+                },
+            )
+            run_trading_session(dry_run=False)
+
+        insert_calls = mocks["insert_decision"].call_args_list
+        assert len(insert_calls) == 2, "expected one insert_decision per decision"
+
+        # First decision: state at trade time == pre-session snapshot
+        assert insert_calls[0].kwargs["buying_power"] == pre_session["buying_power"]
+        assert insert_calls[0].kwargs["account_equity"] == pre_session["portfolio_value"]
+
+        # Second decision: state at trade time == AFTER first fill, NOT pre-session
+        assert insert_calls[1].kwargs["buying_power"] == after_first_fill["buying_power"]
+        assert insert_calls[1].kwargs["account_equity"] == after_first_fill["portfolio_value"]
+
 
 class TestTradingSessionResult:
     def test_has_required_fields(self):

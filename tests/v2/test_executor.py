@@ -361,6 +361,45 @@ class TestWaitForFillCancellation:
         mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-abc")
 
 
+class TestQuantityPrecision:
+    """Defensive: qty must be quantized to ≤9 decimals (Alpaca's documented limit)
+    and rounded DOWN, so we never overshoot a precheck-trimmed sell qty."""
+
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_qty_quantized_to_nine_decimals_round_down(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_market_order
+        execute_market_order("AAPL", "buy", Decimal("0.123456789999"))
+
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        # 12 decimals → quantized to 9, rounded DOWN → 0.123456789
+        assert request.qty == 0.123456789
+
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_qty_below_nine_decimals_passes_through(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_market_order
+        execute_market_order("AAPL", "buy", Decimal("2.5"))
+
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        assert request.qty == 2.5
+
+    @patch("v2.executor.get_trading_client")
+    def test_limit_order_qty_quantized_to_nine_decimals_round_down(self, mock_client):
+        mock_order = MagicMock(id="ord-1", filled_qty="0", filled_avg_price=None)
+        mock_client.return_value.submit_order.return_value = mock_order
+
+        from v2.executor import execute_limit_order
+        execute_limit_order("AAPL", "sell", Decimal("0.987654321999"), Decimal("100.50"))
+
+        request = mock_client.return_value.submit_order.call_args.args[0]
+        assert request.qty == 0.987654321
+
+
 class TestDryRunPrice:
     def test_dry_run_order_uses_simulated_price(self):
         from v2.executor import execute_market_order

@@ -87,6 +87,10 @@ def resolve_sell_intent(
 
     if t == "trim_to_portfolio_pct":
         pct = _require_pct(intent.magnitude, "trim_to_portfolio_pct")
+        if pct == 0:
+            raise IntentError(
+                "trim_to_portfolio_pct magnitude must be > 0 — use exit_full to liquidate"
+            )
         target_value = portfolio_value * (pct / Decimal("100"))
         current_value = held * price
         if current_value <= target_value:

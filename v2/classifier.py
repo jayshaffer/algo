@@ -1,11 +1,36 @@
 """News classification using Claude Haiku with batch support."""
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 
 from .claude_client import get_claude_client
+
+logger = logging.getLogger(__name__)
+
+# Allowed category enums. Out-of-vocab values from the LLM (typos like
+# "earnigns", hallucinations like "frobnozzle") are coerced to a default
+# rather than persisted verbatim — otherwise they create orphan attribution
+# buckets like the news_signal:unknown artifact patched 2026-05-02.
+VALID_TICKER_CATEGORIES = frozenset({
+    "earnings", "guidance", "analyst", "product", "legal", "noise",
+})
+VALID_MACRO_CATEGORIES = frozenset({
+    "fed", "trade", "regulation", "geopolitical", "fiscal", "election",
+    "sector",  # set explicitly by the sector-type branch
+})
+
+
+def _coerce_category(value: str, allowed: frozenset, default: str, context: str) -> str:
+    if value in allowed:
+        return value
+    logger.warning(
+        "classifier: invalid %s category %r — coercing to %r",
+        context, value, default,
+    )
+    return default
 
 
 def _sanitize_headline(headline: str) -> str:
@@ -148,11 +173,14 @@ def _build_classification_result(
 
     if news_type == "ticker_specific":
         tickers = entry.get("tickers", [])
+        category = _coerce_category(
+            entry.get("category", "noise"), VALID_TICKER_CATEGORIES, "noise", "ticker",
+        )
         for ticker in tickers:
             ticker_signals.append(TickerSignal(
                 ticker=ticker.upper(),
                 headline=headline,
-                category=entry.get("category", "noise"),
+                category=category,
                 sentiment=entry.get("sentiment", "neutral"),
                 confidence=entry.get("confidence", "low"),
                 published_at=published_at
@@ -160,7 +188,10 @@ def _build_classification_result(
     elif news_type == "macro_political":
         macro_signal = MacroSignal(
             headline=headline,
-            category=entry.get("category", "geopolitical"),
+            category=_coerce_category(
+                entry.get("category", "geopolitical"),
+                VALID_MACRO_CATEGORIES, "geopolitical", "macro",
+            ),
             affected_sectors=entry.get("affected_sectors", ["all"]),
             sentiment=entry.get("sentiment", "neutral"),
             published_at=published_at
@@ -329,7 +360,9 @@ def classify_ticker_news(
     return TickerSignal(
         ticker=ticker.upper(),
         headline=headline,
-        category=result.get("category", "noise"),
+        category=_coerce_category(
+            result.get("category", "noise"), VALID_TICKER_CATEGORIES, "noise", "ticker",
+        ),
         sentiment=result.get("sentiment", "neutral"),
         confidence=result.get("confidence", "low"),
         published_at=published_at

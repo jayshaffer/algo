@@ -201,6 +201,48 @@ class TestBuildClassificationResult:
         assert result.ticker_signals == []
         assert result.macro_signal is None
 
+    def test_ticker_specific_invalid_category_coerced_to_noise(self, caplog):
+        """LLM-emitted out-of-vocab category (typo or hallucination) must coerce
+        to 'noise' rather than persisting verbatim and polluting attribution
+        with junk buckets. This is the upstream of the news_signal:unknown
+        artifact patched downstream on 2026-05-02.
+        """
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["AAPL"],
+            "category": "earnigns",  # typo
+            "sentiment": "bullish",
+            "confidence": "high",
+        }
+        with caplog.at_level("WARNING"):
+            result = _build_classification_result(entry, "Apple beats", SAMPLE_PUBLISHED_AT)
+
+        assert result.ticker_signals[0].category == "noise"
+        assert any("earnigns" in r.message for r in caplog.records)
+
+    def test_macro_political_invalid_category_coerced_to_default(self, caplog):
+        entry = {
+            "type": "macro_political",
+            "category": "frobnozzle",  # hallucinated
+            "affected_sectors": ["finance"],
+            "sentiment": "bearish",
+        }
+        with caplog.at_level("WARNING"):
+            result = _build_classification_result(entry, "Fed action", SAMPLE_PUBLISHED_AT)
+
+        assert result.macro_signal.category == "geopolitical"
+        assert any("frobnozzle" in r.message for r in caplog.records)
+
+    def test_ticker_specific_valid_category_unchanged(self):
+        for cat in ("earnings", "guidance", "analyst", "product", "legal", "noise"):
+            entry = {
+                "type": "ticker_specific",
+                "tickers": ["AAPL"], "category": cat,
+                "sentiment": "neutral", "confidence": "low",
+            }
+            result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+            assert result.ticker_signals[0].category == cat
+
 
 # ---------------------------------------------------------------------------
 # classify_news tests

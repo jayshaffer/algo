@@ -160,7 +160,12 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
 
         outcome = calculate_outcome(action, entry_price, exit_price)
 
-        # Compute SPY benchmark for the same window
+        # Compute SPY benchmark for the same window. For sells, negate the
+        # benchmark too — outcome is sign-flipped for sells (rising stock after
+        # a sell = negative outcome for the signal), so benchmark must flip
+        # the same way for `alpha = outcome - benchmark` to measure whether
+        # the sell beat the market. Without this, every sell during a bull
+        # market gets a wrongly-negative alpha.
         benchmark = None
         if decision_date not in spy_prices:
             spy_prices[decision_date] = get_price_on_date(client, BENCHMARK_TICKER, decision_date)
@@ -168,6 +173,8 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
         spy_exit = get_price_on_date(client, BENCHMARK_TICKER, exit_date)
         if spy_entry and spy_exit and spy_entry > 0 and spy_exit > 0:
             benchmark = ((spy_exit - spy_entry) / spy_entry) * 100
+            if action == "sell":
+                benchmark = -benchmark
 
         alpha_str = f" alpha={outcome - benchmark:+.2f}%" if benchmark is not None else ""
 
