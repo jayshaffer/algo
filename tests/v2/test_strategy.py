@@ -558,6 +558,35 @@ class TestIdentityUpdateGuard:
     @patch("v2.strategy.insert_strategy_state")
     @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
+    def test_warning_does_not_promise_retry_will_succeed(self, mock_get, mock_clear, mock_insert):
+        """P3.42: the prior warning text said 'To proceed anyway, call
+        update_strategy_identity again.' — but a retry hits the same guard
+        (or finds a now-0-days-old freshly-written state), so the LLM is
+        misled into wasted turns. The guard is hard, not soft. The warning
+        must not promise a retry path."""
+        from v2.strategy import tool_update_strategy_identity
+        mock_get.return_value = make_strategy_state_row(
+            version=5,
+            created_at=datetime.now(UTC),
+        )
+
+        result = tool_update_strategy_identity(
+            identity_text="New identity",
+            risk_posture="aggressive",
+            sector_biases={},
+            preferred_signals=[],
+            avoided_signals=[],
+        )
+
+        assert "Warning" in result
+        # The misleading instruction must be gone — the strategist should not
+        # be told to retry a guard that fires unconditionally.
+        assert "call update_strategy_identity again" not in result.lower()
+        assert "call again" not in result.lower()
+
+    @patch("v2.strategy.insert_strategy_state")
+    @patch("v2.strategy.clear_current_strategy_state")
+    @patch("v2.strategy.get_current_strategy_state")
     def test_allows_update_if_not_recent(self, mock_get, mock_clear, mock_insert):
         """Should allow update if identity hasn't been updated in >3 days."""
         from datetime import timedelta

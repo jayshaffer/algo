@@ -135,8 +135,12 @@ def _format_attribution_summary() -> str:
     insufficient = [r for r in rows if r["sample_size"] < min_samples]
 
     lines = ["Signal Attribution (alpha vs SPY benchmark):"]
-    outperforming = [r for r in sufficient if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) > 0]
-    underperforming = [r for r in sufficient if r.get("avg_outcome_7d") and float(r["avg_outcome_7d"]) <= 0]
+    # P3.41: explicit `is not None` so a row with exactly 0 alpha lands in
+    # underperforming (where `<= 0` covers it). The previous truthy check
+    # short-circuited on Decimal(0) and the row was silently dropped from
+    # both buckets — invisible to the strategist.
+    outperforming = [r for r in sufficient if r.get("avg_outcome_7d") is not None and float(r["avg_outcome_7d"]) > 0]
+    underperforming = [r for r in sufficient if r.get("avg_outcome_7d") is not None and float(r["avg_outcome_7d"]) <= 0]
 
     if outperforming:
         lines.append("Outperforming signals (positive alpha vs SPY):")

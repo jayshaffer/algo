@@ -125,13 +125,20 @@ def tool_update_strategy_identity(
     logger.info("Updating strategy identity")
     current = get_current_strategy_state()
 
-    # Soft guard: warn if updated within last 3 days
+    # Hard guard: identity updates are throttled to once per 3 days to prevent
+    # oscillation. P3.42: the previous text closed with "To proceed anyway, call
+    # update_strategy_identity again" — but a retry hits the same guard (and
+    # immediately after a successful write the freshly-stamped state is 0 days
+    # old, so the next call would also be rejected). The instruction misled
+    # the LLM into wasting turns. Reject with a memo-only path instead.
     if current and (date.today() - current["created_at"].date()).days < 3:
         return (
             f"Warning: Identity was updated within the last 3 days "
-            f"(v{current['version']} on {current['created_at'].date()}). "
-            f"Consider writing a memo instead unless the system's fundamental "
-            f"character has changed. To proceed anyway, call update_strategy_identity again."
+            f"(v{current['version']} on {current['created_at'].date()}) — "
+            f"this update has been rejected. Identity updates are gated to "
+            f"one per 3 days to prevent oscillation. Write a memo to record "
+            f"the change you wanted; if the case still holds in 3 days, "
+            f"the next session can land it."
         )
 
     new_version = (current["version"] + 1) if current else 1

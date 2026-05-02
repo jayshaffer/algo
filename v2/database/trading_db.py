@@ -523,7 +523,11 @@ def insert_thesis_signals(thesis_id: int, signal_refs: list[dict]) -> int:
             INSERT INTO thesis_signals (thesis_id, signal_type, signal_id)
             VALUES %s ON CONFLICT DO NOTHING
         """, rows)
-    return len(rows)
+        # P2.26: return what was actually inserted, not the input count.
+        # ON CONFLICT DO NOTHING means refs already cited on this thesis
+        # are skipped — reporting len() lies to the caller (and to the
+        # strategist via _persist_signal_refs's "Cited N signals" note).
+        return cur.rowcount if cur.rowcount is not None else 0
 
 
 def get_thesis_signals(thesis_id: int) -> list:
@@ -557,7 +561,10 @@ def insert_decision_signals_batch(signals: list[tuple]) -> int:
             INSERT INTO decision_signals (decision_id, signal_type, signal_id)
             VALUES %s ON CONFLICT DO NOTHING
         """, signals)
-        return len(signals)
+        # P2.26: same shape as P2.21 (news/macro batches). Return what was
+        # actually persisted so a rerun of an already-logged decision
+        # doesn't falsely claim N new links.
+        return cur.rowcount if cur.rowcount is not None else 0
 
 
 def get_decision_signals(decision_id) -> list:

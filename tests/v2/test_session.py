@@ -744,6 +744,91 @@ class TestStrategistMemoPersistence:
         assert "without writing a playbook" in result.strategist_error
 
 
+class TestReflectionMemoGuard:
+    """P1.15: Stage 4 reflection must produce a memo or fail the stage —
+    parallel to P2.24 for the strategist. If the LLM finishes the loop
+    without calling write_strategy_memo, the journal silently has a hole
+    for that session, and on resume the stage is "completed" so the
+    LLM never gets another chance to fill it. Failing the stage instead
+    leaves it incomplete so the next session retries."""
+
+    def test_reflection_stage_fails_when_memo_not_written(self):
+        """If memo_written is False, the stage must not be marked complete
+        and an error must be recorded so the next run retries.
+
+        Patches insert_session_record so session tracking is active and
+        complete_session_stage observability becomes meaningful (otherwise
+        session_id is None and the stage-completion calls short-circuit)."""
+        no_memo_result = StrategyReflectionResult(
+            rules_proposed=0, rules_retired=0, identity_updated=False,
+            memo_written=False, input_tokens=500, output_tokens=200, turns_used=3,
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection", return_value=no_memo_result), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.insert_session_record", return_value=42), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage"), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"):
+
+            result = run_session(dry_run=False)
+
+        # The strategy stage must NOT be marked complete — otherwise resume
+        # would skip the reflection on the next run, and the memo gap stays.
+        completed_stage_names = [
+            call.args[1] for call in mock_complete.call_args_list
+        ]
+        assert "strategy" not in completed_stage_names, (
+            "Reflection stage was marked complete despite no memo — resume "
+            "will skip it next session, locking in the journal hole."
+        )
+        assert result.strategy_error is not None
+        assert "memo" in result.strategy_error.lower()
+
+    def test_reflection_stage_completes_when_memo_written(self):
+        """Sanity check: a normal reflection with memo_written=True must
+        still mark the stage complete."""
+        good_result = StrategyReflectionResult(
+            rules_proposed=1, rules_retired=0, identity_updated=False,
+            memo_written=True, input_tokens=500, output_tokens=200, turns_used=3,
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection", return_value=good_result), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.insert_session_record", return_value=42), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage"), \
+             patch("v2.session.complete_session"), \
+             patch("v2.session.fail_session"):
+
+            result = run_session(dry_run=False)
+
+        completed_stage_names = [
+            call.args[1] for call in mock_complete.call_args_list
+        ]
+        assert "strategy" in completed_stage_names
+        assert result.strategy_error is None
+
+
 class TestExecutorPlaybookDependency:
     def test_executor_skipped_when_strategist_fails_and_no_playbook(self):
         """Stage 3 should be skipped if Stage 2 failed and no playbook exists."""
