@@ -476,6 +476,22 @@ class TestOrphanSignalFiltering:
         sql = mock_cursor.execute.call_args[0][0]
         assert "'unknown'" not in sql
 
+    def test_excludes_thesis_orphans(self, mock_db, mock_cursor):
+        """Rows where signal_type='thesis' but the FK does not match a theses row
+        must be excluded — same shape as the news_signal orphan filter. Without
+        this, pre-validator residue (signal_id=0) inflates the thesis bucket.
+        """
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        # Must LEFT JOIN theses and filter orphans
+        assert "JOIN theses" in sql
+        assert "t.id IS NOT NULL" in sql or "thesis" in sql.lower()
+        # Specifically: the WHERE clause should require thesis FK match
+        assert "ds.signal_type != 'thesis'" in sql or "t.id IS NOT NULL" in sql
+
 
 class TestAttributionTimeWindow:
     @pytest.fixture(autouse=True)

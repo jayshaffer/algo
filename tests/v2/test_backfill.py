@@ -87,6 +87,105 @@ class TestBackfillOutcomes:
         assert aapl_calls[0][0][2] == date(2026, 3, 24)
 
 
+class TestSellAlphaSign:
+    """For sell decisions, both outcome AND benchmark must be sign-flipped so
+    downstream alpha = outcome - benchmark correctly measures whether the sell
+    signal beat the market. Without this flip, every sell during a bull market
+    gets wrongly attributed as a large loss, inverting the gradient on every
+    signal that motivates exits."""
+
+    @patch("v2.backfill.update_outcome")
+    @patch("v2.backfill.get_price_on_date")
+    @patch("v2.backfill.get_data_client")
+    @patch("v2.backfill.get_decisions_needing_backfill")
+    def test_sell_signal_wrong_when_stock_outperforms_market(
+        self, mock_get_decisions, mock_client, mock_price, mock_update,
+    ):
+        """Sell at $100, stock rises to $110 (+10%), SPY rises $400 → $420 (+5%).
+        Sell signal was WRONG (stock outperformed market by 5%).
+        Expect alpha = outcome - benchmark = -10 - (-5) = -5 → sell missed 5% of relative upside.
+        """
+        mock_get_decisions.return_value = [{
+            "id": 1, "date": date(2026, 3, 13), "ticker": "AAPL",
+            "action": "sell", "price": Decimal("100"),
+        }]
+        mock_client.return_value = MagicMock()
+
+        def price(_client, ticker, dt):
+            if ticker == "AAPL":
+                return Decimal("110")
+            if ticker == "SPY":
+                return Decimal("400") if dt == date(2026, 3, 13) else Decimal("420")
+        mock_price.side_effect = price
+
+        backfill_outcomes(days=7, dry_run=False)
+
+        outcome, benchmark = mock_update.call_args.args[2:4]
+        assert outcome == Decimal("-10")
+        assert benchmark == Decimal("-5")  # benchmark must be negated for sells
+        assert outcome - benchmark == Decimal("-5")
+
+    @patch("v2.backfill.update_outcome")
+    @patch("v2.backfill.get_price_on_date")
+    @patch("v2.backfill.get_data_client")
+    @patch("v2.backfill.get_decisions_needing_backfill")
+    def test_sell_signal_right_when_stock_underperforms_market(
+        self, mock_get_decisions, mock_client, mock_price, mock_update,
+    ):
+        """Sell at $100, stock drops to $90 (-10%), SPY rises $400 → $420 (+5%).
+        Sell signal was RIGHT (stock underperformed market by 15%).
+        Expect alpha = +10 - (-5) = +15 → sell beat market by 15%.
+        """
+        mock_get_decisions.return_value = [{
+            "id": 1, "date": date(2026, 3, 13), "ticker": "AAPL",
+            "action": "sell", "price": Decimal("100"),
+        }]
+        mock_client.return_value = MagicMock()
+
+        def price(_client, ticker, dt):
+            if ticker == "AAPL":
+                return Decimal("90")
+            if ticker == "SPY":
+                return Decimal("400") if dt == date(2026, 3, 13) else Decimal("420")
+        mock_price.side_effect = price
+
+        backfill_outcomes(days=7, dry_run=False)
+
+        outcome, benchmark = mock_update.call_args.args[2:4]
+        assert outcome == Decimal("10")
+        assert benchmark == Decimal("-5")
+        assert outcome - benchmark == Decimal("15")
+
+    @patch("v2.backfill.update_outcome")
+    @patch("v2.backfill.get_price_on_date")
+    @patch("v2.backfill.get_data_client")
+    @patch("v2.backfill.get_decisions_needing_backfill")
+    def test_buy_benchmark_unchanged(
+        self, mock_get_decisions, mock_client, mock_price, mock_update,
+    ):
+        """Buys keep benchmark sign positive. Buy at $100, stock to $110 (+10%),
+        SPY to $420 (+5%). Buy was RIGHT, alpha = +10 - +5 = +5.
+        """
+        mock_get_decisions.return_value = [{
+            "id": 1, "date": date(2026, 3, 13), "ticker": "AAPL",
+            "action": "buy", "price": Decimal("100"),
+        }]
+        mock_client.return_value = MagicMock()
+
+        def price(_client, ticker, dt):
+            if ticker == "AAPL":
+                return Decimal("110")
+            if ticker == "SPY":
+                return Decimal("400") if dt == date(2026, 3, 13) else Decimal("420")
+        mock_price.side_effect = price
+
+        backfill_outcomes(days=7, dry_run=False)
+
+        outcome, benchmark = mock_update.call_args.args[2:4]
+        assert outcome == Decimal("10")
+        assert benchmark == Decimal("5")  # buys keep benchmark positive
+
+
 class TestBackfillNoPrice:
     @patch("v2.backfill.get_data_client")
     @patch("v2.backfill.get_decisions_needing_backfill")

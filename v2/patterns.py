@@ -69,11 +69,13 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
             LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
+            LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
             WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
               AND d.action IN ('buy', 'sell')
               AND d.outcome_7d IS NOT NULL
               AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
               AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
+              AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
             GROUP BY category
             ORDER BY avg_outcome_7d DESC NULLS LAST
         """, (days,))

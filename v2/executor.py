@@ -4,7 +4,16 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
+
+# Alpaca documents fractional-share precision at 9 decimals. Quantize ROUND_DOWN
+# before submit so a precheck-trimmed sell can never overshoot qty_available
+# from sub-9-decimal noise produced by intent division.
+_QTY_PRECISION = Decimal("0.000000001")
+
+
+def _quantize_qty(qty: Decimal) -> Decimal:
+    return qty.quantize(_QTY_PRECISION, rounding=ROUND_DOWN)
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
@@ -201,7 +210,7 @@ def execute_market_order(
 
         order_request = MarketOrderRequest(
             symbol=ticker,
-            qty=float(qty),
+            qty=float(_quantize_qty(qty)),
             side=order_side,
             time_in_force=TimeInForce.DAY,
         )
@@ -250,7 +259,7 @@ def execute_limit_order(
 
         order_request = LimitOrderRequest(
             symbol=ticker,
-            qty=float(qty),
+            qty=float(_quantize_qty(qty)),
             side=order_side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(limit_price),

@@ -50,10 +50,12 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                 JOIN decisions d ON d.id = ds.decision_id
                 LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
                 LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
+                LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
                 WHERE d.action IN ('buy', 'sell')
                   AND d.date >= %s
                   AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
                   AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
+                  AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
             )
             SELECT
                 category,

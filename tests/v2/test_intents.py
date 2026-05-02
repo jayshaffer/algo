@@ -95,6 +95,18 @@ class TestResolveSellIntent:
                 portfolio_value=Decimal("10000"),
             )
 
+    def test_trim_to_portfolio_pct_zero_raises(self):
+        """magnitude=0 with trim_to_portfolio_pct would liquidate the entire
+        position. That's almost never what the LLM means by '0' — force it to
+        use exit_full when it actually wants a full exit.
+        """
+        intent = SellIntent(type="trim_to_portfolio_pct", magnitude=Decimal("0"))
+        with pytest.raises(IntentError, match="exit_full"):
+            resolve_sell_intent(
+                intent, held=Decimal("10"), price=Decimal("100"),
+                portfolio_value=Decimal("10000"),
+            )
+
 
 class TestResolveBuyIntent:
     def test_invest_dollar_divides_by_price(self):

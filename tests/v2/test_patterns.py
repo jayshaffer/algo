@@ -64,6 +64,17 @@ class TestAnalyzeSignalCategories:
         assert "ms.id IS NOT NULL" in sql or "ms.category IS NOT NULL" in sql
         assert "'unknown'" not in sql
 
+    def test_excludes_thesis_orphans(self, mock_db):
+        """Same orphan-FK guard for signal_type='thesis'. Without it, pre-validator
+        residue (signal_id=0) inflates the thesis bucket — the same artifact
+        shape as news_signal:unknown but for theses.
+        """
+        mock_db.fetchall.return_value = []
+        analyze_signal_categories(days=90)
+        sql = mock_db.execute.call_args[0][0]
+        assert "JOIN theses" in sql
+        assert "t.id IS NOT NULL" in sql
+
     def test_returns_signal_performance_objects(self, mock_db):
         """Returns list of SignalPerformance dataclasses."""
         mock_db.fetchall.return_value = [

@@ -501,8 +501,15 @@ def _execute_decisions(
     data_client,
     dry_run: bool,
     errors: list[str],
-) -> tuple[_ExecutionTotals, dict, dict]:
-    """Run the per-decision execution loop. Returns (totals, order_ids, order_results)."""
+) -> tuple[_ExecutionTotals, dict, dict, dict]:
+    """Run the per-decision execution loop.
+
+    Returns (totals, order_ids, order_results, decision_account_states).
+    decision_account_states maps decision index → {portfolio_value, buying_power}
+    captured at the moment the decision was evaluated, so each logged row
+    reflects the live account state at trade time rather than the pre-session
+    snapshot.
+    """
     buying_power = account_info["buying_power"]
     portfolio_value = account_info["portfolio_value"]
 
@@ -510,8 +517,14 @@ def _execute_decisions(
     max_trades_per_session = 10
     order_ids: dict = {}
     order_results: dict = {}
+    decision_account_states: dict[int, dict] = {}
 
     for i, decision in enumerate(response.decisions):
+        decision_account_states[i] = {
+            "portfolio_value": portfolio_value,
+            "buying_power": buying_power,
+        }
+
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             continue
@@ -545,7 +558,7 @@ def _execute_decisions(
             decision, buying_power, portfolio_value, outcome.trade_value, dry_run,
         )
 
-    return totals, order_ids, order_results
+    return totals, order_ids, order_results, decision_account_states
 
 
 def _build_final_result(
@@ -600,6 +613,7 @@ def _log_decisions(
     data_client,
     account_info: dict,
     errors: list[str],
+    decision_account_states: dict | None = None,
 ) -> int:
     """Insert decision rows and signal-links. Returns count of successfully logged decisions.
 
@@ -635,6 +649,7 @@ def _log_decisions(
 
             logged_qty = _resolve_logged_qty(result, decision)
 
+            state = (decision_account_states or {}).get(i, account_info)
             decision_id = insert_decision(
                 decision_date=date.today(),
                 ticker=decision.ticker,
@@ -643,8 +658,8 @@ def _log_decisions(
                 price=price,
                 reasoning=decision.reasoning,
                 signals_used=signals_used,
-                account_equity=account_info["portfolio_value"],
-                buying_power=account_info["buying_power"],
+                account_equity=state["portfolio_value"],
+                buying_power=state["buying_power"],
                 playbook_action_id=decision.playbook_action_id,
                 is_off_playbook=decision.is_off_playbook,
                 order_id=order_ids.get(i),
@@ -720,7 +735,7 @@ def run_trading_session(
     logger.info("[Step 5] Executing trades")
     positions = {p["ticker"]: p["shares"] for p in get_positions()}
     _build_open_sell_orders()  # run for side effect (future: pass to precheck)
-    totals, order_ids, order_results = _execute_decisions(
+    totals, order_ids, order_results, decision_account_states = _execute_decisions(
         response, positions, account_info, data_client, dry_run, errors,
     )
 
@@ -729,7 +744,10 @@ def run_trading_session(
 
     # Step 6: Log decisions
     logger.info("[Step 6] Logging decisions")
-    logged_count = _log_decisions(response, order_ids, order_results, data_client, account_info, errors)
+    logged_count = _log_decisions(
+        response, order_ids, order_results, data_client, account_info, errors,
+        decision_account_states=decision_account_states,
+    )
     logger.info("Logged %d decisions (%d emitted by executor)", logged_count, len(response.decisions))
 
     _log_session_summary(response, totals, errors)
