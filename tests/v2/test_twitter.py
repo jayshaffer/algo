@@ -114,8 +114,9 @@ class TestPostedTweetExists:
 class TestGatherTweetContext:
     """Verify gather_tweet_context builds context string from DB data."""
 
+    @patch("v2.twitter.get_daily_deposit", return_value=Decimal("0"))
     @patch("v2.twitter.get_net_deposits", return_value=Decimal("100000"))
-    def test_full_context(self, mock_deposits, mock_db):
+    def test_full_context(self, mock_deposits, mock_daily, mock_db):
         mock_db.fetchall.side_effect = [
             [{"ticker": "AAPL", "action": "buy", "quantity": Decimal("10"), "price": Decimal("185.50"), "reasoning": "Earnings beat"}],
             [{"ticker": "AAPL", "shares": Decimal("50"), "avg_cost": Decimal("150.00")}],
@@ -139,6 +140,52 @@ class TestGatherTweetContext:
         # Deposit-adjusted: 150000 - 100000 = 50000, 50000/100000 = 50%
         assert "Total return: +$50,000.00 (+50.00%) since 2026-01-01" in context
         assert "Stay bullish on tech" in context
+
+    @patch("v2.twitter.get_daily_deposit", return_value=Decimal("1000"))
+    @patch("v2.twitter.get_net_deposits", return_value=Decimal("100000"))
+    def test_day_pnl_subtracts_deposits(self, mock_deposits, mock_daily, mock_db):
+        """P3.26: tweet must subtract same-day cash deposits from day P&L
+        so the public number agrees with the dashboard. Without this, a
+        $1000 deposit on the gap day is counted as +$1000 of trading P&L."""
+        mock_db.fetchall.side_effect = [
+            [], [], [],
+            [
+                {"date": date(2026, 2, 15), "portfolio_value": Decimal("150000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("50000")},
+                {"date": date(2026, 2, 14), "portfolio_value": Decimal("148000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("48000")},
+            ],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "date": date(2026, 1, 1)},
+            None,
+        ]
+        context = gather_tweet_context(date(2026, 2, 15))
+        # Raw delta = 150000 - 148000 = 2000; minus 1000 deposit = 1000 trading P&L.
+        # Base for % = prev + deposit = 148000 + 1000 = 149000; 1000/149000 = 0.67%.
+        assert "Today's P&L: +$1,000.00 (+0.67%)" in context, (
+            f"Expected deposit-subtracted P&L, got: {context}"
+        )
+
+    @patch("v2.twitter.get_daily_deposit", side_effect=Exception("Alpaca down"))
+    @patch("v2.twitter.get_net_deposits", return_value=Decimal("100000"))
+    def test_day_pnl_falls_back_when_daily_deposit_fails(
+        self, mock_deposits, mock_daily, mock_db
+    ):
+        """If the daily-deposit lookup fails, fall back to raw delta rather
+        than crashing the tweet stage. Twitter is best-effort; we'd rather
+        publish a slightly-off number than skip the post entirely."""
+        mock_db.fetchall.side_effect = [
+            [], [], [],
+            [
+                {"date": date(2026, 2, 15), "portfolio_value": Decimal("150000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("50000")},
+                {"date": date(2026, 2, 14), "portfolio_value": Decimal("148000"), "cash": Decimal("100000"), "buying_power": Decimal("200000"), "long_market_value": Decimal("48000")},
+            ],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("100000"), "date": date(2026, 1, 1)},
+            None,
+        ]
+        context = gather_tweet_context(date(2026, 2, 15))
+        assert "Today's P&L: +$2,000.00 (+1.35%)" in context
 
     @patch("v2.twitter.get_net_deposits", return_value=Decimal("120000"))
     def test_total_return_deposit_adjusted(self, mock_deposits, mock_db):

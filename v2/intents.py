@@ -12,7 +12,7 @@ clamped, feasible share count.
 from dataclasses import dataclass
 from decimal import Decimal
 
-MAX_POSITION_PCT = Decimal("0.10")  # mirror v2/agent.py
+from .risk import MAX_POSITION_PCT
 
 SELL_INTENT_TYPES = frozenset({
     "exit_full",

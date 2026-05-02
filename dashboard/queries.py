@@ -316,12 +316,21 @@ def get_thesis_stats():
         confidence_rows = cur.fetchall()
         confidence_dist = {row['confidence']: row['count'] for row in confidence_rows}
 
+        executed = counts['executed'] or 0
+        invalidated = counts['invalidated'] or 0
+        expired = counts['expired'] or 0
+        # Execution conversion rate among closed theses (executed vs.
+        # dropped). A more rigorous "success" would join through
+        # decision_signals to alpha; this cheap count avoids the N/A
+        # placeholder until that lands.
+        closed = executed + invalidated + expired
+        success_rate = (executed / closed * 100) if closed else None
         return {
             'active': counts['active'] or 0,
-            'executed': counts['executed'] or 0,
-            'invalidated': counts['invalidated'] or 0,
-            'expired': counts['expired'] or 0,
-            'success_rate': None,  # TODO: Calculate when decisions linked to theses
+            'executed': executed,
+            'invalidated': invalidated,
+            'expired': expired,
+            'success_rate': success_rate,
             'confidence_dist': confidence_dist,
         }
 

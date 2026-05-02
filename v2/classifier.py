@@ -33,6 +33,47 @@ def _coerce_category(value: str, allowed: frozenset, default: str, context: str)
     return default
 
 
+# P3.40: ticker validation. Haiku occasionally emits hallucinated tickers
+# (group acronyms like FAANG/MAANG/MAGS, generic acronyms like ETF/CEO/AI,
+# or `$TSLA`-prefixed strings). Without filtering, these become rows in
+# news_signals and pollute attribution.
+_TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
+_TICKER_BLOCKLIST = frozenset({
+    # group/category acronyms — never tradable tickers
+    "FAANG", "MAANG", "MAGS", "MAG", "FAAMG", "BATX", "BAT",
+    # generic non-equity acronyms commonly mentioned in news
+    "ETF", "ETN", "IPO", "SPAC", "REIT", "MLP",
+    "CEO", "CFO", "CTO", "COO", "CIO", "CMO", "CISO",
+    "SEC", "FDA", "FTC", "DOJ", "FBI", "CIA", "NSA", "EPA", "IRS",
+    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM", "ADP",
+    "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "CNY",
+    # platform/sector buzzwords (lowercase tradable equivalents may exist
+    # — block only when LLM emits them as if they were tickers)
+    "ESG", "DEI",
+})
+
+
+def _validate_ticker(raw: str) -> str | None:
+    """Return a cleaned ticker string, or None if `raw` is not a plausible
+    equity ticker. Catches the common hallucinations: $-prefixed strings,
+    group acronyms (FAANG), and overly-long alphanumeric soup. Real tickers
+    that happen to look like English stop-words (BE, ON, SO, GO) are NOT
+    blocked — without an Alpaca-asset allowlist we can't disambiguate, and
+    blocking them would cost real signal."""
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip().lstrip("$").upper()
+    if not cleaned:
+        return None
+    if not _TICKER_RE.match(cleaned):
+        logger.warning("classifier: rejecting non-ticker-shaped string %r", raw)
+        return None
+    if cleaned in _TICKER_BLOCKLIST:
+        logger.warning("classifier: rejecting hallucinated/acronym ticker %r", raw)
+        return None
+    return cleaned
+
+
 def _sanitize_headline(headline: str) -> str:
     """Sanitize a headline before inserting into an LLM prompt.
 
@@ -182,8 +223,11 @@ def _build_classification_result(
             entry.get("category", "noise"), VALID_TICKER_CATEGORIES, "noise", "ticker",
         )
         for ticker in tickers:
+            cleaned = _validate_ticker(ticker)
+            if cleaned is None:
+                continue
             ticker_signals.append(TickerSignal(
-                ticker=ticker.upper(),
+                ticker=cleaned,
                 headline=headline,
                 category=category,
                 sentiment=entry.get("sentiment", "neutral"),

@@ -493,6 +493,41 @@ def get_net_deposits() -> Decimal:
     return total
 
 
+def get_daily_deposit(prev_date, today_date) -> Decimal:
+    """Sum cash deposits/withdrawals dated in [prev_date, today_date).
+
+    Matches the dashboard's daily_deposit semantics: a deposit dated D shows
+    up in cumulative_deposits for snapshots strictly after D, so the
+    differential between two adjacent snapshots is the deposits that
+    "happened" in the intervening day.
+    """
+    client = get_trading_client()
+    total = Decimal("0")
+    page_token = None
+    prev_str = str(prev_date)
+    today_str = str(today_date)
+
+    while True:
+        params = {"activity_types": "CSD,CSW", "page_size": 100, "direction": "asc"}
+        if page_token:
+            params["page_token"] = page_token
+
+        activities = client.get("/account/activities", params)
+        if not activities:
+            break
+
+        for a in activities:
+            d = str(a["date"])
+            if prev_str <= d < today_str:
+                total += Decimal(str(a["net_amount"]))
+
+        if len(activities) < 100:
+            break
+        page_token = activities[-1]["id"]
+
+    return total
+
+
 def calculate_position_size(
     buying_power: Decimal,
     price: Decimal,

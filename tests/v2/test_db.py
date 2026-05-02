@@ -723,6 +723,20 @@ class TestDashboardQueries:
         assert result["active"] == 5
         assert result["executed"] == 3
         assert result["confidence_dist"]["high"] == 3
+        # P3.38: success_rate is now an actual computed number, not None.
+        # 3 executed / (3 + 1 + 2) closed = 50%.
+        assert result["success_rate"] == pytest.approx(50.0)
+
+    def test_get_thesis_stats_success_rate_none_when_no_closed(self, mock_db, mock_cursor):
+        """If no theses have been closed yet, success_rate stays None to
+        signal "no data" rather than divide-by-zero / artificial 0."""
+        mock_cursor.fetchone.return_value = {
+            "active": 5, "executed": 0, "invalidated": 0, "expired": 0,
+        }
+        mock_cursor.fetchall.return_value = []
+        from v2.database.dashboard_db import get_thesis_stats
+        result = get_thesis_stats()
+        assert result["success_rate"] is None
 
     def test_close_thesis(self, mock_db, mock_cursor):
         mock_conn = MagicMock()

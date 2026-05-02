@@ -49,13 +49,13 @@ def get_news_signals(ticker=None, days=7) -> list:
         if ticker:
             cur.execute("""
                 SELECT * FROM news_signals
-                WHERE ticker = %s AND published_at > NOW() - INTERVAL '%s days'
+                WHERE ticker = %s AND published_at > NOW() - INTERVAL '1 day' * %s
                 ORDER BY published_at DESC
             """, (ticker, days))
         else:
             cur.execute("""
                 SELECT * FROM news_signals
-                WHERE published_at > NOW() - INTERVAL '%s days'
+                WHERE published_at > NOW() - INTERVAL '1 day' * %s
                 ORDER BY published_at DESC
             """, (days,))
         return cur.fetchall()
@@ -100,13 +100,13 @@ def get_macro_signals(category=None, days=7) -> list:
         if category:
             cur.execute("""
                 SELECT * FROM macro_signals
-                WHERE category = %s AND published_at > NOW() - INTERVAL '%s days'
+                WHERE category = %s AND published_at > NOW() - INTERVAL '1 day' * %s
                 ORDER BY published_at DESC
             """, (category, days))
         else:
             cur.execute("""
                 SELECT * FROM macro_signals
-                WHERE published_at > NOW() - INTERVAL '%s days'
+                WHERE published_at > NOW() - INTERVAL '1 day' * %s
                 ORDER BY published_at DESC
             """, (days,))
         return cur.fetchall()
@@ -135,7 +135,7 @@ def get_account_snapshots(days=30) -> list:
     with get_cursor() as cur:
         cur.execute("""
             SELECT * FROM account_snapshots
-            WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date DESC
         """, (days,))
         return cur.fetchall()
@@ -184,7 +184,7 @@ def get_recent_decisions(days=30) -> list:
     with get_cursor() as cur:
         cur.execute("""
             SELECT * FROM decisions
-            WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date DESC
         """, (days,))
         return cur.fetchall()

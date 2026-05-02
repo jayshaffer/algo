@@ -244,6 +244,96 @@ class TestBuildClassificationResult:
             assert result.ticker_signals[0].category == cat
 
 
+class TestTickerValidation:
+    """P3.40: drop hallucinated/non-equity tickers Haiku occasionally emits.
+    Without filtering, group acronyms (FAANG) and generic acronyms (CEO,
+    GDP) become rows in news_signals and pollute attribution joins."""
+
+    def test_strips_dollar_prefix(self):
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["$TSLA"],
+            "category": "earnings",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        assert len(result.ticker_signals) == 1
+        assert result.ticker_signals[0].ticker == "TSLA"
+
+    def test_drops_group_acronyms(self):
+        """FAANG, MAANG, MAGS — never tradable, drop them entirely."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["FAANG", "MAANG", "MAGS", "AAPL"],
+            "category": "product",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        tickers = [s.ticker for s in result.ticker_signals]
+        assert tickers == ["AAPL"], (
+            f"Expected only AAPL to survive, got {tickers}"
+        )
+
+    def test_drops_generic_acronyms(self):
+        """CEO, GDP, ETF — generic acronyms aren't equity tickers."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["CEO", "GDP", "ETF", "MSFT"],
+            "category": "earnings",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        tickers = [s.ticker for s in result.ticker_signals]
+        assert tickers == ["MSFT"]
+
+    def test_drops_overlong_alphanumeric_garbage(self):
+        """Tickers > 5 chars (or with weird internal characters) are
+        almost certainly hallucinations."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["ABCDEFG", "TEST_TICKER", "$$$$"],
+            "category": "product",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        assert result.ticker_signals == []
+
+    def test_accepts_class_share_ticker(self):
+        """BRK.B and similar class-share tickers are valid."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["BRK.B"],
+            "category": "earnings",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        assert len(result.ticker_signals) == 1
+        assert result.ticker_signals[0].ticker == "BRK.B"
+
+    def test_does_not_block_short_real_tickers(self):
+        """Short tickers that happen to look like English words (BE, ON,
+        SO, GO) are real equity tickers — without an Alpaca-asset
+        allowlist we must not block them."""
+        for t in ["BE", "ON", "SO", "GO", "AI", "T", "V", "F"]:
+            entry = {
+                "type": "ticker_specific",
+                "tickers": [t],
+                "category": "earnings",
+                "sentiment": "neutral",
+                "confidence": "low",
+            }
+            result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+            assert len(result.ticker_signals) == 1, (
+                f"Real ticker {t!r} should not be blocked"
+            )
+            assert result.ticker_signals[0].ticker == t
+
+
 # ---------------------------------------------------------------------------
 # classify_news tests
 # ---------------------------------------------------------------------------

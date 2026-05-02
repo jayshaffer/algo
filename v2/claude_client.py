@@ -112,6 +112,30 @@ def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
 _TRUNCATION_THRESHOLD = 300  # chars; tool results longer than this get truncated
 _KEEP_RECENT_EXCHANGES = 3  # number of recent assistant+user pairs to keep intact
 
+_CONTEXT_LENGTH_MARKERS = ("too long", "context length", "context_length")
+
+
+def _looks_like_context_length_error(exc: Exception) -> bool:
+    """Best-effort detection of Anthropic context-length-exceeded errors.
+    The SDK surfaces these as BadRequestError with a message like
+    'prompt is too long: 250000 tokens > 200000 maximum'."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CONTEXT_LENGTH_MARKERS)
+
+
+def _aggressive_prune(messages: list[dict]) -> list[dict]:
+    """Drop everything except the initial user prompt and the most recent
+    exchange. Used as a last-ditch recovery when the API rejects a request
+    for being over the context window — `_truncate_old_tool_results` only
+    shortens individual tool_results, which isn't enough when the chat is
+    long enough on its own."""
+    if len(messages) <= 4:
+        return messages
+    # First message is the initial user prompt; keep last 4 messages so we
+    # preserve a complete (assistant tool_use → user tool_result) exchange
+    # plus its reply pair.
+    return [messages[0], *messages[-4:]]
+
 
 def _truncate_old_tool_results(messages: list[dict]) -> list[dict]:
     """Truncate tool results from older exchanges to reduce context growth.
@@ -187,6 +211,7 @@ def run_agentic_loop(
         cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
 
     max_tokens_recoveries = 0
+    context_length_recoveries = 0
 
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
@@ -196,14 +221,32 @@ def run_agentic_loop(
 
         # Anthropic requires max_tokens; pass the model's documented max so
         # truncation only happens on genuinely pathological generations.
-        response = _call_with_retry(
-            client,
-            model=model,
-            max_tokens=32000,
-            system=cached_system,
-            tools=cached_tools,
-            messages=_messages_with_cache_breakpoint(pruned),
-        )
+        try:
+            response = _call_with_retry(
+                client,
+                model=model,
+                max_tokens=32000,
+                system=cached_system,
+                tools=cached_tools,
+                messages=_messages_with_cache_breakpoint(pruned),
+            )
+        except anthropic.BadRequestError as e:
+            # Graceful degradation for context-length-exceeded: the
+            # per-turn `_truncate_old_tool_results` only shortens individual
+            # tool_results, which can fall short of the limit if the
+            # message history itself is long. Aggressively prune to the
+            # initial prompt + most recent exchange and retry once.
+            # Bounded to 1 recovery per loop to prevent runaway costs.
+            if _looks_like_context_length_error(e) and context_length_recoveries < 1:
+                context_length_recoveries += 1
+                logger.warning(
+                    "Context length exceeded on turn %d (%s); aggressively "
+                    "pruning message history and retrying once",
+                    turn + 1, e,
+                )
+                messages = _aggressive_prune(messages)
+                continue
+            raise
 
         # Track token usage
         total_input_tokens += response.usage.input_tokens
@@ -306,14 +349,42 @@ def run_agentic_loop(
 
 
 def extract_final_text(messages: list[dict]) -> str | None:
-    """Extract the final text response from conversation history."""
+    """Extract the final text response from conversation history.
+
+    Walks assistant messages in reverse. For the first assistant message that
+    has any text blocks, concatenates all of them (responses can split synthesis
+    across multiple blocks). If no assistant message has any text at all
+    (tool-driven loop with no narrative), falls back to a summary of the most
+    recent assistant turn's tool calls so the caller still gets a non-None
+    string — otherwise the strategist memo gets stamped with the caller's
+    "No summary available" placeholder and reflection loses the signal.
+    """
+    last_assistant_with_content: list | None = None
     for msg in reversed(messages):
-        if msg["role"] == "assistant":
-            content = msg["content"]
-            if isinstance(content, list):
-                for block in content:
-                    if hasattr(block, "text"):
-                        return block.text
-            elif isinstance(content, str):
-                return content
+        if msg["role"] != "assistant":
+            continue
+        content = msg["content"]
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            continue
+        if last_assistant_with_content is None:
+            last_assistant_with_content = content
+        text_blocks = [
+            getattr(block, "text", "")
+            for block in content
+            if getattr(block, "type", None) == "text"
+        ]
+        if text_blocks:
+            return "".join(text_blocks)
+
+    if last_assistant_with_content is not None:
+        tool_names = [
+            getattr(block, "name", "")
+            for block in last_assistant_with_content
+            if getattr(block, "type", None) == "tool_use"
+        ]
+        tool_names = [n for n in tool_names if n]
+        if tool_names:
+            return f"[no narrative summary; final tool calls: {', '.join(tool_names)}]"
     return None

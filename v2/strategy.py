@@ -6,6 +6,7 @@ rules, and write session memos.
 """
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date
 
@@ -27,12 +28,26 @@ logger = logging.getLogger(__name__)
 
 MIN_RULE_TENURE_DAYS = 5
 MAX_RETIREMENTS_PER_SESSION = 2
-_session_retirements: list[int] = []
+
+# Per-session retirement counter. Stored in a ContextVar so concurrent
+# strategy reflections (e.g. paper + prod sharing one process) don't
+# stomp each other's state. Each context (thread / asyncio task / explicit
+# `Context.run`) gets its own list.
+_session_retirements: ContextVar[list[int]] = ContextVar("_session_retirements")
+
+
+def _get_session_retirements() -> list[int]:
+    try:
+        return _session_retirements.get()
+    except LookupError:
+        fresh: list[int] = []
+        _session_retirements.set(fresh)
+        return fresh
 
 
 def reset_session():
     """Reset per-session counters. Called at start of strategy reflection."""
-    _session_retirements.clear()
+    _session_retirements.set([])
 
 
 @dataclass
@@ -173,7 +188,8 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
         )
 
     # Session cap: limit retirements per session
-    if len(_session_retirements) >= MAX_RETIREMENTS_PER_SESSION:
+    retirements = _get_session_retirements()
+    if len(retirements) >= MAX_RETIREMENTS_PER_SESSION:
         return (
             f"Retirement limit reached ({MAX_RETIREMENTS_PER_SESSION} per session). "
             f"Write a memo noting that rule {rule_id} should be reviewed next session."
@@ -182,7 +198,7 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
     logger.info(f"Retiring rule {rule_id}: {reason}")
     success = retire_strategy_rule(rule_id=rule_id, reason=reason)
     if success:
-        _session_retirements.append(rule_id)
+        retirements.append(rule_id)
         return f"Retired rule ID {rule_id}. Reason: {reason}"
     return f"Error: Failed to retire rule ID {rule_id}"
 
@@ -381,7 +397,7 @@ def _count_actions(messages: list[dict]) -> tuple[int, int, bool, bool]:
                                 proposed += 1
                             elif "Retired rule ID" in result_text:
                                 retired += 1
-                            elif "identity updated" in result_text.lower():
+                            elif "Strategy identity updated to version" in result_text:
                                 identity_updated = True
                             elif "Memo written" in result_text:
                                 memo_written = True

@@ -893,6 +893,70 @@ class TestIntentResolution:
         assert "unsupported action" in decision.reasoning.lower()
 
 
+class TestSectorCapHardGate:
+    """P3.30: hard pre-submit sector-concentration gate. The advisory text
+    in risk_notes was the only line of defense before — nothing prevented
+    the executor LLM from emitting a buy that ran the book over the cap.
+    The gate enforces the same threshold structurally on the buy path."""
+
+    def test_buy_rejected_when_breaches_sector_cap(self, mock_db, mock_cursor):
+        """$39k of AAPL (tech, 39%) + $2k MSFT buy (tech) → 41% > 40% cap.
+        Decision should be marked invalid before submit."""
+        decision = _make_decision(
+            ticker="MSFT", action="buy",
+            intent_type="invest_dollar",
+            intent_magnitude=Decimal("2000"),
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "AAPL", "shares": Decimal("260")},
+                ]),
+            })
+            run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert "sector" in decision.reasoning.lower()
+        assert "tech" in decision.reasoning.lower()
+
+    def test_buy_allowed_under_sector_cap(self, mock_db, mock_cursor):
+        """$30k of AAPL (tech, 30%) + $2k MSFT (tech) → 32% < 40% cap.
+        Buy should proceed normally."""
+        decision = _make_decision(
+            ticker="MSFT", action="buy",
+            intent_type="invest_dollar",
+            intent_magnitude=Decimal("2000"),
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "AAPL", "shares": Decimal("200")},
+                ]),
+            })
+            run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_called()
+        assert decision.action == "buy"
+
+    def test_sell_not_blocked_by_sector_cap(self, mock_db, mock_cursor):
+        """Sells reduce sector exposure — gate only fires on buys."""
+        decision = _make_decision(
+            ticker="AAPL", action="sell",
+            intent_type="exit_full",
+            intent_magnitude=None,
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                # Massively concentrated tech book — irrelevant for sells.
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "AAPL", "shares": Decimal("1000")},
+                ]),
+            })
+            run_trading_session(dry_run=False)
+        # Sell goes through (no sector-cap rejection); other gates may
+        # still affect it but the sector check must not.
+        assert "sector" not in decision.reasoning.lower()
+
+
 class TestZeroResolvedQty:
     def test_sell_resolves_to_zero_when_no_holdings(self, mock_db, mock_cursor):
         """exit_full on a ticker with 0 shares → resolved_qty=0 → skip path."""

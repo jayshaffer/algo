@@ -46,7 +46,7 @@ from .intents import (
     resolve_buy_intent,
     resolve_sell_intent,
 )
-from .risk import check_sector_concentration
+from .risk import check_sector_cap_for_buy, check_sector_concentration
 
 logger = logging.getLogger("trader")
 
@@ -444,6 +444,7 @@ def _prepare_decision(
     buying_power: Decimal,
     totals: "_ExecutionTotals",
     errors: list[str],
+    position_values: dict | None = None,
 ) -> Decimal | None:
     """Price-lookup, resolve intent to share count, and run sell precheck.
 
@@ -493,6 +494,26 @@ def _prepare_decision(
         return None
 
     decision.quantity = resolved_qty
+
+    # P3.30: hard sector-concentration gate for buys. Sells naturally reduce
+    # exposure; this check only fires on buys. The same MAX_SECTOR_PCT is
+    # injected as advisory text to the LLM via risk_notes — this gate is the
+    # belt-and-suspenders backstop when the LLM ignores the warning.
+    if decision.action == "buy" and position_values is not None:
+        breach = check_sector_cap_for_buy(
+            ticker=decision.ticker,
+            new_qty=resolved_qty,
+            price=price,
+            position_values=position_values,
+            portfolio_value=portfolio_value,
+        )
+        if breach:
+            errors.append(f"{decision.ticker} sector cap: {breach}")
+            logger.warning("%s: REJECTED (sector cap) - %s", decision.ticker, breach)
+            decision.reasoning = f"[REJECTED: {breach}] {decision.reasoning}"
+            decision.action = "invalid"
+            totals.trades_failed += 1
+            return None
 
     # P1.6: pre-submit dedup. The previous post-submit check left a window
     # where a network blip mid-`insert_decision` after a successful submit,
@@ -553,6 +574,17 @@ def _execute_decisions(
     order_results: dict = {}
     decision_account_states: dict[int, dict] = {}
 
+    # Pre-compute current position values for the sector-concentration gate.
+    # One per-ticker price lookup; reused across every buy in the loop.
+    position_values: dict = {}
+    for ticker, shares in positions.items():
+        try:
+            price = get_latest_trade_price(ticker, client=data_client)
+        except Exception:
+            price = None
+        if price:
+            position_values[ticker] = shares * price
+
     for i, decision in enumerate(response.decisions):
         decision_account_states[i] = {
             "portfolio_value": portfolio_value,
@@ -571,6 +603,7 @@ def _execute_decisions(
         price = _prepare_decision(
             decision, positions, data_client, dry_run,
             portfolio_value, buying_power, totals, errors,
+            position_values=position_values,
         )
         if price is None:
             continue

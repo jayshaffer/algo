@@ -134,6 +134,52 @@ class TestToolRetireRule:
         tool_retire_rule(rule_id=5, reason="Superseded by structural enforcement")
         mock_retire.assert_called_once_with(rule_id=5, reason="Superseded by structural enforcement")
 
+    @patch("v2.strategy.retire_strategy_rule")
+    @patch("v2.database.trading_db.get_strategy_rule")
+    def test_session_retirements_isolated_across_threads(self, mock_get_rule, mock_retire):
+        """P3.36: per-session retirement counter must not leak between
+        concurrent invocations. ContextVar gives each thread its own copy
+        so paper + prod sharing one Python process can't clobber each
+        other's MAX_RETIREMENTS_PER_SESSION cap."""
+        import threading
+        from datetime import datetime, timedelta
+
+        from v2.strategy import reset_session, tool_retire_rule
+
+        mock_get_rule.return_value = {
+            "id": 1, "status": "active",
+            "created_at": datetime.now() - timedelta(days=10),
+        }
+        mock_retire.return_value = True
+
+        results: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def worker(thread_label: str):
+            reset_session()
+            barrier.wait()
+            r1 = tool_retire_rule(rule_id=1, reason=f"{thread_label}-r1")
+            r2 = tool_retire_rule(rule_id=2, reason=f"{thread_label}-r2")
+            # Each worker should successfully retire 2 rules; the 3rd call
+            # would hit the per-session cap.
+            r3 = tool_retire_rule(rule_id=3, reason=f"{thread_label}-r3")
+            results.extend([r1, r2, r3])
+
+        t1 = threading.Thread(target=worker, args=("t1",))
+        t2 = threading.Thread(target=worker, args=("t2",))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        # Each thread did 3 calls; first two succeeded, third hit the cap.
+        retired = [r for r in results if "Retired" in r]
+        capped = [r for r in results if "limit reached" in r]
+        assert len(retired) == 4, (
+            f"Expected 2 retirements per thread (4 total), got {len(retired)}: {results}"
+        )
+        assert len(capped) == 2, (
+            f"Expected 1 cap-hit per thread (2 total), got {len(capped)}"
+        )
+
 
 class TestToolWriteStrategyMemo:
     @patch("v2.strategy.insert_strategy_memo")
@@ -266,6 +312,33 @@ class TestCountActions:
         assert retired == 0
         assert identity_updated is False
         assert memo_written is False
+
+    def test_soft_guard_warning_does_not_count_as_identity_update(self):
+        """P3.33: tool_update_strategy_identity's soft-guard returns a string
+        like 'Warning: Identity was updated within the last 3 days...'. The
+        old loose substring `"identity updated"` was brittle — if the
+        warning were ever rephrased to drop "was", reflection would
+        report identity_updated=True even when the guard rejected the
+        update. Use the unique success-message prefix instead."""
+        from v2.strategy import _count_actions
+        # Both the actual current warning AND a hypothetical rephrasing
+        # without the "was" gap must NOT trigger identity_updated.
+        for guard_text in [
+            "Warning: Identity was updated within the last 3 days "
+            "(v2 on 2026-04-30). Consider writing a memo instead.",
+            # Defense-in-depth: hypothetical future rephrasing.
+            "Warning: Identity updated 2 days ago — consider waiting.",
+        ]:
+            messages = [
+                {"role": "user", "content": [
+                    {"type": "tool_result", "content": guard_text},
+                ]},
+            ]
+            _, _, identity_updated, _ = _count_actions(messages)
+            assert identity_updated is False, (
+                f"Soft-guard text {guard_text!r} should not count as a real "
+                "identity update — only the success message should."
+            )
 
 
 class TestRunStrategyReflection:

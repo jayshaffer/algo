@@ -121,21 +121,22 @@ def _enrich_snapshots_with_deposits(snapshots: list[dict], deposit_history: list
 
     # If the first snapshot still has 0 cumulative_deposits, the very first
     # deposit happened on or before the first snapshot — credit it.
+    # Only snapshots dated <= first_snap_date were missed by the strict-<
+    # first loop; later snapshots already saw those deposits and crediting
+    # them again would double-count.
     if snapshots[0]["cumulative_deposits"] == 0 and sorted_deposits:
         first_dep_date = str(sorted_deposits[0]["date"])
         first_snap_date = str(snapshots[0]["date"])
         if first_dep_date <= first_snap_date:
-            # Credit deposits on or before first snapshot
             credit = Decimal("0")
-            advanced = 0
             for d in sorted_deposits:
                 if str(d["date"]) <= first_snap_date:
                     credit += d["amount"]
-                    advanced += 1
                 else:
                     break
             for s in snapshots:
-                s["cumulative_deposits"] += credit
+                if str(s["date"]) <= first_snap_date:
+                    s["cumulative_deposits"] += credit
 
 
 def _enrich_snapshots_with_twr_value(snapshots: list[dict]) -> None:
@@ -456,12 +457,19 @@ def deploy_to_cloudflare(deploy_dir: str) -> bool:
     if not project:
         raise RuntimeError("CLOUDFLARE_PAGES_PROJECT not set")
 
-    result = subprocess.run(
-        ["wrangler", "pages", "deploy", deploy_dir,
-         "--project-name", project, "--branch", "main"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["wrangler", "pages", "deploy", deploy_dir,
+             "--project-name", project, "--branch", "main"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Wrangler deploy timed out after {e.timeout}s — bailing rather "
+            "than blocking the session"
+        ) from e
     if result.returncode != 0:
         raise RuntimeError(f"Wrangler deploy failed: {result.stderr.strip()}")
 

@@ -21,7 +21,7 @@ def get_recent_ticker_signals(days=7, limit=50):
     with get_cursor() as cur:
         cur.execute("""
             SELECT ticker, headline, category, sentiment, confidence, published_at
-            FROM news_signals WHERE published_at > NOW() - INTERVAL '%s days'
+            FROM news_signals WHERE published_at > NOW() - INTERVAL '1 day' * %s
             ORDER BY published_at DESC LIMIT %s
         """, (days, limit))
         return cur.fetchall()
@@ -31,7 +31,7 @@ def get_recent_macro_signals(days=7, limit=20):
     with get_cursor() as cur:
         cur.execute("""
             SELECT headline, category, affected_sectors, sentiment, published_at
-            FROM macro_signals WHERE published_at > NOW() - INTERVAL '%s days'
+            FROM macro_signals WHERE published_at > NOW() - INTERVAL '1 day' * %s
             ORDER BY published_at DESC LIMIT %s
         """, (days, limit))
         return cur.fetchall()
@@ -46,7 +46,7 @@ def get_signal_summary(days=7):
                    SUM(CASE WHEN sentiment = 'bearish' THEN 1 ELSE 0 END) as bearish,
                    SUM(CASE WHEN sentiment = 'neutral' THEN 1 ELSE 0 END) as neutral
             FROM news_signals
-            WHERE published_at > NOW() - INTERVAL '%s days'
+            WHERE published_at > NOW() - INTERVAL '1 day' * %s
             GROUP BY ticker ORDER BY total DESC
         """, (days,))
         return cur.fetchall()
@@ -58,7 +58,7 @@ def get_recent_decisions(days=30, limit=50):
             SELECT date, ticker, action, quantity, price, reasoning,
                    account_equity, buying_power, outcome_7d, outcome_30d
             FROM decisions
-            WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date DESC, id DESC LIMIT %s
         """, (days, limit))
         return cur.fetchall()
@@ -72,7 +72,7 @@ def get_decision_stats(days=30):
                    SUM(CASE WHEN action = 'sell' THEN 1 ELSE 0 END) as sells,
                    SUM(CASE WHEN action = 'hold' THEN 1 ELSE 0 END) as holds,
                    AVG(outcome_7d) as avg_outcome_7d, AVG(outcome_30d) as avg_outcome_30d
-            FROM decisions WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            FROM decisions WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
         """, (days,))
         return cur.fetchone()
 
@@ -82,7 +82,7 @@ def get_equity_curve(days=90):
         cur.execute("""
             SELECT date, cash, portfolio_value, buying_power
             FROM account_snapshots
-            WHERE date > CURRENT_DATE - INTERVAL '%s days'
+            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date ASC
         """, (days,))
         return cur.fetchall()
@@ -92,7 +92,7 @@ def get_performance_metrics(days=30, net_deposits=None):
     with get_cursor() as cur:
         cur.execute("""
             WITH period_data AS (
-                SELECT * FROM account_snapshots WHERE date > CURRENT_DATE - INTERVAL '%s days'
+                SELECT * FROM account_snapshots WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
             )
             SELECT
                 (SELECT portfolio_value FROM period_data ORDER BY date ASC LIMIT 1) as start_value,
@@ -151,9 +151,18 @@ def get_thesis_stats():
         cur.execute("SELECT confidence, COUNT(*) as count FROM theses WHERE status = 'active' GROUP BY confidence")
         confidence_rows = cur.fetchall()
         confidence_dist = {row['confidence']: row['count'] for row in confidence_rows}
-        return {'active': counts['active'] or 0, 'executed': counts['executed'] or 0,
-                'invalidated': counts['invalidated'] or 0, 'expired': counts['expired'] or 0,
-                'success_rate': None, 'confidence_dist': confidence_dist}
+        executed = counts['executed'] or 0
+        invalidated = counts['invalidated'] or 0
+        expired = counts['expired'] or 0
+        # Execution conversion rate among closed theses. A more ambitious
+        # definition (executed AND outperformed SPY) would need a join
+        # through decision_signals to decisions; for now we surface the
+        # cheap count-based number instead of None.
+        closed = executed + invalidated + expired
+        success_rate = (executed / closed * 100) if closed else None
+        return {'active': counts['active'] or 0, 'executed': executed,
+                'invalidated': invalidated, 'expired': expired,
+                'success_rate': success_rate, 'confidence_dist': confidence_dist}
 
 
 def close_thesis(thesis_id, status, reason=None):
