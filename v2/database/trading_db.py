@@ -431,6 +431,38 @@ def delete_playbook_actions(playbook_id) -> int:
 
 # --- Decision Signals ---
 
+def insert_thesis_signals(thesis_id: int, signal_refs: list[dict]) -> int:
+    """Persist the news/macro/thesis signals that back a thesis.
+
+    signal_refs: [{"type": "news_signal"|"macro_signal"|"thesis", "id": int}, ...]
+    Returns the number of refs submitted (writes are idempotent on PK).
+    """
+    if not signal_refs:
+        return 0
+    rows = [(thesis_id, ref["type"], ref["id"]) for ref in signal_refs]
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO thesis_signals (thesis_id, signal_type, signal_id)
+            VALUES %s ON CONFLICT DO NOTHING
+        """, rows)
+    return len(rows)
+
+
+def get_thesis_signals(thesis_id: int) -> list:
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM thesis_signals WHERE thesis_id = %s ORDER BY signal_type, signal_id",
+            (thesis_id,),
+        )
+        return cur.fetchall()
+
+
+def delete_thesis_signals(thesis_id: int) -> int:
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM thesis_signals WHERE thesis_id = %s", (thesis_id,))
+        return cur.rowcount
+
+
 def insert_decision_signal(decision_id, signal_type, signal_id):
     with get_cursor() as cur:
         cur.execute("""

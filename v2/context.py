@@ -18,6 +18,7 @@ from .database.trading_db import (
     get_positions,
     get_recent_decisions,
     get_signal_attribution,
+    get_thesis_signals,
 )
 
 
@@ -422,17 +423,28 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
     playbook = get_playbook(playbook_date)
     playbook_actions_rows = get_pending_playbook_actions(playbook["id"]) if playbook else []
 
-    actions = [
-        PlaybookAction(
+    # Fetch thesis_signals once per distinct thesis_id, then attach to each
+    # action that references that thesis. The executor copies these verbatim
+    # into its decision so attribution can trace the trade back to evidence.
+    thesis_signals_cache: dict[int, list[dict]] = {}
+    actions = []
+    for row in playbook_actions_rows:
+        thesis_id = row.get("thesis_id")
+        if thesis_id is not None and thesis_id not in thesis_signals_cache:
+            thesis_signals_cache[thesis_id] = [
+                {"type": link["signal_type"], "id": link["signal_id"]}
+                for link in get_thesis_signals(thesis_id)
+            ]
+        signal_refs = thesis_signals_cache.get(thesis_id, [])
+        actions.append(PlaybookAction(
             id=row["id"], ticker=row["ticker"], action=row["action"],
-            thesis_id=row.get("thesis_id"), reasoning=row.get("reasoning", ""),
+            thesis_id=thesis_id, reasoning=row.get("reasoning", ""),
             confidence=row.get("confidence", "medium"),
             intent_type=row.get("intent_type"),
             intent_magnitude=row.get("intent_magnitude"),
             priority=row.get("priority", 99),
-        )
-        for row in playbook_actions_rows
-    ]
+            signal_refs=signal_refs,
+        ))
 
     positions = get_positions()
     recent = get_recent_decisions(days=30)

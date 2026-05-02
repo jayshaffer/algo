@@ -49,6 +49,43 @@ class TestExecutorContracts:
         assert d.playbook_action_id is None
         assert d.is_off_playbook is True
 
+    def test_playbook_action_carries_signal_refs(self):
+        """Phase 4: signals justify the action all the way from the strategist
+        to decision_signals. The executor copies them verbatim — it does not
+        invent IDs (which would be stripped by validate_signal_refs anyway)."""
+        a = PlaybookAction(
+            id=1, ticker="AAPL", action="buy", thesis_id=10,
+            reasoning="Entry hit", confidence="high",
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            priority=1,
+            signal_refs=[{"type": "news_signal", "id": 100}],
+        )
+        assert a.signal_refs == [{"type": "news_signal", "id": 100}]
+
+    def test_playbook_action_signal_refs_default_empty(self):
+        a = PlaybookAction(
+            id=1, ticker="AAPL", action="buy", thesis_id=None,
+            reasoning="...", confidence="medium",
+            intent_type="exit_full", intent_magnitude=None,
+            priority=1,
+        )
+        assert a.signal_refs == []
+
+
+class TestTradingSystemPrompt:
+    """Phase 4: the executor prompt must instruct the LLM to copy signal_refs
+    verbatim from the playbook action, not invent them."""
+
+    def test_prompt_directs_copy_verbatim(self):
+        from v2.agent import TRADING_SYSTEM_PROMPT
+        # Some assertion that the prompt prescribes passthrough behaviour.
+        # We're not pinning exact wording, just that the contract is documented.
+        assert "verbatim" in TRADING_SYSTEM_PROMPT.lower() or \
+               "copy" in TRADING_SYSTEM_PROMPT.lower() and "signal_refs" in TRADING_SYSTEM_PROMPT
+        # And that the schema example uses an integer ID, not the placeholder null
+        # we used pre-fix (which the LLM was copying as 0).
+        assert '"id": 1234' in TRADING_SYSTEM_PROMPT or '"id": <integer>' in TRADING_SYSTEM_PROMPT
+
     def test_signal_refs_default_to_empty_list(self):
         d = ExecutorDecision(
             playbook_action_id=1, ticker="AAPL", action="buy",

@@ -150,8 +150,12 @@ function renderEquityCurve(snapshots, benchmark) {
 
   var labels = snapshots.map(function (s) { return s.date; });
 
+  // Use twr_value (deposit-neutral, compounded growth starting at the first
+  // snapshot's portfolio_value) so the line stays on the same dollar axis as
+  // SPY without cliffs on deposit days. Fall back to portfolio_value if the
+  // backend didn't populate twr_value.
   var portfolioValues = snapshots.map(function (s) {
-    return s.portfolio_value;
+    return s.twr_value != null ? s.twr_value : s.portfolio_value;
   });
 
   var datasets = [{

@@ -6,18 +6,21 @@ from decimal import Decimal
 
 from .attribution import get_attribution_summary
 from .context import get_macro_context, get_portfolio_context
+from .agent import validate_signal_refs
 from .database.trading_db import (
     close_thesis,
     delete_playbook_actions,
     get_active_strategy_rules,
     get_active_theses,
     get_current_strategy_state,
+    get_macro_signals,
     get_news_signals,
     get_positions,
     get_recent_decisions,
     get_recent_strategy_memos,
     insert_playbook_action,
     insert_thesis,
+    insert_thesis_signals,
     update_thesis,
     upsert_playbook,
 )
@@ -85,6 +88,27 @@ def tool_get_active_theses(ticker: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _persist_signal_refs(thesis_id: int, signal_refs: list[dict] | None) -> str:
+    """Validate, persist, and return a human-readable note for tool output.
+
+    Returns a status fragment describing how many refs were stripped (if any),
+    so the strategist sees its own miscites within the agentic loop and can
+    correct on the next turn. Empty string if no refs given or all valid.
+    """
+    if not signal_refs:
+        return ""
+    submitted = len(signal_refs)
+    valid = validate_signal_refs(signal_refs)
+    insert_thesis_signals(thesis_id, valid)
+    stripped = submitted - len(valid)
+    if stripped:
+        return (
+            f" Note: {stripped} of {submitted} signal_refs were stripped as invalid "
+            f"(IDs not found in DB)."
+        )
+    return f" Cited {len(valid)} signal(s)."
+
+
 def tool_create_thesis(
     ticker: str,
     direction: str,
@@ -93,8 +117,15 @@ def tool_create_thesis(
     exit_trigger: str,
     invalidation: str,
     confidence: str,
+    signal_refs: list[dict] | None = None,
 ) -> str:
-    """Create a new thesis."""
+    """Create a new thesis.
+
+    signal_refs: list of {"type": "news_signal"|"macro_signal"|"thesis", "id": int}
+    citing the evidence that justified this thesis. IDs must come from
+    get_news_signals / get_macro_signals / get_active_theses output. Invalid
+    IDs are stripped at write time and reported back in the tool result.
+    """
     logger.info(f"Creating thesis for {ticker} ({direction})")
 
     # Check for duplicates
@@ -121,8 +152,12 @@ def tool_create_thesis(
         source="claude_ideation",
     )
 
+    note = _persist_signal_refs(thesis_id, signal_refs)
     logger.info(f"Created thesis ID {thesis_id} for {ticker}")
-    return f"Created thesis ID {thesis_id} for {ticker} ({direction}, {confidence} confidence)"
+    return (
+        f"Created thesis ID {thesis_id} for {ticker} "
+        f"({direction}, {confidence} confidence).{note}"
+    )
 
 
 def tool_adopt_thesis(
@@ -132,6 +167,7 @@ def tool_adopt_thesis(
     exit_trigger: str,
     invalidation: str,
     confidence: str,
+    signal_refs: list[dict] | None = None,
 ) -> str:
     """Adopt an existing portfolio position by creating a thesis for it.
 
@@ -162,8 +198,12 @@ def tool_adopt_thesis(
         source="adoption",
     )
 
+    note = _persist_signal_refs(thesis_id, signal_refs)
     logger.info(f"Adopted position {ticker} as thesis ID {thesis_id}")
-    return f"Created thesis ID {thesis_id} for {ticker} (adopted existing position, {direction}, {confidence} confidence)"
+    return (
+        f"Created thesis ID {thesis_id} for {ticker} "
+        f"(adopted existing position, {direction}, {confidence} confidence).{note}"
+    )
 
 
 def tool_update_thesis(
@@ -173,23 +213,38 @@ def tool_update_thesis(
     exit_trigger: str | None = None,
     invalidation: str | None = None,
     confidence: str | None = None,
+    add_signal_refs: list[dict] | None = None,
 ) -> str:
-    """Update an existing thesis."""
+    """Update an existing thesis.
+
+    add_signal_refs appends new signal citations to the thesis (idempotent).
+    Use it as evidence accumulates over the life of the thesis.
+    """
     logger.info(f"Updating thesis ID {thesis_id}")
 
-    success = update_thesis(
-        thesis_id=thesis_id,
-        thesis=thesis,
-        entry_trigger=entry_trigger,
-        exit_trigger=exit_trigger,
-        invalidation=invalidation,
-        confidence=confidence,
+    has_field_updates = any(
+        v is not None for v in (thesis, entry_trigger, exit_trigger, invalidation, confidence)
     )
 
-    if success:
-        return f"Updated thesis ID {thesis_id}"
-    else:
+    field_success = True
+    if has_field_updates:
+        field_success = update_thesis(
+            thesis_id=thesis_id,
+            thesis=thesis,
+            entry_trigger=entry_trigger,
+            exit_trigger=exit_trigger,
+            invalidation=invalidation,
+            confidence=confidence,
+        )
+        if not field_success:
+            return f"Error: Thesis ID {thesis_id} not found or no updates provided"
+
+    note = _persist_signal_refs(thesis_id, add_signal_refs)
+
+    if not has_field_updates and not add_signal_refs:
         return f"Error: Thesis ID {thesis_id} not found or no updates provided"
+
+    return f"Updated thesis ID {thesis_id}.{note}"
 
 
 def tool_close_thesis(thesis_id: int, status: str, reason: str) -> str:
@@ -205,7 +260,13 @@ def tool_close_thesis(thesis_id: int, status: str, reason: str) -> str:
 
 
 def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
-    """Get recent ticker-specific news signals."""
+    """Get recent ticker-specific news signals.
+
+    Each line is prefixed with [#<id>] so the strategist can cite the signal
+    by ID via signal_refs on create_thesis / update_thesis. IDs that don't
+    appear in tool output should not be cited — they will be stripped by
+    validation at thesis-creation time.
+    """
     logger.info(f"Getting news signals (ticker: {ticker}, days: {days})")
     signals = get_news_signals(ticker=ticker, days=days)
 
@@ -219,7 +280,8 @@ def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
         date_str = s["published_at"].strftime("%m-%d %H:%M")
         headline = s["headline"][:60]
         lines.append(
-            f"{date_str} {s['ticker']} {s['category']}/{s['sentiment']}/{s['confidence']}: {headline}"
+            f"[#{s['id']}] {date_str} {s['ticker']} "
+            f"{s['category']}/{s['sentiment']}/{s['confidence']}: {headline}"
         )
 
     return "\n".join(lines)
@@ -229,6 +291,30 @@ def tool_get_macro_context(days: int = 7) -> str:
     """Get macro economic context."""
     logger.info(f"Getting macro context (last {days} days)")
     return get_macro_context(days=days)
+
+
+def tool_get_macro_signals(days: int = 7) -> str:
+    """Get recent macro signals as a list, one per line, with IDs.
+
+    Parallels tool_get_news_signals — use this when you need IDs to cite on
+    a thesis via signal_refs. tool_get_macro_context is the higher-level
+    summary by category; this tool returns the raw list with IDs.
+    """
+    logger.info(f"Getting macro signals (last {days} days)")
+    signals = get_macro_signals(days=days)
+
+    if not signals:
+        return f"No macro signals in the last {days} days."
+
+    lines = []
+    for s in signals:
+        date_str = s["published_at"].strftime("%m-%d %H:%M")
+        headline = s["headline"][:80]
+        lines.append(
+            f"[#{s['id']}] {date_str} {s['category']}/{s['sentiment']}: {headline}"
+        )
+
+    return "\n".join(lines)
 
 
 def tool_get_signal_attribution() -> str:
@@ -411,7 +497,8 @@ TOOL_DEFINITIONS = [
         "name": "create_thesis",
         "description": (
             "Create trade thesis. Rejects if ticker has active thesis or is held. "
-            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
+            "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions. "
+            "Cite the news/macro signals that justify the thesis via `signal_refs` so the executor and attribution can trace the trade back to the evidence."
         ),
         "input_schema": {
             "type": "object",
@@ -423,6 +510,26 @@ TOOL_DEFINITIONS = [
                 "exit_trigger": {"type": "string", "description": "Exit conditions"},
                 "invalidation": {"type": "string", "description": "What proves thesis wrong"},
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                "signal_refs": {
+                    "type": "array",
+                    "description": (
+                        "Signals supporting this thesis. IDs MUST come from "
+                        "get_news_signals / get_macro_signals / get_active_theses output. "
+                        "Invalid IDs are silently dropped at write time and reported back "
+                        "in the tool result."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["news_signal", "macro_signal", "thesis"],
+                            },
+                            "id": {"type": "integer"},
+                        },
+                        "required": ["type", "id"],
+                    },
+                },
             },
             "required": [
                 "ticker", "direction", "thesis",
@@ -432,7 +539,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "adopt_thesis",
-        "description": "Adopt an existing portfolio position by creating a thesis. Use for orphan positions (held but no thesis). REQUIRES ticker to be in portfolio.",
+        "description": (
+            "Adopt an existing portfolio position by creating a thesis. Use for orphan "
+            "positions (held but no thesis). REQUIRES ticker to be in portfolio. "
+            "Cite supporting signals via `signal_refs` if available — adopted positions "
+            "may legitimately have none, in which case omit the field."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -442,6 +554,21 @@ TOOL_DEFINITIONS = [
                 "exit_trigger": {"type": "string", "description": "When to exit"},
                 "invalidation": {"type": "string", "description": "What proves thesis wrong"},
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                "signal_refs": {
+                    "type": "array",
+                    "description": "Optional supporting signals (same shape as create_thesis).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["news_signal", "macro_signal", "thesis"],
+                            },
+                            "id": {"type": "integer"},
+                        },
+                        "required": ["type", "id"],
+                    },
+                },
             },
             "required": ["ticker", "direction", "thesis", "exit_trigger", "invalidation", "confidence"],
         },
@@ -449,7 +576,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "update_thesis",
         "description": (
-            "Update thesis fields. Only provide fields to change. "
+            "Update thesis fields and/or append new signal citations. "
             "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions."
         ),
         "input_schema": {
@@ -461,6 +588,24 @@ TOOL_DEFINITIONS = [
                 "exit_trigger": {"type": "string"},
                 "invalidation": {"type": "string"},
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                "add_signal_refs": {
+                    "type": "array",
+                    "description": (
+                        "Signals to append to the thesis as new evidence accumulates. "
+                        "Idempotent — previously cited signals are not duplicated."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["news_signal", "macro_signal", "thesis"],
+                            },
+                            "id": {"type": "integer"},
+                        },
+                        "required": ["type", "id"],
+                    },
+                },
             },
             "required": ["thesis_id"],
         },
@@ -493,6 +638,20 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_macro_context",
         "description": "Macro signals: Fed, trade, geopolitical, sector trends.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Lookback days (default: 7)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_macro_signals",
+        "description": (
+            "Recent macro signals as a list with IDs. Use this to find macro signal "
+            "IDs to cite via signal_refs on create_thesis / update_thesis."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -590,6 +749,7 @@ TOOL_HANDLERS = {
     "close_thesis": tool_close_thesis,
     "get_news_signals": tool_get_news_signals,
     "get_macro_context": tool_get_macro_context,
+    "get_macro_signals": tool_get_macro_signals,
     "get_signal_attribution": tool_get_signal_attribution,
     "get_decision_history": tool_get_decision_history,
     "write_playbook": tool_write_playbook,

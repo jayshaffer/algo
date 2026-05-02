@@ -53,6 +53,17 @@ class TestAnalyzeSignalCategories:
         assert "published_at::date" not in sql
         assert "INTERVAL '7 days'" not in sql
 
+    def test_excludes_orphan_signal_references(self, mock_db):
+        """Orphan signal references (signal_type=news_signal but no matching row in news_signals,
+        or signal_type=macro_signal with no matching row in macro_signals) must be filtered out.
+        These are broken FK references and bucketing them as 'unknown' produces noise."""
+        mock_db.fetchall.return_value = []
+        analyze_signal_categories(days=90)
+        sql = mock_db.execute.call_args[0][0]
+        assert "ns.id IS NOT NULL" in sql or "ns.category IS NOT NULL" in sql
+        assert "ms.id IS NOT NULL" in sql or "ms.category IS NOT NULL" in sql
+        assert "'unknown'" not in sql
+
     def test_returns_signal_performance_objects(self, mock_db):
         """Returns list of SignalPerformance dataclasses."""
         mock_db.fetchall.return_value = [

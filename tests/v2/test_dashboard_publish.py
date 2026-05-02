@@ -11,6 +11,7 @@ import pytest
 from v2.dashboard_publish import (
     _build_summary,
     _DecimalEncoder,
+    _enrich_snapshots_with_twr_value,
     assemble_deploy_dir,
     deploy_to_cloudflare,
     fetch_spy_benchmark,
@@ -260,6 +261,49 @@ class TestGatherDashboardData:
 
         assert mock_db.execute.call_count == 7
 
+    @patch("v2.dashboard_publish.get_deposit_history")
+    def test_daily_pnl_excludes_same_day_deposit_end_to_end(self, mock_history, mock_benchmark, mock_db):
+        """Reproduces 2026-04-24: a $5000 deposit arrives between prev and latest.
+
+        The summary card must show trading P&L only, not deposit + trading.
+        """
+        session_date = date(2026, 4, 24)
+        mock_history.return_value = [
+            {"date": "2026-02-05", "amount": Decimal("1000")},
+            {"date": "2026-02-11", "amount": Decimal("1000")},
+            {"date": "2026-03-18", "amount": Decimal("1000")},
+            {"date": "2026-04-23", "amount": Decimal("5000")},
+        ]
+        mock_db.fetchall.side_effect = [
+            [
+                {"date": date(2026, 4, 23), "portfolio_value": Decimal("2939.40"),
+                 "cash": Decimal("1917.42"), "buying_power": Decimal("1917.42")},
+                {"date": date(2026, 4, 24), "portfolio_value": Decimal("7964.33"),
+                 "cash": Decimal("6810.20"), "buying_power": Decimal("6810.20")},
+            ],
+            [], [], [],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("7964.33"), "cash": Decimal("6810.20"),
+             "long_market_value": Decimal("1154.13")},
+            {"portfolio_value": Decimal("1000"), "date": date(2026, 2, 5)},
+            {"portfolio_value": Decimal("2939.40")},
+        ]
+
+        result = gather_dashboard_data(session_date, net_deposits=Decimal("8000"))
+        summary = result["summary"]
+
+        # Without the deposit adjustment this would be $5024.93 (+170%).
+        # With it: $7964.33 - $2939.40 - $5000 = $24.93, ~0.31%.
+        assert summary["daily_pnl"] == Decimal("24.93")
+        assert Decimal("0.3") < summary["daily_pnl_pct"] < Decimal("0.4")
+
+        # Equity chart: snapshots carry twr_value for deposit-neutral plotting.
+        snaps = result["snapshots"]
+        assert snaps[0]["twr_value"] == snaps[0]["portfolio_value"]
+        # Day-2 twr_value reflects only trading gain, not the $5000 deposit.
+        assert Decimal("2945") < snaps[1]["twr_value"] < Decimal("2955")
+
     def test_includes_benchmark_key(self, mock_benchmark, mock_db):
         """gather_dashboard_data includes 'benchmark' key from fetch_spy_benchmark."""
         mock_benchmark.return_value = [{"date": "2025-06-15", "close": 540.0}]
@@ -315,6 +359,115 @@ class TestBuildSummary:
 
         # Fallback: 110000 - 100000 = 10000
         assert summary["total_pnl"] == Decimal("10000")
+
+    def test_daily_pnl_excludes_same_day_deposit(self):
+        """daily_deposit is subtracted from the raw portfolio delta.
+
+        Reproduces 2026-04-24 incident: a $5000 deposit landed between the
+        previous snapshot ($2939.40) and latest ($7964.33). Raw delta shows
+        +$5024.93 (+170%) which is mostly cash-in, not trading P&L.
+        """
+        latest = {"portfolio_value": Decimal("7964.33"), "cash": Decimal("6810.20"),
+                  "long_market_value": Decimal("1154.13")}
+        first = {"portfolio_value": Decimal("1000"), "date": date(2026, 2, 5)}
+        previous = {"portfolio_value": Decimal("2939.40")}
+
+        summary = _build_summary(latest, first, previous, 4, date(2026, 4, 24),
+                                 net_deposits=Decimal("8000"),
+                                 daily_deposit=Decimal("5000"))
+
+        # Daily P&L excludes the deposit: 7964.33 - 2939.40 - 5000 = 24.93
+        assert summary["daily_pnl"] == Decimal("24.93")
+        # Pct uses (prev + deposit) as base: 24.93 / 7939.40 ≈ 0.314%
+        assert Decimal("0.3") < summary["daily_pnl_pct"] < Decimal("0.4")
+
+    def test_daily_pnl_default_daily_deposit_is_zero(self):
+        """daily_deposit defaults to 0 — no change for deposit-free days."""
+        latest = {"portfolio_value": Decimal("101000"), "cash": Decimal("50000"),
+                  "long_market_value": Decimal("51000")}
+        first = {"portfolio_value": Decimal("100000"), "date": date(2025, 1, 1)}
+        previous = {"portfolio_value": Decimal("100000")}
+
+        summary = _build_summary(latest, first, previous, 3, date(2025, 6, 15))
+
+        assert summary["daily_pnl"] == Decimal("1000")
+
+
+class TestEnrichSnapshotsWithTwrValue:
+    """twr_value is the first snapshot's value compounded by daily TWR growth.
+
+    Gives the JS an already-normalized equity line that sits on the same
+    dollar axis as SPY without deposit cliffs.
+    """
+
+    def test_empty_list_is_noop(self):
+        snapshots: list[dict] = []
+        _enrich_snapshots_with_twr_value(snapshots)
+        assert snapshots == []
+
+    def test_first_snapshot_twr_value_equals_portfolio_value(self):
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("1000"),
+             "cumulative_deposits": Decimal("1000")},
+        ]
+        _enrich_snapshots_with_twr_value(snapshots)
+        assert snapshots[0]["twr_value"] == Decimal("1000")
+
+    def test_no_deposits_growth_matches_portfolio_value(self):
+        """With no deposits, twr_value tracks portfolio_value exactly."""
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("1000"),
+             "cumulative_deposits": Decimal("1000")},
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("1100"),
+             "cumulative_deposits": Decimal("1000")},
+        ]
+        _enrich_snapshots_with_twr_value(snapshots)
+        assert snapshots[1]["twr_value"] == Decimal("1100")
+
+    def test_deposit_does_not_inflate_twr_value(self):
+        """2026-04-24 scenario: $5000 deposit makes portfolio jump $2939→$7964,
+        but twr_value should show only the real ~0.3% trading gain."""
+        snapshots = [
+            {"date": date(2026, 4, 23), "portfolio_value": Decimal("2939.40"),
+             "cumulative_deposits": Decimal("3000")},
+            {"date": date(2026, 4, 24), "portfolio_value": Decimal("7964.33"),
+             "cumulative_deposits": Decimal("8000")},
+        ]
+        _enrich_snapshots_with_twr_value(snapshots)
+
+        # Day-1 twr_value = 2939.40 (starts at portfolio_value)
+        # Day-2 growth factor = 7964.33 / (2939.40 + 5000) ≈ 1.003140
+        # Day-2 twr_value ≈ 2939.40 * 1.003140 ≈ 2948.63
+        assert snapshots[0]["twr_value"] == Decimal("2939.40")
+        assert Decimal("2945") < snapshots[1]["twr_value"] < Decimal("2955")
+
+    def test_withdrawal_does_not_deflate_twr_value(self):
+        """Withdrawals decrease cumulative_deposits; twr_value should be
+        unaffected by the withdrawal itself (only by trading P&L)."""
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("10000"),
+             "cumulative_deposits": Decimal("10000")},
+            # Withdraw $2000; portfolio_value drops to $8000, same trading result
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("8000"),
+             "cumulative_deposits": Decimal("8000")},
+        ]
+        _enrich_snapshots_with_twr_value(snapshots)
+        # growth = 8000 / (10000 - 2000) = 1.0 → no change
+        assert snapshots[1]["twr_value"] == Decimal("10000")
+
+    def test_zero_start_capital_is_skipped(self):
+        """Guard: don't divide by zero if prev_value + deposit == 0."""
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("0"),
+             "cumulative_deposits": Decimal("0")},
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("100"),
+             "cumulative_deposits": Decimal("100")},
+        ]
+        _enrich_snapshots_with_twr_value(snapshots)
+        # First day's twr_value = 0 (portfolio_value). Second day seeded from that.
+        assert snapshots[0]["twr_value"] == Decimal("0")
+        # When start capital is 0, we just carry previous twr_value forward.
+        assert snapshots[1]["twr_value"] == Decimal("0")
 
 
 class TestWriteJsonFiles:

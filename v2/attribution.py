@@ -31,9 +31,9 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                     ds.decision_id,
                     CASE
                         WHEN ds.signal_type = 'news_signal' THEN
-                            'news_signal:' || COALESCE(ns.category, 'unknown')
+                            'news_signal:' || ns.category
                         WHEN ds.signal_type = 'macro_signal' THEN
-                            'macro_signal:' || COALESCE(ms.category, 'unknown')
+                            'macro_signal:' || ms.category
                         ELSE ds.signal_type
                     END AS category,
                     d.outcome_7d,
@@ -52,6 +52,8 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                 LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
                 WHERE d.action IN ('buy', 'sell')
                   AND d.date >= %s
+                  AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
+                  AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
             )
             SELECT
                 category,
