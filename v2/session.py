@@ -299,6 +299,17 @@ def _run_strategy_stage(
             max_turns=10,
             trading_result=result.trading_result,
         )
+        # P1.15: parallel to P2.24 for the strategist — the reflection LLM is
+        # instructed to "always write a memo" but nothing structurally enforced
+        # it. Silent omissions left journal gaps and, worse, marked the stage
+        # complete so resume would skip the reflection on the next run instead
+        # of retrying. Treat a missing memo as a stage failure: the stage stays
+        # incomplete and the next session re-runs reflection.
+        if not result.strategy_result.memo_written:
+            raise RuntimeError(
+                "Reflection finished without writing a memo "
+                "(LLM did not call write_strategy_memo)"
+            )
         _complete_stage(session_id, "strategy")
     except Exception as e:
         result.strategy_error = str(e)

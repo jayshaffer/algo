@@ -7,13 +7,24 @@ The trading-money path and the *learning-corruption* path are both top-tier — 
 ## Progress
 
 - ✅ **P0:** 5/5 fixed
-- ☑️ **P1:** 8/9 fully fixed + 1 partial (P1.9 — app-level guard shipped, DB UNIQUE constraint deferred behind historical-row dedup; P1.6, P1.7, P1.8, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)* fully fixed)
-- ✅ **P2:** 12/12 fixed
-- ✅ **P3:** 15/15 fixed
+- ☑️ **P1:** 9/10 fully fixed + 1 partial (P1.9 — app-level guard shipped, DB UNIQUE constraint deferred behind historical-row dedup; P1.6, P1.7, P1.8, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)*, P1.15 *(2nd pass)* fully fixed)
+- ✅ **P2:** 13/13 fixed
+- ✅ **P3:** 17/17 fixed
 
-**Tests added so far:** +88 in v2 suite (704 → 790 passing, verified 2026-05-02); +2 in v1 dashboard suite for P1.10.
+**Tests added so far:** +95 in v2 suite (704 → 798 passing, verified 2026-05-02); +2 in v1 dashboard suite for P1.10.
 
 See [**Residual follow-ups**](#residual-follow-ups) for the three deferred items called out inside individual fixes (P0.3 DB CHECK, P1.9 historical dedup + UNIQUE, P3.38 rigorous thesis success metric).
+
+## 2026-05-02 second pass
+
+A second audit pass focused on modules barely covered by the original audit: `formation.py`, `market_data.py`, `entertainment.py`, `learn.py`, `context.py`, `ideation_claude.py`, `agent.py`, `tools.py`, `strategy.py`, `attribution.py`, and `v2/database/*`. Four new findings landed:
+
+- **P1.15** — Stage 4 reflection had no memo-written enforcement (parallel to P2.24 for the strategist).
+- **P2.26** — `insert_decision_signals_batch` / `insert_thesis_signals` returned `len()` instead of `cur.rowcount` (parallel to P2.21 for news/macro).
+- **P3.41** — Categories with exactly 0 alpha were silently dropped from the strategist-facing summary (truthy check on `Decimal(0)`).
+- **P3.42** — `update_strategy_identity`'s rejection text told the LLM to "call again" but the guard fires unconditionally on retry.
+
+Three additional observations were noted but not fixed in this pass — see [Cross-cutting observations](#cross-cutting-observations).
 
 ---
 
@@ -130,6 +141,13 @@ Real-money or public-reputation risk; can fire any week.
 - **Reproduction:** Order fills 50/100 before 30s timeout; cancel succeeds for the rest; DB has decision with `order_id=None` and the 50 filled shares are detached from any decision row.
 - **Fix (2026-05-02):** After the cancel attempt, re-fetch the order via `get_order_by_id` and inspect `filled_qty`. If > 0, return `OrderResult(success=True, filled_qty=<actual>, filled_avg_price=<actual>, order_id=<orig>)` with the timeout flagged in the error string. The trader's downstream path then logs the decision row with the real order_id and partial qty — preserving the attribution link. If `filled_qty == 0` or the refetch itself raises, fall through to the prior `success=False` timeout path. Tests: `TestWaitForFillPartialFillOnTimeout` (3 cases) — partial-fill success, zero-fill failure preserved, refetch-failure graceful fallback.
 
+### ✅ P1.15 — Stage 4 reflection had no memo-written enforcement; silent journal gaps *(found 2026-05-02 second pass)*
+- **File:** `v2/session.py:283-306`, `v2/strategy.py:434-490`
+- **Bug:** Strategy reflection's system prompt instructs "Always write a memo: Even if nothing changed, document why" — but nothing structurally enforced it. If the LLM finished the loop without calling `tool_write_strategy_memo`, the stage was marked complete via `_complete_stage(session_id, "strategy")` regardless. Worse: on resume, `"strategy" in completed_stages` short-circuits the stage, so the LLM never gets another chance to fill the gap. The "system's memory" silently loses days, undermining the run-to-run continuity claim.
+- **Impact:** Journal gaps that compound. Reflection in subsequent sessions reads incomplete history (`get_recent_strategy_memos`), which biases rule proposals away from sessions whose lessons never got captured.
+- **Reproduction:** Mock `run_strategy_reflection` to return `StrategyReflectionResult(memo_written=False, ...)`. Session marks stage complete. Next session's resume skips reflection. No memo for that date in `strategy_memos`.
+- **Fix (2026-05-02):** Parallel to P2.24 (strategist's playbook validation): `_run_strategy_stage` in `v2/session.py` now raises `RuntimeError("Reflection finished without writing a memo ...")` when `result.strategy_result.memo_written` is False. The exception propagates into the existing handler, sets `result.strategy_error`, calls `_fail_stage`, and skips `_complete_stage`. Next session re-runs reflection. Tests: `TestReflectionMemoGuard` (2 cases — `test_reflection_stage_fails_when_memo_not_written`, `test_reflection_stage_completes_when_memo_written`).
+
 ### ✅ P1.14 — Strategist agentic loop max_tokens cap is too tight; no recovery on truncation *(found post-audit during paper session 2026-05-02)*
 - **File:** `v2/claude_client.py:198`
 - **Bug:** `max_tokens=4096 if turn == 0 else 2048` capped synthesis turns at 2048 output tokens. The ramp was backwards: synthesis (write_playbook + thesis updates + reasoning) happens on later turns, not the first. When the strategist's turn 4 generated >2048 output tokens (a single `write_playbook` call with rich `priority_actions[].reasoning` + `market_outlook` + `risk_notes` is already ~1-2k tokens, plus optional thesis updates and preamble), Anthropic returned `stop_reason="max_tokens"` with a truncated response, the loop bailed, and no playbook was persisted.
@@ -212,6 +230,14 @@ Slow learning rot; impact measured in months of bad rule proposals.
 - **Bug:** Memo is committed in its own transaction before `get_playbook(session_date) is None` check raises `RuntimeError`. Failure path doesn't call `complete_session_stage`, so next run re-runs the strategist and inserts a *second* memo for the same date.
 - **Impact:** Duplicate `strategist_notes` in `strategy_memos` for the same `session_date`. Reflection sees both, double-counting the strategist's voice.
 - **Fix (2026-05-02):** Reordered `_run_strategist_stage` to validate the playbook before persisting the memo. Validation failure now raises before any DB write, so the memo isn't committed; rerunning the strategist won't insert a second copy. New test `test_strategist_memo_not_written_when_playbook_missing` asserts the memo write is skipped when the playbook validation fails post-loop.
+
+### ✅ P2.26 — `insert_decision_signals_batch` / `insert_thesis_signals` return `len()` instead of `cur.rowcount` *(found 2026-05-02 second pass)*
+- **File:** `v2/database/trading_db.py:512-526` (`insert_thesis_signals`), `v2/database/trading_db.py:552-560` (`insert_decision_signals_batch`)
+- **Bug:** Same shape as P2.21 (which fixed the news/macro batches). Both functions execute `INSERT ... ON CONFLICT DO NOTHING` then return `len(rows)` / `len(signals)`. On a rerun where most of the rows already exist, the function reports the input count instead of what was actually inserted.
+- **Impact:** Two specific lies:
+  1. Strategist sees `_persist_signal_refs` (in `v2/tools.py`) format the message `f" Cited {len(valid)} signal(s)."` — overcounts when refs were already cited.
+  2. `decision_signals` insertion telemetry from `trader.py:391-413` reports the requested count even when ON CONFLICT skipped real conflicts (e.g., a duplicate-decision rerun).
+- **Fix (2026-05-02):** Both functions now return `cur.rowcount if cur.rowcount is not None else 0`, matching the P2.21 pattern. Tests: `test_insert_thesis_signals_skipped_rows_reflected`, `test_insert_decision_signals_batch_skipped_rows_reflected` — verify rerun on already-conflicting rows reports 0.
 
 ### ✅ P2.25 — `tool_get_session_summary` reads 30d decisions but joins signals only for latest 10
 - **File:** `v2/strategy.py:213`
@@ -302,6 +328,19 @@ Clean up when adjacent code is touched.
 
 ---
 
+### ✅ P3.41 — Zero-alpha categories silently dropped from `get_attribution_summary` *(found 2026-05-02 second pass)*
+- **File:** `v2/attribution.py:138-139`
+- **Bug:** `outperforming = [r for r in sufficient if r.get("avg_outcome_7d") and float(...) > 0]`. The truthy check `r.get("avg_outcome_7d")` returns `Decimal(0)` (falsy) when alpha is exactly zero, short-circuiting the AND. The row is then absent from BOTH outperforming and underperforming buckets — invisible to the strategist. The `<= 0` bound on underperforming was clearly meant to include zero (mutually exclusive + exhaustive with `> 0`), but the truthy guard prevented it.
+- **Impact:** Niche but real — a category that breaks even alpha-wise (n=10+, alpha = 0.0) is *invisible* to the strategist, even though "neutral signal" is real signal.
+- **Reproduction:** Pass a row with `avg_outcome_7d = Decimal("0")` and sufficient sample size — neither bucket renders it.
+- **Fix (2026-05-02):** Replace truthy check with explicit `is not None` so `Decimal(0)` lands in underperforming where it belongs. None alpha (no data yet) still excluded from both, since None means "no signal" not "neutral signal". Tests: `test_zero_alpha_appears_in_underperforming`, `test_none_alpha_still_excluded` in `TestGetAttributionSummary`.
+
+### ✅ P3.42 — `update_strategy_identity` warning instructs LLM to retry, but guard fires unconditionally *(found 2026-05-02 second pass)*
+- **File:** `v2/strategy.py:117-148`
+- **Bug:** Identity-update guard returned text ending in `"To proceed anyway, call update_strategy_identity again."`. But the guard is hard, not soft — a retry hits the same `(date.today() - current["created_at"].date()).days < 3` check (and immediately after a successful write the *new* state is 0 days old, so the next call is also rejected). The instruction misled the LLM into wasted turns.
+- **Impact:** Cosmetic but burns LLM budget. Worse: if the LLM trusts the instruction it may write the same identity twice in a session, then conclude "the system rejected my update" and write a memo claiming the system ignored a fundamental shift — when it really just throttled the second call.
+- **Fix (2026-05-02):** Rewrite the warning to clearly state the rejection is hard ("this update has been rejected" / "Identity updates are gated to one per 3 days") and steer the LLM to write a memo + retry next session. Tests: `test_warning_does_not_promise_retry_will_succeed` in `TestIdentityUpdateGuard` — asserts neither "call update_strategy_identity again" nor "call again" appear in the warning text. The existing hard-gate behavior tests (`test_warns_if_recently_updated`, `test_allows_update_if_not_recent`) still pass unchanged.
+
 ## Cross-cutting observations
 
 *(Three of the original six observations have been closed by the audit fixes; struck-through bullets are kept for historical context. The remaining three still apply.)*
@@ -312,6 +351,9 @@ Clean up when adjacent code is touched.
 - **Paper/prod isolation depends on `.env.paper` *not* setting Twitter/Bluesky/Cloudflare vars** — if those leak via shell or `--env-file` override, paper data publishes as prod. *Still open — no automated guard.*
 - **Stage 4 reflection uses 30-day window; Stage 0 attribution uses 90-day window.** Rules "proven" by attribution may be invisible in reflection summary, and vice versa. *Still open — design tension, not a defect.*
 - **`_run_learning_refresh` runs before pipeline stage but after executor stage of the *prior* session** — attribution constraints fed to strategist always lag by exactly one session. *Still open — worth confirming with the project owner whether the lag is intentional.*
+- **`_print_cost_summary` in `v2/ideation_claude.py` hardcodes Opus 4.6 pricing** — `input_cost = uncached_input * 5 / 1M`, etc. Correct for the default `claude-opus-4-6` strategist model, but if the model is overridden to Haiku ($0.80/M input, $4/M output) or Sonnet ($3/M input, $15/M output), the logged cost is misleading. Internal log only — not visible to dashboards. *Found 2026-05-02 second pass; not fixed because cost log is operator-facing only.*
+- **`_check_and_record_session` always inserts a new `sessions` row, even on resume** — if a prior run failed mid-pipeline, its row stays in `status='running'` forever. The new run's row tracks the resumed stages. Over time, `running` rows accumulate as orphans (only `completed` short-circuits at the top). Bloat, not corruption — readers select by `id DESC LIMIT 1`. *Found 2026-05-02 second pass; not fixed in this round.*
+- **`v2/entertainment.py` lacks the false-success guard P1.9 added to recap tweets** — if `post_tweet` succeeds but `insert_tweet` raises, `result.posted` stays `True`. Less critical than the recap path because entertainment tweets aren't run as part of the daily session and there's no `posted_tweet_exists`-style rerun guard yet. *Found 2026-05-02 second pass; tracked for the next pass on entertainment if the operator starts using it routinely.*
 
 ## Residual follow-ups
 

@@ -364,6 +364,8 @@ class TestThesisSignals:
 
     @patch("v2.database.trading_db.execute_values")
     def test_insert_thesis_signals_writes_rows(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.26: returns cur.rowcount, not len(signal_refs)."""
+        mock_cursor.rowcount = 2
         from v2.database.trading_db import insert_thesis_signals
         signal_refs = [
             {"type": "news_signal", "id": 42},
@@ -385,6 +387,18 @@ class TestThesisSignals:
         result = insert_thesis_signals(thesis_id=10, signal_refs=[])
         assert result == 0
         mock_cursor.execute.assert_not_called()
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_insert_thesis_signals_skipped_rows_reflected(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.26: ON CONFLICT DO NOTHING may skip rows; the function must
+        return the count of actually inserted rows, not what was submitted."""
+        mock_cursor.rowcount = 0  # all refs already cited
+        from v2.database.trading_db import insert_thesis_signals
+        signal_refs = [
+            {"type": "news_signal", "id": 42},
+            {"type": "macro_signal", "id": 7},
+        ]
+        assert insert_thesis_signals(thesis_id=10, signal_refs=signal_refs) == 0
 
     def test_get_thesis_signals(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [
@@ -553,11 +567,22 @@ class TestDecisionSignals:
 
     @patch("v2.database.trading_db.execute_values")
     def test_insert_decision_signals_batch(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.26: returns cur.rowcount, not len(signals)."""
+        mock_cursor.rowcount = 2
         from v2.database.trading_db import insert_decision_signals_batch
         signals = [(1, "news_signal", 1), (1, "macro_signal", 2)]
         result = insert_decision_signals_batch(signals)
         assert result == 2
         mock_exec_values.assert_called_once()
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_insert_decision_signals_batch_skipped_rows_reflected(self, mock_exec_values, mock_db, mock_cursor):
+        """P2.26: same shape as P2.21 — ON CONFLICT DO NOTHING may skip rows;
+        a rerun of an already-logged decision should report 0, not len()."""
+        mock_cursor.rowcount = 0  # both rows already linked
+        from v2.database.trading_db import insert_decision_signals_batch
+        signals = [(1, "news_signal", 1), (1, "macro_signal", 2)]
+        assert insert_decision_signals_batch(signals) == 0
 
     def test_get_decision_signals(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"signal_type": "news_signal", "signal_id": 1}]

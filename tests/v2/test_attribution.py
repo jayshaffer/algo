@@ -294,6 +294,54 @@ class TestGetAttributionSummary:
             f"Expected one DB hit across three reads, got {mock_get.call_count}"
         )
 
+    def test_zero_alpha_appears_in_underperforming(self):
+        """P3.41: a row with exactly 0 alpha used to be silently dropped
+        from both buckets due to a truthy check on Decimal(0) — `<= 0`
+        is inclusive, so the row's intended home is underperforming.
+        """
+        clear_attribution_summary_cache()
+        mock_rows = [
+            {
+                "category": "news_signal:flat",
+                "sample_size": 10,
+                "avg_outcome_7d": Decimal("0"),
+                "avg_outcome_30d": Decimal("0"),
+                "win_rate_7d": Decimal("0.50"),
+                "win_rate_30d": Decimal("0.50"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import get_attribution_summary
+            result = get_attribution_summary()
+
+        assert "news_signal:flat" in result, (
+            "Zero-alpha category was silently dropped from the formatted summary."
+        )
+        assert "Underperforming" in result
+
+    def test_none_alpha_still_excluded(self):
+        """Defense check: rows with None alpha (no data yet) should still be
+        excluded from both buckets, not coerced into underperforming.
+        """
+        clear_attribution_summary_cache()
+        mock_rows = [
+            {
+                "category": "news_signal:nodata",
+                "sample_size": 10,
+                "avg_outcome_7d": None,
+                "avg_outcome_30d": None,
+                "win_rate_7d": Decimal("0.50"),
+                "win_rate_30d": Decimal("0.50"),
+            },
+        ]
+        with patch("v2.attribution.get_signal_attribution", return_value=mock_rows):
+            from v2.attribution import get_attribution_summary
+            result = get_attribution_summary()
+
+        assert "news_signal:nodata" not in result, (
+            "Categories with no alpha data must stay out of both buckets."
+        )
+
     def test_recompute_invalidates_memo(self):
         """`compute_signal_attribution` writes new rows; the cached
         summary must be invalidated so subsequent readers see fresh data."""
