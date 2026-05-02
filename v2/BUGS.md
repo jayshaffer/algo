@@ -7,11 +7,11 @@ The trading-money path and the *learning-corruption* path are both top-tier — 
 ## Progress
 
 - ✅ **P0:** 5/5 fixed
-- ✅ **P1:** 8/8 fixed (P1.6, P1.7, P1.8, P1.9, P1.10, P1.11, P1.12, P1.13)
+- ✅ **P1:** 9/9 fixed (P1.6, P1.7, P1.8, P1.9, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)*)
 - ✅ **P2:** 12/12 fixed
 - ☐ **P3:** 0/15 fixed
 
-**Tests added so far:** +46 in v2 suite (704 → 748 passing); +2 in v1 dashboard suite for P1.10.
+**Tests added so far:** +51 in v2 suite (704 → 753 passing); +2 in v1 dashboard suite for P1.10.
 
 ---
 
@@ -127,6 +127,13 @@ Real-money or public-reputation risk; can fire any week.
 - **Impact:** Position sync reconciles shares but the decision-to-fill link is gone — attribution can't see what actually happened.
 - **Reproduction:** Order fills 50/100 before 30s timeout; cancel succeeds for the rest; DB has decision with `order_id=None` and the 50 filled shares are detached from any decision row.
 - **Fix (2026-05-02):** After the cancel attempt, re-fetch the order via `get_order_by_id` and inspect `filled_qty`. If > 0, return `OrderResult(success=True, filled_qty=<actual>, filled_avg_price=<actual>, order_id=<orig>)` with the timeout flagged in the error string. The trader's downstream path then logs the decision row with the real order_id and partial qty — preserving the attribution link. If `filled_qty == 0` or the refetch itself raises, fall through to the prior `success=False` timeout path. Tests: `TestWaitForFillPartialFillOnTimeout` (3 cases) — partial-fill success, zero-fill failure preserved, refetch-failure graceful fallback.
+
+### ✅ P1.14 — Strategist agentic loop max_tokens cap is too tight; no recovery on truncation *(found post-audit during paper session 2026-05-02)*
+- **File:** `v2/claude_client.py:198`
+- **Bug:** `max_tokens=4096 if turn == 0 else 2048` capped synthesis turns at 2048 output tokens. The ramp was backwards: synthesis (write_playbook + thesis updates + reasoning) happens on later turns, not the first. When the strategist's turn 4 generated >2048 output tokens (a single `write_playbook` call with rich `priority_actions[].reasoning` + `market_outlook` + `risk_notes` is already ~1-2k tokens, plus optional thesis updates and preamble), Anthropic returned `stop_reason="max_tokens"` with a truncated response, the loop bailed, and no playbook was persisted.
+- **Impact:** Strategist work silently dropped → no playbook → executor skipped (P2.23 short-circuit), strategist memo not persisted (P2.24 atomic guard). All earlier tool work in that loop (web searches, news fetches, market snapshots) wasted. Surfaced cleanly because of P2.23/P2.24, but until those landed the same condition was leaving stranded memos and confused executor state.
+- **Reproduction:** Paper session 2026-05-02 18:26 → turn 4 took 55s (vs ~5-10s for prior turns), hit `Unexpected stop reason: max_tokens` in `logs_paper/v2_claude_client.log`. v1 (`trading/claude_client.py`) uses flat 4096 and never hit this; v2 introduced the lower 2048 ramp.
+- **Fix (2026-05-02):** Two-part — (1) `max_tokens=32000` (Opus 4.x model max) across all turns. Anthropic API requires *some* value; capping below the model max is a self-imposed truncation that buys negligible cost/latency safety for an internal post-market pipeline. Output is metered, so the high cap costs nothing unless Claude actually generates more. (2) Defense-in-depth recovery for the still-possible case of a runaway model: when `stop_reason="max_tokens"` hits for the first time in a loop, discard the truncated assistant turn (don't append to `messages`, since incomplete `tool_use` blocks would break the next API call), inject a user message instructing concision (`"Your previous response was truncated... be more concise. If you have not yet called write_playbook, call it now..."`), and continue. Bounded to 1 retry per loop to prevent runaway costs. Second `max_tokens` falls through to the original bail path. Tests: `TestMaxTokensCap` (2 cases — cap ≥ 32000, cap not lower on later turns) + `TestMaxTokensRecovery` (3 cases — recovery continues with concision prompt, second hit bails, prior tool_results preserved).
 
 ---
 

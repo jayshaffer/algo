@@ -186,16 +186,20 @@ def run_agentic_loop(
     if cached_tools:
         cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
 
+    max_tokens_recoveries = 0
+
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
 
         # Truncate old tool results to reduce context growth
         pruned = _truncate_old_tool_results(messages)
 
+        # Anthropic requires max_tokens; pass the model's documented max so
+        # truncation only happens on genuinely pathological generations.
         response = _call_with_retry(
             client,
             model=model,
-            max_tokens=4096 if turn == 0 else 2048,
+            max_tokens=32000,
             system=cached_system,
             tools=cached_tools,
             messages=_messages_with_cache_breakpoint(pruned),
@@ -206,6 +210,25 @@ def run_agentic_loop(
         total_output_tokens += response.usage.output_tokens
         total_cache_creation += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
         total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+
+        # Drop the truncated turn (incomplete tool_use blocks would break the next call) and retry once with a concision nudge.
+        if response.stop_reason == "max_tokens" and max_tokens_recoveries < 1:
+            max_tokens_recoveries += 1
+            logger.warning(
+                "max_tokens hit on turn %d; discarding truncated response and "
+                "retrying with concision instruction",
+                turn + 1,
+            )
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Your previous response was truncated by the output limit "
+                    "and discarded. Please be more concise. If you have not yet "
+                    "called `write_playbook`, call it now with succinct fields. "
+                    "Otherwise, end your turn with a brief summary."
+                ),
+            })
+            continue
 
         # Add assistant response to history
         messages.append({"role": "assistant", "content": response.content})
