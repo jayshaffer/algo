@@ -49,6 +49,78 @@ def _make_response(
     return response
 
 
+def _make_stream_mock(responses):
+    """Build a MagicMock whose `.messages.stream(**kwargs)` returns a
+    context manager whose `get_final_message()` yields the next response
+    from `responses`. Mirrors the production pattern:
+
+        with client.messages.stream(**kwargs) as stream:
+            return stream.get_final_message()
+
+    `responses` may be a single Message-like (single call) or a list/iterable
+    (sequential calls / side_effect). To raise an exception on a given call,
+    include the exception instance in the list — it will be raised in place
+    of returning a Message, matching how anthropic SDK errors surface.
+    """
+    if not isinstance(responses, list):
+        responses = [responses]
+    iterator = iter(responses)
+
+    def stream_factory(**_kwargs):
+        try:
+            nxt = next(iterator)
+        except StopIteration:
+            raise AssertionError("stream_factory called more times than mocked responses")
+        if isinstance(nxt, BaseException):
+            raise nxt
+        ctx = MagicMock()
+        ctx.__enter__.return_value = ctx
+        ctx.__exit__.return_value = None
+        ctx.get_final_message.return_value = nxt
+        return ctx
+
+    client = MagicMock()
+    client.messages.stream.side_effect = stream_factory
+    return client
+
+
+class TestStreamingIsUsed:
+    """The strategist's per-turn cap is the model's documented max (32000).
+    The Anthropic Python SDK refuses non-streaming `messages.create()` calls
+    whose max_tokens × estimated time-per-token exceeds 10 minutes. With
+    32000 + Opus, that heuristic trips on turn 1, before any tokens are
+    generated, and the whole stage bails. Streaming has no such guard, so
+    the loop MUST use `client.messages.stream(...)` rather than
+    `client.messages.create(...)`. Regression source: paper run 2026-05-02."""
+
+    def test_loop_calls_stream_not_create(self):
+        response = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock(response)
+
+        run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="hi",
+            tools=[],
+            tool_handlers={},
+            max_turns=3,
+        )
+
+        assert client.messages.stream.called, (
+            "Loop must use client.messages.stream(...) — non-streaming "
+            "messages.create() trips the SDK's 10-minute guard at "
+            "max_tokens=32000 (paper run 2026-05-02)."
+        )
+        assert not client.messages.create.called, (
+            "Loop must not call messages.create() — that path hits the "
+            "10-minute non-streaming guard."
+        )
+
+
 class TestMaxTokensCap:
     """The per-turn output cap must be the model's documented max so truncation
     only happens on genuinely pathological generations. Historical regression:
@@ -63,8 +135,7 @@ class TestMaxTokensCap:
             content=[_text_block("Done")],
             stop_reason="end_turn",
         )
-        client = MagicMock()
-        client.messages.create.return_value = response
+        client = _make_stream_mock(response)
 
         run_agentic_loop(
             client=client,
@@ -76,7 +147,7 @@ class TestMaxTokensCap:
             max_turns=3,
         )
 
-        call_kwargs = client.messages.create.call_args.kwargs
+        call_kwargs = client.messages.stream.call_args.kwargs
         assert call_kwargs["max_tokens"] >= 32000, (
             "Per-turn max_tokens must be >= 32000 (model max) — anything lower "
             "is a self-imposed truncation we have no business choosing"
@@ -94,8 +165,7 @@ class TestMaxTokensCap:
             content=[_text_block("Done")],
             stop_reason="end_turn",
         )
-        client = MagicMock()
-        client.messages.create.side_effect = [tool_resp, end_resp]
+        client = _make_stream_mock([tool_resp, end_resp])
 
         run_agentic_loop(
             client=client,
@@ -107,8 +177,8 @@ class TestMaxTokensCap:
             max_turns=3,
         )
 
-        first_cap = client.messages.create.call_args_list[0].kwargs["max_tokens"]
-        second_cap = client.messages.create.call_args_list[1].kwargs["max_tokens"]
+        first_cap = client.messages.stream.call_args_list[0].kwargs["max_tokens"]
+        second_cap = client.messages.stream.call_args_list[1].kwargs["max_tokens"]
         assert second_cap >= first_cap, (
             f"Later-turn cap ({second_cap}) must not be smaller than first-turn ({first_cap})"
         )
@@ -131,8 +201,7 @@ class TestMaxTokensRecovery:
             content=[_text_block("Done concisely.")],
             stop_reason="end_turn",
         )
-        client = MagicMock()
-        client.messages.create.side_effect = [truncated, recovered]
+        client = _make_stream_mock([truncated, recovered])
 
         result = run_agentic_loop(
             client=client,
@@ -145,7 +214,7 @@ class TestMaxTokensRecovery:
         )
 
         assert result.stop_reason == "end_turn"
-        assert client.messages.create.call_count == 2
+        assert client.messages.stream.call_count == 2
 
         # The truncated assistant response should NOT be in the final messages.
         assistant_texts = [
@@ -179,8 +248,7 @@ class TestMaxTokensRecovery:
             content=[_text_block("still too long")],
             stop_reason="max_tokens",
         )
-        client = MagicMock()
-        client.messages.create.side_effect = [first_truncated, second_truncated]
+        client = _make_stream_mock([first_truncated, second_truncated])
 
         result = run_agentic_loop(
             client=client,
@@ -193,7 +261,7 @@ class TestMaxTokensRecovery:
         )
 
         assert result.stop_reason == "max_tokens"
-        assert client.messages.create.call_count == 2  # one retry only
+        assert client.messages.stream.call_count == 2  # one retry only
 
     def test_recovery_preserves_prior_tool_results(self):
         """Recovery must not erase tool_results from earlier successful turns —
@@ -210,8 +278,7 @@ class TestMaxTokensRecovery:
             content=[_text_block("Done")],
             stop_reason="end_turn",
         )
-        client = MagicMock()
-        client.messages.create.side_effect = [tool_resp, truncated, end_resp]
+        client = _make_stream_mock([tool_resp, truncated, end_resp])
 
         handler = MagicMock(return_value="fetched data")
 
@@ -266,12 +333,11 @@ class TestContextLengthRecovery:
             content=[_text_block("Done after pruning.")],
             stop_reason="end_turn",
         )
-        client = MagicMock()
         # Sequence: BadRequestError → success on retry.
-        client.messages.create.side_effect = [
+        client = _make_stream_mock([
             _make_bad_request_error("prompt is too long: 250000 tokens > 200000 maximum"),
             recovered,
-        ]
+        ])
 
         result = run_agentic_loop(
             client=client,
@@ -284,16 +350,15 @@ class TestContextLengthRecovery:
         )
 
         assert result.stop_reason == "end_turn"
-        assert client.messages.create.call_count == 2
+        assert client.messages.stream.call_count == 2
 
     def test_second_context_length_error_propagates(self):
         """If pruning didn't help (still over the limit), don't loop —
         let the error propagate so the stage fails clearly."""
-        client = MagicMock()
-        client.messages.create.side_effect = [
+        client = _make_stream_mock([
             _make_bad_request_error("prompt is too long"),
             _make_bad_request_error("prompt is too long"),
-        ]
+        ])
 
         with pytest.raises(anthropic.BadRequestError):
             run_agentic_loop(
@@ -307,16 +372,15 @@ class TestContextLengthRecovery:
             )
 
         # One initial attempt + one recovery attempt — no third try.
-        assert client.messages.create.call_count == 2
+        assert client.messages.stream.call_count == 2
 
     def test_unrelated_bad_request_error_is_not_retried(self):
         """A 400 that isn't a context-length issue (e.g. invalid tool
         schema) should propagate immediately — retrying with the same
         prompt won't fix it and burns tokens."""
-        client = MagicMock()
-        client.messages.create.side_effect = [
+        client = _make_stream_mock([
             _make_bad_request_error("invalid request: tool 'foo' is not defined"),
-        ]
+        ])
 
         with pytest.raises(anthropic.BadRequestError):
             run_agentic_loop(
@@ -329,7 +393,7 @@ class TestContextLengthRecovery:
                 max_turns=5,
             )
 
-        assert client.messages.create.call_count == 1
+        assert client.messages.stream.call_count == 1
 
 
 class TestExtractFinalText:

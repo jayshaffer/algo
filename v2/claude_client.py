@@ -61,10 +61,19 @@ def get_claude_client() -> anthropic.Anthropic:
 
 
 def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
-    """Call client.messages.create() with retry and exponential backoff."""
+    """Call client.messages.stream() with retry and exponential backoff.
+
+    Streams to completion and returns the assembled Message — same shape
+    as a non-streaming response. Streaming is required because the SDK
+    refuses non-streaming requests whose max_tokens × estimated
+    time-per-token exceeds 10 minutes; with max_tokens=32000 (Opus 4.x
+    model max) the heuristic trips on the first turn. See:
+    https://github.com/anthropics/anthropic-sdk-python#long-requests
+    """
     for attempt in range(max_retries + 1):
         try:
-            return client.messages.create(**create_kwargs)
+            with client.messages.stream(**create_kwargs) as stream:
+                return stream.get_final_message()
         except RETRYABLE_ERRORS as e:
             if attempt == max_retries:
                 logger.error(

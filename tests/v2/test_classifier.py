@@ -24,11 +24,21 @@ SAMPLE_PUBLISHED_AT = datetime(2025, 1, 15, 10, 0, 0)
 
 
 def _make_mock_response(text: str) -> MagicMock:
-    """Create a mock Claude API response with the given text content."""
+    """Create a mock Claude API response with the given text content.
+
+    Also doubles as a streaming context manager so it can be assigned to
+    `mock_client.messages.stream.return_value`. Production code uses
+    `with client.messages.stream(**kw) as stream: stream.get_final_message()`,
+    so the returned object's `__enter__` yields itself and exposes
+    `get_final_message()` returning the message-shaped mock.
+    """
     mock_response = MagicMock()
     mock_content_block = MagicMock()
     mock_content_block.text = text
     mock_response.content = [mock_content_block]
+    mock_response.__enter__.return_value = mock_response
+    mock_response.__exit__.return_value = None
+    mock_response.get_final_message.return_value = mock_response
     return mock_response
 
 
@@ -345,7 +355,7 @@ class TestClassifyNews:
     def test_returns_classification_result(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(json.dumps({
+        mock_client.messages.stream.return_value = _make_mock_response(json.dumps({
             "type": "ticker_specific",
             "tickers": ["AAPL"],
             "category": "earnings",
@@ -364,14 +374,14 @@ class TestClassifyNews:
     def test_calls_claude_with_correct_model(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"type": "noise"})
         )
 
         classify_news("some headline", SAMPLE_PUBLISHED_AT)
 
-        mock_client.messages.create.assert_called_once()
-        call_kwargs = mock_client.messages.create.call_args[1]
+        mock_client.messages.stream.assert_called_once()
+        call_kwargs = mock_client.messages.stream.call_args[1]
         assert call_kwargs["model"] == CLASSIFICATION_MODEL
         assert call_kwargs["max_tokens"] == 256
 
@@ -379,7 +389,7 @@ class TestClassifyNews:
     def test_returns_noise_on_exception(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.side_effect = Exception("API error")
+        mock_client.messages.stream.side_effect = Exception("API error")
 
         result = classify_news("bad headline", SAMPLE_PUBLISHED_AT)
 
@@ -391,7 +401,7 @@ class TestClassifyNews:
     def test_returns_noise_on_invalid_json(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response("not valid json")
+        mock_client.messages.stream.return_value = _make_mock_response("not valid json")
 
         result = classify_news("bad headline", SAMPLE_PUBLISHED_AT)
 
@@ -403,13 +413,13 @@ class TestClassifyNews:
     def test_headline_in_prompt(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"type": "noise"})
         )
 
         classify_news("My specific headline text", SAMPLE_PUBLISHED_AT)
 
-        call_kwargs = mock_client.messages.create.call_args[1]
+        call_kwargs = mock_client.messages.stream.call_args[1]
         messages = call_kwargs["messages"]
         assert "My specific headline text" in messages[0]["content"]
 
@@ -417,7 +427,7 @@ class TestClassifyNews:
     def test_strips_code_fences_from_response(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             '```json\n{"type": "noise"}\n```'
         )
 
@@ -537,13 +547,13 @@ class TestClassifyNewsBatch:
         """Verify batch classification uses Claude Haiku."""
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps([{"type": "noise"}])
         )
 
         classify_news_batch(["H1"], [SAMPLE_PUBLISHED_AT], batch_size=50)
 
-        call_kwargs = mock_client.messages.create.call_args[1]
+        call_kwargs = mock_client.messages.stream.call_args[1]
         assert call_kwargs["model"] == CLASSIFICATION_MODEL
 
 
@@ -563,7 +573,7 @@ class TestClassifyBatch:
              "sentiment": "bullish", "confidence": "high"},
             {"index": 2, "type": "noise"},
         ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
+        mock_client.messages.stream.return_value = _make_mock_response(response_text)
 
         headlines = ["AAPL earnings", "Random news"]
         dates = [SAMPLE_PUBLISHED_AT, SAMPLE_PUBLISHED_AT]
@@ -578,7 +588,7 @@ class TestClassifyBatch:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         inner = json.dumps([{"index": 1, "type": "noise"}])
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             f"```json\n{inner}\n```"
         )
 
@@ -592,7 +602,7 @@ class TestClassifyBatch:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         inner = json.dumps([{"index": 1, "type": "noise"}])
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             f"```\n{inner}\n```"
         )
 
@@ -608,7 +618,7 @@ class TestClassifyBatch:
         response_text = json.dumps([{"index": 1, "type": "ticker_specific", "tickers": ["AAPL"],
                                      "category": "earnings", "sentiment": "bullish",
                                      "confidence": "high"}])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
+        mock_client.messages.stream.return_value = _make_mock_response(response_text)
 
         headlines = ["AAPL news", "MSFT news", "GOOG news"]
         dates = [SAMPLE_PUBLISHED_AT] * 3
@@ -629,7 +639,7 @@ class TestClassifyBatch:
             {"index": 2, "type": "noise"},
             {"index": 3, "type": "noise"},
         ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
+        mock_client.messages.stream.return_value = _make_mock_response(response_text)
 
         results = _classify_batch(["only one"], [SAMPLE_PUBLISHED_AT])
 
@@ -650,7 +660,7 @@ class TestClassifyBatch:
              "category": "earnings", "sentiment": "bullish", "confidence": "high"},
             {"index": 2, "type": "noise"},
         ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
+        mock_client.messages.stream.return_value = _make_mock_response(response_text)
 
         headlines = ["AAPL news", "MSFT news", "GOOG news"]
         dates = [SAMPLE_PUBLISHED_AT] * 3
@@ -674,7 +684,7 @@ class TestClassifyBatch:
              "sentiment": "bullish", "confidence": "high"},  # no index
             {"index": 2, "type": "noise"},
         ])
-        mock_client.messages.create.return_value = _make_mock_response(response_text)
+        mock_client.messages.stream.return_value = _make_mock_response(response_text)
 
         results = _classify_batch(["AAPL news", "MSFT news"], [SAMPLE_PUBLISHED_AT] * 2)
 
@@ -685,7 +695,7 @@ class TestClassifyBatch:
     def test_raises_on_non_array_response(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"type": "noise"})
         )
 
@@ -696,7 +706,7 @@ class TestClassifyBatch:
     def test_raises_on_invalid_json(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             "not valid json at all"
         )
 
@@ -707,14 +717,14 @@ class TestClassifyBatch:
     def test_uses_correct_model_and_max_tokens(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps([{"type": "noise"}])
         )
 
         _classify_batch(["headline"], [SAMPLE_PUBLISHED_AT])
 
-        mock_client.messages.create.assert_called_once()
-        call_kwargs = mock_client.messages.create.call_args[1]
+        mock_client.messages.stream.assert_called_once()
+        call_kwargs = mock_client.messages.stream.call_args[1]
         assert call_kwargs["model"] == CLASSIFICATION_MODEL
         assert call_kwargs["max_tokens"] == 4096
 
@@ -722,13 +732,13 @@ class TestClassifyBatch:
     def test_headlines_numbered_in_prompt(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps([{"type": "noise"}, {"type": "noise"}])
         )
 
         _classify_batch(["First headline", "Second headline"], [SAMPLE_PUBLISHED_AT] * 2)
 
-        call_kwargs = mock_client.messages.create.call_args[1]
+        call_kwargs = mock_client.messages.stream.call_args[1]
         prompt = call_kwargs["messages"][0]["content"]
         assert '1. "First headline"' in prompt
         assert '2. "Second headline"' in prompt
@@ -745,7 +755,7 @@ class TestClassifyTickerNews:
     def test_returns_ticker_signal(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(json.dumps({
+        mock_client.messages.stream.return_value = _make_mock_response(json.dumps({
             "category": "earnings",
             "sentiment": "bullish",
             "confidence": "high",
@@ -765,14 +775,14 @@ class TestClassifyTickerNews:
     def test_calls_claude_with_correct_model(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"category": "noise", "sentiment": "neutral", "confidence": "low"})
         )
 
         classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
 
-        mock_client.messages.create.assert_called_once()
-        call_kwargs = mock_client.messages.create.call_args[1]
+        mock_client.messages.stream.assert_called_once()
+        call_kwargs = mock_client.messages.stream.call_args[1]
         assert call_kwargs["model"] == CLASSIFICATION_MODEL
         assert call_kwargs["max_tokens"] == 256
 
@@ -780,7 +790,7 @@ class TestClassifyTickerNews:
     def test_uppercases_ticker(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"category": "earnings", "sentiment": "bullish", "confidence": "high"})
         )
 
@@ -792,7 +802,7 @@ class TestClassifyTickerNews:
     def test_returns_defaults_on_exception(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.side_effect = Exception("API error")
+        mock_client.messages.stream.side_effect = Exception("API error")
 
         result = classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
 
@@ -805,7 +815,7 @@ class TestClassifyTickerNews:
     def test_returns_defaults_on_invalid_json(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response("not json")
+        mock_client.messages.stream.return_value = _make_mock_response("not json")
 
         result = classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT)
 
@@ -817,13 +827,13 @@ class TestClassifyTickerNews:
     def test_ticker_in_prompt(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             json.dumps({"category": "noise", "sentiment": "neutral", "confidence": "low"})
         )
 
         classify_ticker_news("TSLA", "Tesla earnings", SAMPLE_PUBLISHED_AT)
 
-        call_kwargs = mock_client.messages.create.call_args[1]
+        call_kwargs = mock_client.messages.stream.call_args[1]
         prompt = call_kwargs["messages"][0]["content"]
         assert "TSLA" in prompt
         assert "Tesla earnings" in prompt
@@ -832,7 +842,7 @@ class TestClassifyTickerNews:
     def test_strips_code_fences_from_response(self, mock_get_client):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        mock_client.messages.create.return_value = _make_mock_response(
+        mock_client.messages.stream.return_value = _make_mock_response(
             '```json\n{"category": "earnings", "sentiment": "bullish", "confidence": "high"}\n```'
         )
 
