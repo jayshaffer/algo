@@ -235,6 +235,137 @@ class TestCreateThesis:
         assert "GOOG" in result
 
 
+class TestCreateThesisSignalRefs:
+    """Phase 3 of signal-citation wiring: thesis creation captures the
+    news/macro signal IDs that justified it. The strategist surfaces these
+    via tool_get_news_signals/tool_get_macro_signals and cites them here."""
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_positions")
+    @patch("v2.tools.get_active_theses")
+    def test_persists_signal_refs(self, mock_theses, mock_positions,
+                                   mock_insert, mock_validate, mock_insert_links):
+        mock_theses.return_value = []
+        mock_positions.return_value = []
+        mock_insert.return_value = 5
+        mock_validate.return_value = [
+            {"type": "news_signal", "id": 100},
+            {"type": "macro_signal", "id": 7},
+        ]
+        result = tool_create_thesis(
+            ticker="GOOG",
+            direction="long",
+            thesis="AI growth",
+            entry_trigger="Price > $100",
+            exit_trigger="Price > $150",
+            invalidation="AI hype fades",
+            confidence="high",
+            signal_refs=[
+                {"type": "news_signal", "id": 100},
+                {"type": "macro_signal", "id": 7},
+            ],
+        )
+        mock_insert_links.assert_called_once_with(
+            5,
+            [{"type": "news_signal", "id": 100}, {"type": "macro_signal", "id": 7}],
+        )
+        assert "Created thesis ID 5" in result
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_positions")
+    @patch("v2.tools.get_active_theses")
+    def test_warns_on_invalid_refs(self, mock_theses, mock_positions,
+                                    mock_insert, mock_validate, mock_insert_links):
+        mock_theses.return_value = []
+        mock_positions.return_value = []
+        mock_insert.return_value = 5
+        # 1 of 2 refs survives validation
+        mock_validate.return_value = [{"type": "news_signal", "id": 100}]
+        result = tool_create_thesis(
+            ticker="GOOG", direction="long", thesis="AI growth",
+            entry_trigger="...", exit_trigger="...", invalidation="...",
+            confidence="high",
+            signal_refs=[
+                {"type": "news_signal", "id": 100},
+                {"type": "news_signal", "id": 999_999},  # not in DB
+            ],
+        )
+        # Strategist must see that one ref was stripped so it can correct
+        assert "1" in result and ("strip" in result.lower() or "invalid" in result.lower())
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_positions")
+    @patch("v2.tools.get_active_theses")
+    def test_works_without_signal_refs(self, mock_theses, mock_positions,
+                                        mock_insert, mock_insert_links):
+        """Backwards-compat: signal_refs is optional (e.g., adopted positions)."""
+        mock_theses.return_value = []
+        mock_positions.return_value = []
+        mock_insert.return_value = 5
+        result = tool_create_thesis(
+            ticker="GOOG", direction="long", thesis="AI growth",
+            entry_trigger="...", exit_trigger="...", invalidation="...",
+            confidence="high",
+        )
+        assert "Created thesis ID 5" in result
+        mock_insert_links.assert_not_called()
+
+
+class TestAdoptThesisSignalRefs:
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_active_theses")
+    @patch("v2.tools.get_positions")
+    def test_persists_signal_refs(self, mock_positions, mock_theses,
+                                   mock_insert, mock_validate, mock_insert_links):
+        mock_positions.return_value = [{"ticker": "AAPL"}]
+        mock_theses.return_value = []
+        mock_insert.return_value = 42
+        mock_validate.return_value = [{"type": "news_signal", "id": 5}]
+        tool_adopt_thesis(
+            ticker="AAPL", direction="long",
+            thesis="Strong ecosystem", exit_trigger="...",
+            invalidation="...", confidence="medium",
+            signal_refs=[{"type": "news_signal", "id": 5}],
+        )
+        mock_insert_links.assert_called_once_with(42, [{"type": "news_signal", "id": 5}])
+
+
+class TestUpdateThesisSignalRefs:
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.update_thesis")
+    def test_adds_signal_refs(self, mock_update, mock_validate, mock_insert_links):
+        from v2.tools import tool_update_thesis
+        mock_update.return_value = True
+        mock_validate.return_value = [{"type": "news_signal", "id": 200}]
+        result = tool_update_thesis(
+            thesis_id=5,
+            add_signal_refs=[{"type": "news_signal", "id": 200}],
+        )
+        mock_insert_links.assert_called_once_with(5, [{"type": "news_signal", "id": 200}])
+        # update_thesis itself only needs to be called if other fields changed;
+        # signal-only updates are still a successful no-op result.
+        assert "Updated" in result or "5" in result
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.update_thesis")
+    def test_no_signal_refs_keeps_existing_behaviour(self, mock_update, mock_insert_links):
+        from v2.tools import tool_update_thesis
+        mock_update.return_value = True
+        result = tool_update_thesis(thesis_id=5, thesis="New text")
+        assert "Updated" in result
+        mock_insert_links.assert_not_called()
+
+
 class TestToolAdoptThesis:
 
     @patch("v2.tools.insert_thesis")
@@ -298,9 +429,67 @@ class TestToolAdoptThesis:
 # --- Tool completeness tests ---
 
 
+class TestGetNewsSignals:
+    """The strategist must see signal IDs so it can cite them on theses.
+    Without IDs the executor downstream would have nothing real to record
+    in decision_signals — this was the bug behind the news_signal:unknown
+    artifact in attribution."""
+
+    @patch("v2.tools.get_news_signals")
+    def test_signal_ids_visible_in_output(self, mock_get):
+        """Each signal line must include its DB id so the LLM can cite it."""
+        mock_get.return_value = [
+            {
+                "id": 4242, "ticker": "AAPL", "category": "earnings",
+                "sentiment": "bullish", "confidence": "high",
+                "headline": "Apple reports record Q4 earnings",
+                "published_at": datetime(2026, 4, 30, 14, 22),
+            },
+        ]
+        from v2.tools import tool_get_news_signals
+        out = tool_get_news_signals(ticker="AAPL", days=7)
+        assert "4242" in out
+
+    @patch("v2.tools.get_news_signals")
+    def test_no_signals_message(self, mock_get):
+        mock_get.return_value = []
+        from v2.tools import tool_get_news_signals
+        out = tool_get_news_signals(ticker="AAPL", days=7)
+        assert "no" in out.lower() or "No" in out
+
+
+class TestGetMacroSignals:
+    """Macro signals also need IDs surfaced. tool_get_macro_context summarizes
+    by category and never shows IDs — so we add a parallel line-per-signal
+    tool that the strategist can read when it needs to cite specific macro
+    signals on a thesis. Same shape as tool_get_news_signals."""
+
+    @patch("v2.tools.get_macro_signals")
+    def test_signal_ids_visible_in_output(self, mock_get):
+        mock_get.return_value = [
+            {
+                "id": 99, "category": "fed",
+                "sentiment": "neutral", "confidence": "high",
+                "headline": "Fed holds rates steady",
+                "published_at": datetime(2026, 4, 30, 14, 0),
+                "affected_sectors": ["finance"],
+            },
+        ]
+        from v2.tools import tool_get_macro_signals
+        out = tool_get_macro_signals(days=7)
+        assert "99" in out
+
+    @patch("v2.tools.get_macro_signals")
+    def test_no_signals_message(self, mock_get):
+        mock_get.return_value = []
+        from v2.tools import tool_get_macro_signals
+        out = tool_get_macro_signals(days=7)
+        assert "no" in out.lower() or "No" in out
+
+
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 15 handler functions."""
+        """TOOL_HANDLERS should have all 16 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -311,6 +500,7 @@ class TestToolCompleteness:
             "close_thesis",
             "get_news_signals",
             "get_macro_context",
+            "get_macro_signals",
             "get_signal_attribution",
             "get_decision_history",
             "write_playbook",
@@ -321,8 +511,8 @@ class TestToolCompleteness:
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 16 entries (15 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 16
+        """TOOL_DEFINITIONS should have 17 entries (16 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 17
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -339,6 +529,7 @@ class TestToolCompleteness:
             "close_thesis",
             "get_news_signals",
             "get_macro_context",
+            "get_macro_signals",
             "get_signal_attribution",
             "get_decision_history",
             "write_playbook",
@@ -360,6 +551,16 @@ class TestToolCompleteness:
             if name == "web_search":
                 continue
             assert name in TOOL_HANDLERS, f"No handler for tool definition '{name}'"
+
+    def test_thesis_tools_advertise_signal_refs(self):
+        """create_thesis/adopt_thesis must let the LLM cite signals;
+        update_thesis must let the LLM add signals."""
+        by_name = {t.get("name"): t for t in TOOL_DEFINITIONS if t.get("name")}
+        for name in ("create_thesis", "adopt_thesis"):
+            props = by_name[name]["input_schema"]["properties"]
+            assert "signal_refs" in props, f"{name} must advertise signal_refs"
+        update_props = by_name["update_thesis"]["input_schema"]["properties"]
+        assert "add_signal_refs" in update_props
 
 
 # --- Strategy tool tests ---

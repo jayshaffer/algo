@@ -55,9 +55,9 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             SELECT
                 CASE
                     WHEN ds.signal_type = 'news_signal' THEN
-                        'news_signal:' || COALESCE(ns.category, 'unknown')
+                        'news_signal:' || ns.category
                     WHEN ds.signal_type = 'macro_signal' THEN
-                        'macro_signal:' || COALESCE(ms.category, 'unknown')
+                        'macro_signal:' || ms.category
                     ELSE ds.signal_type
                 END AS category,
                 COUNT(DISTINCT ds.decision_id) as total_signals,
@@ -72,6 +72,8 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             WHERE d.date > CURRENT_DATE - INTERVAL '%s days'
               AND d.action IN ('buy', 'sell')
               AND d.outcome_7d IS NOT NULL
+              AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
+              AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
             GROUP BY category
             ORDER BY avg_outcome_7d DESC NULLS LAST
         """, (days,))

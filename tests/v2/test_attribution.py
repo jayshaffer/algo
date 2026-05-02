@@ -436,6 +436,47 @@ class TestCollapsedCategories:
         assert "ELSE ds.signal_type || ':' || d.action" not in sql
 
 
+class TestOrphanSignalFiltering:
+    @pytest.fixture(autouse=True)
+    def _patch_attribution_cursor(self, mock_cursor):
+        @contextmanager
+        def _get_cursor():
+            yield mock_cursor
+
+        with patch("v2.attribution.get_cursor", _get_cursor):
+            yield
+
+    def test_excludes_news_signal_orphans(self, mock_db, mock_cursor):
+        """Rows where signal_type='news_signal' but the FK does not match a news_signals row
+        must be excluded — they are broken FK references, not a real category.
+        Bucketing them as 'news_signal:unknown' produces meaningless attribution stats."""
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        # Orphan news_signal references must be filtered out
+        assert "ns.id IS NOT NULL" in sql or "ns.category IS NOT NULL" in sql
+
+    def test_excludes_macro_signal_orphans(self, mock_db, mock_cursor):
+        """Same protection for macro_signal orphans."""
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "ms.id IS NOT NULL" in sql or "ms.category IS NOT NULL" in sql
+
+    def test_does_not_create_unknown_bucket(self, mock_db, mock_cursor):
+        """The 'unknown' fallback bucket must not appear — orphans are dropped, not relabeled."""
+        from v2.attribution import compute_signal_attribution
+        mock_cursor.fetchall.return_value = []
+        with patch("v2.attribution.upsert_signal_attribution"):
+            compute_signal_attribution()
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "'unknown'" not in sql
+
+
 class TestAttributionTimeWindow:
     @pytest.fixture(autouse=True)
     def _patch_attribution_cursor(self, mock_cursor):

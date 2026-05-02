@@ -28,6 +28,10 @@ class PlaybookAction:
 
     intent_type + intent_magnitude are the LLM-authored sizing signal.
     The trader resolves them to exact shares at execution time via v2.intents.
+
+    signal_refs is the list of news/macro/thesis IDs the strategist cited as
+    evidence on the underlying thesis. The executor copies it verbatim into
+    its decision so attribution can trace the trade back to evidence.
     """
     id: int
     ticker: str
@@ -38,6 +42,11 @@ class PlaybookAction:
     intent_type: str | None
     intent_magnitude: Decimal | None
     priority: int
+    signal_refs: list[dict] | None = None
+
+    def __post_init__(self):
+        if self.signal_refs is None:
+            self.signal_refs = []
 
 
 @dataclass
@@ -143,10 +152,14 @@ RULES:
 - Set is_off_playbook to true for trades not in the playbook
 - If no playbook available: hold everything, no new positions
 - If uncertain: HOLD
-- Every decision MUST cite signal_refs for the learning loop
+
+SIGNAL_REFS — COPY VERBATIM, DO NOT INVENT:
+- For decisions ON a playbook action: copy `signal_refs` VERBATIM from the playbook action's `signal_refs` field. Do not edit, drop, or invent IDs. The strategist already cited the evidence; you are passing it through to attribution.
+- For off-playbook trades: use `signal_refs: []` (empty). You do not have the structured IDs needed to cite, and inventing them would be silently stripped. Off-playbook trades therefore have no attribution — keep them rare.
+- For HOLD decisions: `signal_refs: []` is fine.
 
 JSON SCHEMA:
-{"decisions": [{"playbook_action_id": null, "ticker": "SYMBOL", "action": "buy|sell|hold", "intent_type": "exit_full|exit_partial_pct|exit_dollar|trim_to_portfolio_pct|invest_dollar|invest_portfolio_pct|invest_buying_power_pct|add_to_target_pct|null", "intent_magnitude": 500.0, "reasoning": "...", "confidence": "high|medium|low", "is_off_playbook": false, "signal_refs": [{"type": "news_signal|thesis", "id": 0}], "thesis_id": null}], "thesis_invalidations": [{"thesis_id": 0, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
+{"decisions": [{"playbook_action_id": null, "ticker": "SYMBOL", "action": "buy|sell|hold", "intent_type": "exit_full|exit_partial_pct|exit_dollar|trim_to_portfolio_pct|invest_dollar|invest_portfolio_pct|invest_buying_power_pct|add_to_target_pct|null", "intent_magnitude": 500.0, "reasoning": "...", "confidence": "high|medium|low", "is_off_playbook": false, "signal_refs": [{"type": "news_signal|macro_signal|thesis", "id": 1234}], "thesis_id": null}], "thesis_invalidations": [{"thesis_id": null, "reason": "..."}], "market_summary": "...", "risk_assessment": "..."}
 
 For hold decisions, set intent_type and intent_magnitude to null.
 For exit_full, set intent_magnitude to null.

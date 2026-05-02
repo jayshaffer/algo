@@ -73,7 +73,11 @@
       "Bash(task test *)",
       "Bash(task --version)",
       "Bash(task lint *)",
-      "Bash(ruff rule *)"
+      "Bash(ruff rule *)",
+      "Bash(node --check /home/jay/dev/algo/public_dashboard/app.js)",
+      "Bash(sudo chown *)",
+      "Bash(docker network *)",
+      "Bash(docker rm *)"
     ]
   }
 }

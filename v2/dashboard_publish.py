@@ -125,6 +125,34 @@ def _enrich_snapshots_with_deposits(snapshots: list[dict], deposit_history: list
                 s["cumulative_deposits"] += credit
 
 
+def _enrich_snapshots_with_twr_value(snapshots: list[dict]) -> None:
+    """Add twr_value to each snapshot, in place.
+
+    twr_value = snapshots[0].portfolio_value compounded by each day's
+    trading-only growth factor. External cash flows (deposits/withdrawals)
+    are subtracted from the growth calculation so the resulting line
+    represents "what one dollar of starting capital grew to" — usable on
+    the same dollar axis as SPY for apples-to-apples comparison.
+
+    Requires `cumulative_deposits` to already be populated on each snapshot.
+    """
+    if not snapshots:
+        return
+
+    snapshots[0]["twr_value"] = snapshots[0]["portfolio_value"]
+
+    for i in range(1, len(snapshots)):
+        prev = snapshots[i - 1]
+        curr = snapshots[i]
+        deposit = curr.get("cumulative_deposits", Decimal("0")) - prev.get("cumulative_deposits", Decimal("0"))
+        start_capital = prev["portfolio_value"] + deposit
+        if start_capital > 0:
+            growth = curr["portfolio_value"] / start_capital
+            curr["twr_value"] = prev["twr_value"] * growth
+        else:
+            curr["twr_value"] = prev["twr_value"]
+
+
 def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = None) -> dict:
     """Gather all dashboard data in a single DB connection.
 
@@ -210,9 +238,6 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         )
         previous = cur.fetchone()
 
-    # Build summary
-    summary = _build_summary(latest, first, previous, len(positions), session_date, net_deposits)
-
     # Fetch SPY benchmark for the same date range as snapshots
     benchmark = []
     if snapshots:
@@ -228,7 +253,20 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         logger.warning("Could not fetch deposit history", exc_info=True)
         deposit_history = []
     _enrich_snapshots_with_deposits(snapshot_dicts, deposit_history)
+    _enrich_snapshots_with_twr_value(snapshot_dicts)
 
+    # Daily deposit is the jump in cumulative_deposits between the last two
+    # snapshots — matches the credit semantics in _enrich_snapshots_with_deposits.
+    daily_deposit = Decimal("0")
+    if len(snapshot_dicts) >= 2:
+        daily_deposit = (
+            snapshot_dicts[-1].get("cumulative_deposits", Decimal("0"))
+            - snapshot_dicts[-2].get("cumulative_deposits", Decimal("0"))
+        )
+
+    # Build summary (needs daily_deposit to exclude cash-ins from daily P&L)
+    summary = _build_summary(latest, first, previous, len(positions), session_date,
+                             net_deposits, daily_deposit=daily_deposit)
 
     return {
         "summary": summary,
@@ -240,8 +278,13 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     }
 
 
-def _build_summary(latest, first, previous, positions_count, session_date, net_deposits=None):
-    """Build summary dict from query results."""
+def _build_summary(latest, first, previous, positions_count, session_date,
+                   net_deposits=None, daily_deposit=Decimal("0")):
+    """Build summary dict from query results.
+
+    daily_deposit: net cash deposited between `previous` and `latest` snapshots.
+        Subtracted from the daily delta so the card reflects trading P&L only.
+    """
     if not latest:
         return {
             "portfolio_value": 0,
@@ -260,14 +303,15 @@ def _build_summary(latest, first, previous, positions_count, session_date, net_d
     cash = latest["cash"]
     long_market_value = latest.get("long_market_value") or (portfolio_value - cash)
 
-    # Daily P&L
+    # Daily P&L — subtract same-day deposits so card reflects trading only.
     daily_pnl = Decimal("0")
     daily_pnl_pct = Decimal("0")
     if previous and previous["portfolio_value"]:
         prev_value = previous["portfolio_value"]
-        daily_pnl = portfolio_value - prev_value
-        if prev_value != 0:
-            daily_pnl_pct = (daily_pnl / prev_value) * 100
+        daily_pnl = portfolio_value - prev_value - daily_deposit
+        base = prev_value + daily_deposit
+        if base != 0:
+            daily_pnl_pct = (daily_pnl / base) * 100
 
     # Total P&L: investment return only (excludes cash infusions)
     total_pnl = Decimal("0")

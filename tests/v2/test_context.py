@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 class TestBuildExecutorInput:
@@ -15,6 +15,8 @@ class TestBuildExecutorInput:
             # playbook_actions
             [{"id": 1, "ticker": "AAPL", "action": "buy", "thesis_id": 1,
               "reasoning": "Entry", "confidence": "high", "max_quantity": Decimal("5"), "priority": 1}],
+            # thesis_signals (empty for this thesis)
+            [],
             # positions
             [{"ticker": "MSFT", "shares": Decimal("10"), "avg_cost": Decimal("300")}],
             # recent decisions
@@ -176,6 +178,100 @@ class TestBuildExecutorInput:
         assert action.intent_type is None
         assert action.intent_magnitude is None
         assert action.priority == 99
+
+    def test_inlines_thesis_signal_refs(self, mock_db, mock_cursor):
+        """Phase 4: each playbook action inherits the signal_refs from its thesis,
+        so the executor doesn't have to invent IDs."""
+        mock_cursor.fetchone.side_effect = [
+            {"id": 1, "market_outlook": "Bullish", "risk_notes": "", "priority_actions": [], "watch_list": []},
+            None,  # strategy_state
+        ]
+        mock_cursor.fetchall.side_effect = [
+            # playbook_actions
+            [{"id": 1, "ticker": "AAPL", "action": "buy", "thesis_id": 7,
+              "reasoning": "Entry", "confidence": "high", "priority": 1}],
+            # positions
+            [],
+            # recent decisions
+            [],
+            # attribution
+            [],
+            # strategy_rules
+            [],
+            # account_snapshots
+            [],
+        ]
+
+        thesis_signals_by_id = {
+            7: [
+                {"thesis_id": 7, "signal_type": "news_signal", "signal_id": 100},
+                {"thesis_id": 7, "signal_type": "macro_signal", "signal_id": 5},
+            ],
+        }
+
+        from v2.context import build_executor_input
+        with patch("v2.context.get_thesis_signals", side_effect=lambda tid: thesis_signals_by_id.get(tid, [])), \
+             patch("v2.executor.get_latest_price", return_value=Decimal("150.00")):
+            result = build_executor_input(
+                account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"),
+                              "portfolio_value": Decimal("100000")},
+            )
+
+        action = result.playbook_actions[0]
+        assert action.signal_refs == [
+            {"type": "news_signal", "id": 100},
+            {"type": "macro_signal", "id": 5},
+        ]
+
+    def test_action_with_no_thesis_id_has_empty_signal_refs(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.side_effect = [
+            {"id": 1, "market_outlook": "", "risk_notes": "", "priority_actions": [], "watch_list": []},
+            None,
+        ]
+        mock_cursor.fetchall.side_effect = [
+            # action without a thesis_id (e.g., adopted/orphan)
+            [{"id": 9, "ticker": "GME", "action": "sell", "thesis_id": None,
+              "reasoning": "...", "confidence": "low", "priority": 99}],
+            [], [], [], [], [],
+        ]
+
+        from v2.context import build_executor_input
+        with patch("v2.context.get_thesis_signals") as mock_links, \
+             patch("v2.executor.get_latest_price", return_value=Decimal("10.00")):
+            result = build_executor_input(
+                account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"),
+                              "portfolio_value": Decimal("100000")},
+            )
+
+        # Should not be looked up at all if thesis_id is None
+        mock_links.assert_not_called()
+        assert result.playbook_actions[0].signal_refs == []
+
+    def test_thesis_signals_cached_across_actions(self, mock_db, mock_cursor):
+        """Two actions on the same thesis should not double-fetch."""
+        mock_cursor.fetchone.side_effect = [
+            {"id": 1, "market_outlook": "", "risk_notes": "", "priority_actions": [], "watch_list": []},
+            None,
+        ]
+        mock_cursor.fetchall.side_effect = [
+            [
+                {"id": 1, "ticker": "AAPL", "action": "buy", "thesis_id": 7,
+                 "reasoning": "...", "confidence": "high", "priority": 1},
+                {"id": 2, "ticker": "AAPL", "action": "sell", "thesis_id": 7,
+                 "reasoning": "...", "confidence": "high", "priority": 2},
+            ],
+            [], [], [], [], [],
+        ]
+
+        from v2.context import build_executor_input
+        with patch("v2.context.get_thesis_signals", return_value=[]) as mock_links, \
+             patch("v2.executor.get_latest_price", return_value=Decimal("150.00")):
+            build_executor_input(
+                account_info={"cash": Decimal("50000"), "buying_power": Decimal("50000"),
+                              "portfolio_value": Decimal("100000")},
+            )
+
+        assert mock_links.call_count == 1
 
 
 class TestGetPortfolioContext:

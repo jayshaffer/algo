@@ -332,6 +332,56 @@ class TestTheses:
         assert "close_reason = %s" in sql
 
 
+class TestThesisSignals:
+    """Phase 1 of signal-citation wiring: theses cite the news/macro signals
+    that justified them, persisted via the thesis_signals join table."""
+
+    @patch("v2.database.trading_db.execute_values")
+    def test_insert_thesis_signals_writes_rows(self, mock_exec_values, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_thesis_signals
+        signal_refs = [
+            {"type": "news_signal", "id": 42},
+            {"type": "macro_signal", "id": 7},
+        ]
+        result = insert_thesis_signals(thesis_id=10, signal_refs=signal_refs)
+        assert result == 2
+        mock_exec_values.assert_called_once()
+        sql = mock_exec_values.call_args[0][1]
+        assert "INSERT INTO thesis_signals" in sql
+        # Idempotent across re-runs of an unchanged thesis
+        assert "ON CONFLICT" in sql
+        rows = mock_exec_values.call_args[0][2]
+        assert (10, "news_signal", 42) in rows
+        assert (10, "macro_signal", 7) in rows
+
+    def test_insert_thesis_signals_empty_is_noop(self, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_thesis_signals
+        result = insert_thesis_signals(thesis_id=10, signal_refs=[])
+        assert result == 0
+        mock_cursor.execute.assert_not_called()
+
+    def test_get_thesis_signals(self, mock_db, mock_cursor):
+        mock_cursor.fetchall.return_value = [
+            {"thesis_id": 10, "signal_type": "news_signal", "signal_id": 42},
+            {"thesis_id": 10, "signal_type": "macro_signal", "signal_id": 7},
+        ]
+        from v2.database.trading_db import get_thesis_signals
+        result = get_thesis_signals(thesis_id=10)
+        assert len(result) == 2
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "thesis_signals" in sql
+        assert "thesis_id = %s" in sql
+
+    def test_delete_thesis_signals(self, mock_db, mock_cursor):
+        mock_cursor.rowcount = 3
+        from v2.database.trading_db import delete_thesis_signals
+        result = delete_thesis_signals(thesis_id=10)
+        assert result == 3
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "DELETE FROM thesis_signals" in sql
+        assert "thesis_id = %s" in sql
+
+
 class TestOpenOrders:
     def test_upsert_open_order(self, mock_db, mock_cursor):
         mock_cursor.fetchone.return_value = {"id": 1}
