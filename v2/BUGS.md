@@ -7,11 +7,13 @@ The trading-money path and the *learning-corruption* path are both top-tier — 
 ## Progress
 
 - ✅ **P0:** 5/5 fixed
-- ✅ **P1:** 9/9 fixed (P1.6, P1.7, P1.8, P1.9, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)*)
+- ☑️ **P1:** 8/9 fully fixed + 1 partial (P1.9 — app-level guard shipped, DB UNIQUE constraint deferred behind historical-row dedup; P1.6, P1.7, P1.8, P1.10, P1.11, P1.12, P1.13, P1.14 *(post-audit)* fully fixed)
 - ✅ **P2:** 12/12 fixed
 - ✅ **P3:** 15/15 fixed
 
-**Tests added so far:** +88 in v2 suite (704 → 790 passing); +2 in v1 dashboard suite for P1.10.
+**Tests added so far:** +88 in v2 suite (704 → 790 passing, verified 2026-05-02); +2 in v1 dashboard suite for P1.10.
+
+See [**Residual follow-ups**](#residual-follow-ups) for the three deferred items called out inside individual fixes (P0.3 DB CHECK, P1.9 historical dedup + UNIQUE, P3.38 rigorous thesis success metric).
 
 ---
 
@@ -302,27 +304,27 @@ Clean up when adjacent code is touched.
 
 ## Cross-cutting observations
 
-- **Biggest risk to attribution data quality:** P0.1 + P0.3 + P2.14 + P2.15. The orphan-FK problem is structurally unfinished — downstream reads were patched but the write side still depends on a Python validator with a single call site.
-- **Biggest risk to public reputation:** P1.8 + P1.9 + P1.10. All cheap to fix.
-- **Biggest cost/reliability risk:** P2.20 — no retry/backoff with a 50× fan-out fallback.
-- **Paper/prod isolation depends on `.env.paper` *not* setting Twitter/Bluesky/Cloudflare vars** — if those leak via shell or `--env-file` override, paper data publishes as prod.
-- **Stage 4 reflection uses 30-day window; Stage 0 attribution uses 90-day window.** Rules "proven" by attribution may be invisible in reflection summary, and vice versa.
-- **`_run_learning_refresh` runs before pipeline stage but after executor stage of the *prior* session** — attribution constraints fed to strategist always lag by exactly one session. Worth verifying that's intentional.
+*(Three of the original six observations have been closed by the audit fixes; struck-through bullets are kept for historical context. The remaining three still apply.)*
 
-## Suggested triage order
+- ~~**Biggest risk to attribution data quality:** P0.1 + P0.3 + P2.14 + P2.15.~~ Closed: P0.1 fixed sign inversion, P0.3 added category enum validation at the LLM boundary, P2.14 added the polymorphic FK trigger, P2.15 switched to index-based mapping. Orphan-FK problem is now structurally closed.
+- ~~**Biggest risk to public reputation:** P1.8 + P1.9 + P1.10.~~ Closed: P1.8 redacts UUIDs, P1.10 added CSRF gate + verified loopback bind. P1.9 partial — see [Residual follow-ups](#residual-follow-ups).
+- ~~**Biggest cost/reliability risk:** P2.20.~~ Closed: classifier now uses `_call_with_retry` and rate-limited batches no longer fan out 50×.
+- **Paper/prod isolation depends on `.env.paper` *not* setting Twitter/Bluesky/Cloudflare vars** — if those leak via shell or `--env-file` override, paper data publishes as prod. *Still open — no automated guard.*
+- **Stage 4 reflection uses 30-day window; Stage 0 attribution uses 90-day window.** Rules "proven" by attribution may be invisible in reflection summary, and vice versa. *Still open — design tension, not a defect.*
+- **`_run_learning_refresh` runs before pipeline stage but after executor stage of the *prior* session** — attribution constraints fed to strategist always lag by exactly one session. *Still open — worth confirming with the project owner whether the lag is intentional.*
 
-P0 work complete. **Recommended next:**
+## Residual follow-ups
 
-1. **P1.7** (sell precheck fails open) — promoted; this is the actual root cause of the "Insufficient available shares" failures the audit had blamed on P0.2.
-2. **P1.8 + P1.9 + P1.10** (public exposure trio) — all cheap, all real-world impact.
-3. **P2.14** (FK constraint on `decision_signals.signal_id`) — closes the orphan-FK class permanently.
+Three items were called out as future work inside individual fix descriptions but never promoted to standalone tracked entries. Captured here so they don't get lost.
 
-P1 is largely orthogonal — work can be split.
+1. **P0.3 follow-up — DB CHECK constraint for category enums.** P0.3 added Python-side validation in `classifier.py` for `news_signals.category` and `macro_signals.category`. A migration adding `CHECK (category IN (...))` would prevent regression if a future caller bypasses the classifier. Cheap; defer until the next time `classifier.py` is touched.
+2. **P1.9 follow-up — historical tweet dedup + partial UNIQUE.** App-level guards landed (pre-stage rerun check + no false-success on DB-write failure), but the audited fix dropped the `UNIQUE (session_date, tweet_type, platform)` index because prod `tweets` has historical duplicates from past reruns (e.g. 2026-04-24: 24 twitter + 30 bluesky duplicate `recap` rows). Path forward: triage column (`superseded_at`) → mark all-but-latest duplicates → add partial UNIQUE on `posted=TRUE AND superseded_at IS NULL`. Closes the residual race ("post succeeded, insert failed, operator reruns before inspecting").
+3. **P3.38 follow-up — rigorous thesis success metric.** P3.38 ships an execution-conversion rate (`executed / (executed + invalidated + expired)`). The richer metric the audit suggested — executed-AND-outperformed-SPY via `decision_signals` join — is preserved as a follow-up. Worth doing once attribution windows have enough thesis-tagged decisions to be meaningful (P2.18 cleanup left only ~29 thesis-tagged samples).
 
 ## Verification suggestion
 
-Several P2/P3 items are flagged based on code reading, not contract verification. Worth running through context7 against current SDK docs:
+Several P2/P3 items were flagged based on code reading, not contract verification. Still worth running through context7 against current SDK docs when next touching these areas:
 
 - **alpaca-py:** `account.cash` nullability (`v2/executor.py:60-71`), `pos.qty` typing in `sync_positions_from_alpaca`, `client.get(...)` private-method use in `get_net_deposits`, `wait_for_fill` status enum coverage (`"canceled"` vs `"cancelled"` vs `"pending_cancel"` vs `"done_for_day"`).
 - **anthropic SDK:** which exceptions belong in `RETRYABLE_ERRORS` (`v2/claude_client.py:21-25`); tool_result content-shape contract (`str` vs list-of-blocks for `content`).
-- **psycopg2 vs psycopg3:** literal-substitution-inside-quotes for `INTERVAL '%s days'` pattern.
+- **psycopg2 vs psycopg3:** literal-substitution-inside-quotes for `INTERVAL '%s days'` pattern (P3.27 already migrated to `INTERVAL '1 day' * %s`, but spot-check that no caller reintroduced the old form).
