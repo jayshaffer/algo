@@ -256,9 +256,13 @@ def get_trading_decisions(
     for d in data.get("decisions", []):
         raw_mag = d.get("intent_magnitude")
         magnitude = Decimal(str(raw_mag)) if raw_mag is not None else None
+        # T1.3: normalize at the parse boundary so every downstream consumer
+        # (sector lookup, position dict keys, sell precheck) sees the same
+        # canonical TICKER. LLM has been observed emitting "aapl" or " AAPL ".
+        ticker = (d.get("ticker") or "").strip().upper()
         decisions.append(ExecutorDecision(
             playbook_action_id=d.get("playbook_action_id"),
-            ticker=d.get("ticker", ""),
+            ticker=ticker,
             action=d.get("action", "hold"),
             intent_type=d.get("intent_type"),
             intent_magnitude=magnitude,

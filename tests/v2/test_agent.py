@@ -158,6 +158,66 @@ class TestGetTradingDecisions:
             with pytest.raises(ValueError, match="truncated"):
                 get_trading_decisions(executor_input)
 
+    def test_normalizes_ticker_at_parse_boundary(self):
+        """T1.3: 'aapl ' (lowercase + trailing space) emitted by the LLM must
+        land as 'AAPL' so SECTOR_MAP / position dict keys / exchange-side checks
+        all match. Pre-fix this routed through the entire executor pipeline as
+        'aapl ' and missed every downstream lookup.
+        """
+        from v2.risk import SECTOR_MAP
+
+        json_response = (
+            '{"decisions":[{"playbook_action_id":1,"ticker":"aapl ",'
+            '"action":"buy","intent_type":"invest_dollar","intent_magnitude":500,'
+            '"reasoning":"r","confidence":"high","is_off_playbook":false,'
+            '"signal_refs":[],"thesis_id":null}],'
+            '"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_response)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response):
+            response = get_trading_decisions(executor_input)
+
+        assert response.decisions[0].ticker == "AAPL"
+        # Sector lookup hits — proves normalization is real, not just .upper()
+        assert SECTOR_MAP.get(response.decisions[0].ticker) == "tech"
+
+    def test_normalizes_blank_ticker_to_empty_string(self):
+        """Defensive: missing/None ticker stays as empty string, not 'NONE'."""
+        json_response = (
+            '{"decisions":[{"playbook_action_id":1,"ticker":null,'
+            '"action":"hold","intent_type":null,"intent_magnitude":null,'
+            '"reasoning":"r","confidence":"low","is_off_playbook":false,'
+            '"signal_refs":[],"thesis_id":null}],'
+            '"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_response)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response):
+            response = get_trading_decisions(executor_input)
+
+        assert response.decisions[0].ticker == ""
+
     def test_strips_markdown_fences(self):
         json_response = '```json\n{"decisions":[],"thesis_invalidations":[],"market_summary":"Test","risk_assessment":"Low"}\n```'
         mock_response = MagicMock()

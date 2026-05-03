@@ -513,6 +513,80 @@ class TestClientOrderId:
         assert request.client_order_id == "algo-20260502-s-AAPL-7"
 
 
+class TestAlpacaEnvValidation:
+    """T1.4: ALPACA_PAPER must be explicit and consistent with ALPACA_BASE_URL.
+
+    Pre-fix the executor silently defaulted ALPACA_BASE_URL to paper and
+    derived `paper=True` from URL substring search. A prod key with a missing
+    URL silently routed to paper; `paper=true` in code with a prod URL would
+    cause submitting live orders against a paper-flagged client.
+    """
+
+    def test_missing_alpaca_paper_raises_clear_error(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.delenv("ALPACA_PAPER", raising=False)
+        import pytest
+        with pytest.raises(RuntimeError, match="ALPACA_PAPER env var is required"):
+            _validate_alpaca_env()
+
+    def test_invalid_alpaca_paper_value_raises(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_PAPER", "yes")
+        import pytest
+        with pytest.raises(RuntimeError, match="must be 'true' or 'false'"):
+            _validate_alpaca_env()
+
+    def test_paper_true_with_prod_url_raises(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_PAPER", "true")
+        import pytest
+        with pytest.raises(RuntimeError, match="disagrees with ALPACA_BASE_URL"):
+            _validate_alpaca_env()
+
+    def test_paper_false_with_paper_url_raises(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_PAPER", "false")
+        import pytest
+        with pytest.raises(RuntimeError, match="disagrees with ALPACA_BASE_URL"):
+            _validate_alpaca_env()
+
+    def test_consistent_paper_passes(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_PAPER", "true")
+        _validate_alpaca_env()  # should not raise
+
+    def test_consistent_prod_passes(self, monkeypatch):
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+        monkeypatch.setenv("ALPACA_PAPER", "false")
+        _validate_alpaca_env()  # should not raise
+
+    def test_validation_skipped_when_no_api_key(self, monkeypatch):
+        """Tests / non-trading code paths that import executor without
+        configuring Alpaca must not be punished for it."""
+        from v2.executor import _validate_alpaca_env
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_PAPER", raising=False)
+        _validate_alpaca_env()  # should not raise
+
+
 class TestDryRunPrice:
     def test_dry_run_order_uses_simulated_price(self):
         from v2.executor import execute_market_order

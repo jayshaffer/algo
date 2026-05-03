@@ -1,11 +1,14 @@
 """Trading agent orchestrator -- daily automation entry point."""
 
+import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from alpaca.data.historical import StockHistoricalDataClient
 
@@ -374,10 +377,14 @@ def _refresh_buying_power(
             logger.warning("Could not refresh buying power: %s — using local estimate", e)
             if decision.action == "buy":
                 buying_power -= trade_value
+            elif decision.action == "sell":
+                buying_power += trade_value
             return buying_power, portfolio_value
     # Dry run: use local estimate
     if decision.action == "buy":
         buying_power -= trade_value
+    elif decision.action == "sell":
+        buying_power += trade_value
     return buying_power, portfolio_value
 
 
@@ -621,6 +628,19 @@ def _execute_decisions(
         else:
             totals.total_sell_value += outcome.trade_value
 
+        # T1.2: refresh sector-cap inputs mid-loop. Without this, multiple buys
+        # in the same sector each compare against the pre-loop snapshot, so a
+        # sequence that individually fits but cumulatively breaches MAX_SECTOR_PCT
+        # all clears. Sells reduce exposure → subtract; clamp at 0 to defend
+        # against precision drift.
+        if decision.action == "buy":
+            position_values[decision.ticker] = (
+                position_values.get(decision.ticker, Decimal(0)) + outcome.trade_value
+            )
+        elif decision.action == "sell":
+            new_val = position_values.get(decision.ticker, Decimal(0)) - outcome.trade_value
+            position_values[decision.ticker] = new_val if new_val > 0 else Decimal(0)
+
         buying_power, portfolio_value = _refresh_buying_power(
             decision, buying_power, portfolio_value, outcome.trade_value, dry_run,
         )
@@ -673,6 +693,114 @@ def _log_session_summary(response, totals: _ExecutionTotals, errors: list[str]) 
         logger.info("Errors: %d", len(errors))
 
 
+_ORPHAN_DECISIONS_LOG = Path("logs/orphan_decisions.jsonl")
+_INSERT_RETRY_ATTEMPTS = 3
+_INSERT_RETRY_BASE_DELAY = 0.5  # seconds; doubles each attempt
+
+
+def _persist_orphan_decision(
+    *,
+    decision: ExecutorDecision,
+    order_id: str | None,
+    order_result,
+    payload: dict,
+    last_error: Exception,
+) -> None:
+    """T1.5: write a JSONL row so an operator can manually reconcile.
+
+    Reachable when an Alpaca order has filled but every retry of insert_decision
+    failed. Without this, the system has a real position with no DB record —
+    backfill / attribution / strategy reflection all run against an incomplete
+    history. Decimals serialize as strings; payload may already contain Decimals.
+    """
+    def _enc(v):
+        if isinstance(v, Decimal):
+            return str(v)
+        if isinstance(v, (date, datetime)):
+            return v.isoformat()
+        return str(v)
+
+    record = {
+        "logged_at": datetime.now().isoformat(),
+        "ticker": decision.ticker,
+        "action": decision.action,
+        "order_id": order_id,
+        "filled_qty": str(getattr(order_result, "filled_qty", None)),
+        "filled_avg_price": str(getattr(order_result, "filled_avg_price", None)),
+        "reasoning": decision.reasoning,
+        "signal_refs": decision.signal_refs,
+        "playbook_action_id": decision.playbook_action_id,
+        "thesis_id": decision.thesis_id,
+        "insert_payload": {k: _enc(v) for k, v in payload.items()},
+        "last_error": f"{type(last_error).__name__}: {last_error}",
+    }
+    try:
+        _ORPHAN_DECISIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _ORPHAN_DECISIONS_LOG.open("a") as f:
+            f.write(json.dumps(record, default=_enc) + "\n")
+        logger.error(
+            "Orphan decision persisted to %s for manual reconciliation: %s",
+            _ORPHAN_DECISIONS_LOG, record,
+        )
+    except Exception as fs_err:
+        # File-system write failed — last-ditch full-payload log so an operator
+        # can recover from journald/stderr. Do not raise; the trading loop
+        # should continue rather than crash on an unrelated I/O issue.
+        logger.error(
+            "Orphan-log write failed (%s); inline payload: %s", fs_err, record,
+        )
+
+
+def _insert_decision_with_retry(
+    *,
+    decision: ExecutorDecision,
+    order_id: str | None,
+    order_result,
+    payload: dict,
+) -> int | None:
+    """T1.5: bounded retry around insert_decision with JSONL fallback.
+
+    A filled order with a failed DB write produces an orphan position. Three
+    attempts (0.5s, 1s) cover transient pool/network blips; final failure
+    appends to logs/orphan_decisions.jsonl ONLY when the order actually filled
+    (Alpaca confirmed shares moved). No-op decisions and pre-fill failures
+    don't produce orphans.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_INSERT_RETRY_ATTEMPTS):
+        try:
+            return insert_decision(**payload)
+        except Exception as e:
+            last_exc = e
+            if attempt < _INSERT_RETRY_ATTEMPTS - 1:
+                delay = _INSERT_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "insert_decision attempt %d/%d failed for %s: %s; retrying in %.1fs",
+                    attempt + 1, _INSERT_RETRY_ATTEMPTS, decision.ticker, e, delay,
+                )
+                time.sleep(delay)
+
+    assert last_exc is not None
+    filled_qty = getattr(order_result, "filled_qty", None)
+    is_orphan = bool(
+        order_result
+        and getattr(order_result, "success", False)
+        and filled_qty is not None
+        and Decimal(str(filled_qty)) > 0
+    )
+    if is_orphan:
+        _persist_orphan_decision(
+            decision=decision, order_id=order_id, order_result=order_result,
+            payload=payload, last_error=last_exc,
+        )
+    else:
+        logger.error(
+            "insert_decision failed after %d attempts for %s (%s) — no fill, no orphan: %s",
+            _INSERT_RETRY_ATTEMPTS, decision.ticker, decision.action, last_exc,
+        )
+    return None
+
+
 def _log_decisions(
     response,
     order_ids: dict,
@@ -717,7 +845,7 @@ def _log_decisions(
             logged_qty = _resolve_logged_qty(result, decision)
 
             state = (decision_account_states or {}).get(i, account_info)
-            decision_id = insert_decision(
+            payload = dict(
                 decision_date=date.today(),
                 ticker=decision.ticker,
                 action=decision.action,
@@ -731,6 +859,17 @@ def _log_decisions(
                 is_off_playbook=decision.is_off_playbook,
                 order_id=order_ids.get(i),
             )
+            decision_id = _insert_decision_with_retry(
+                decision=decision,
+                order_id=order_ids.get(i),
+                order_result=result,
+                payload=payload,
+            )
+            if decision_id is None:
+                errors.append(
+                    f"Failed to log decision for {decision.ticker} after retries"
+                )
+                continue
             logged_count += 1
         except Exception as e:
             errors.append(f"Failed to log decision for {decision.ticker}: {e}")

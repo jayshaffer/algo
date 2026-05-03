@@ -17,6 +17,7 @@ from .database.trading_db import (
     get_positions,
     get_recent_decisions,
     get_recent_strategy_memos,
+    get_thesis_by_id,
     insert_thesis,
     insert_thesis_signals,
     replace_playbook_actions_atomic,
@@ -31,6 +32,19 @@ logger = logging.getLogger(__name__)
 def reset_session():
     """Reset session state. Call at start of each ideation run."""
     logger.info("Session state reset")
+
+
+def _norm_ticker(ticker: str | None) -> str | None:
+    """T1.3: canonicalize an LLM-emitted ticker (uppercase, strip whitespace).
+
+    The strategist has been observed emitting "aapl" or " AAPL "; without
+    normalization, downstream lookups (DB filters, position dicts, sector map)
+    miss. None passes through so optional-filter handlers stay None.
+    """
+    if ticker is None:
+        return None
+    cleaned = ticker.strip().upper()
+    return cleaned or None
 
 
 # --- Tool Handlers ---
@@ -60,6 +74,7 @@ def tool_get_portfolio_state() -> str:
 
 def tool_get_active_theses(ticker: str | None = None) -> str:
     """Get active theses."""
+    ticker = _norm_ticker(ticker)
     logger.info(f"Getting active theses (ticker filter: {ticker})")
     theses = get_active_theses(ticker=ticker)
 
@@ -124,6 +139,7 @@ def tool_create_thesis(
     get_news_signals / get_macro_signals / get_active_theses output. Invalid
     IDs are stripped at write time and reported back in the tool result.
     """
+    ticker = _norm_ticker(ticker) or ""
     logger.info(f"Creating thesis for {ticker} ({direction})")
 
     # Check for duplicates
@@ -172,6 +188,7 @@ def tool_adopt_thesis(
     Unlike create_thesis, this REQUIRES the ticker to already be in the portfolio.
     Used to bring orphan positions under thesis management.
     """
+    ticker = _norm_ticker(ticker) or ""
     logger.info(f"Adopting thesis for existing position {ticker} ({direction})")
 
     existing = get_active_theses(ticker=ticker)
@@ -224,9 +241,17 @@ def tool_update_thesis(
         v is not None for v in (thesis, entry_trigger, exit_trigger, invalidation, confidence)
     )
 
-    field_success = True
+    # T1.7: enforce input shape and existence BEFORE any DB write. The
+    # add_signal_refs-only path previously skipped existence checks; an invalid
+    # thesis_id would crash _persist_signal_refs with a raw FK error instead of
+    # surfacing a clean tool_result the strategist can act on.
+    if not has_field_updates and not add_signal_refs:
+        return "Error: no updates provided (must set at least one field or add_signal_refs)"
+    if get_thesis_by_id(thesis_id) is None:
+        return f"Error: thesis ID {thesis_id} not found"
+
     if has_field_updates:
-        field_success = update_thesis(
+        update_thesis(
             thesis_id=thesis_id,
             thesis=thesis,
             entry_trigger=entry_trigger,
@@ -234,13 +259,8 @@ def tool_update_thesis(
             invalidation=invalidation,
             confidence=confidence,
         )
-        if not field_success:
-            return f"Error: Thesis ID {thesis_id} not found or no updates provided"
 
     note = _persist_signal_refs(thesis_id, add_signal_refs)
-
-    if not has_field_updates and not add_signal_refs:
-        return f"Error: Thesis ID {thesis_id} not found or no updates provided"
 
     return f"Updated thesis ID {thesis_id}.{note}"
 
@@ -265,6 +285,7 @@ def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
     appear in tool output should not be cited — they will be stripped by
     validation at thesis-creation time.
     """
+    ticker = _norm_ticker(ticker)
     logger.info(f"Getting news signals (ticker: {ticker}, days: {days})")
     signals = get_news_signals(ticker=ticker, days=days)
 
@@ -357,8 +378,21 @@ def tool_write_playbook(
     """
     logger.info("Writing playbook")
 
+    # T1.3: normalize ticker on every action so persisted playbook rows are
+    # canonical TICKER, not "aapl"/"AAPL "/etc. Mutates in place so the
+    # downstream insert sees the cleaned values too.
+    for action in priority_actions:
+        norm = _norm_ticker(action.get("ticker"))
+        if norm:
+            action["ticker"] = norm
+
     # Validate no conflicting actions (buy + sell same ticker)
-    actions_by_ticker = {}
+    # AND no duplicate (ticker, action) pairs. T1.6: a playbook with two buys
+    # for AAPL was previously accepted; the executor then evaluated both and
+    # could double-up size against the same idea. Rejecting at write-time
+    # forces the strategist to dedupe in its own loop.
+    actions_by_ticker: dict[str, str] = {}
+    seen_pairs: set[tuple[str, str]] = set()
     for action in priority_actions:
         ticker = action.get("ticker")
         act = action.get("action")
@@ -367,6 +401,13 @@ def tool_write_playbook(
                 f"Error: Conflicting actions for {ticker} — "
                 f"cannot {actions_by_ticker[ticker]} and {act} the same ticker."
             )
+        pair = (ticker, act)
+        if pair in seen_pairs:
+            return (
+                f"Error: Duplicate (ticker, action) pair for {ticker} {act}. "
+                f"Each (ticker, action) must appear at most once per playbook."
+            )
+        seen_pairs.add(pair)
         actions_by_ticker[ticker] = act
 
     try:
