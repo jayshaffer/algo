@@ -81,7 +81,14 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                 AVG(alpha_7d) AS avg_outcome_7d,
                 AVG(alpha_30d) AS avg_outcome_30d,
                 AVG(CASE WHEN alpha_7d > 0 THEN 1.0 ELSE 0.0 END) AS win_rate_7d,
-                AVG(CASE WHEN alpha_30d > 0 THEN 1.0 ELSE 0.0 END) AS win_rate_30d
+                -- Bug fix: NULL alpha_30d (decision too young for 30d outcome)
+                -- must propagate through AVG, not collapse to ELSE 0.0.
+                -- Without the explicit IS NULL guard, NULL > 0 evaluates to
+                -- NULL → falls into ELSE → counted as a loss, biasing win
+                -- rate toward 0 for any cohort whose 30d window hasn't closed.
+                AVG(CASE WHEN alpha_30d IS NULL THEN NULL
+                         WHEN alpha_30d > 0 THEN 1.0
+                         ELSE 0.0 END) AS win_rate_30d
             FROM categorized
             WHERE outcome_7d IS NOT NULL
               AND alpha_7d IS NOT NULL
@@ -91,14 +98,17 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
         results = [dict(row) for row in cur.fetchall()]
 
     for row in results:
+        # Pass NULL through for 30d metrics so "no eligible decisions" stays
+        # distinguishable from "0% win rate". Coercing NULL→0 here would
+        # silently re-introduce the bias the SQL fix above just removed.
         upsert_signal_attribution(
             category=row["category"],
             sample_size=row["sample_size"],
             sample_size_30d=row.get("sample_size_30d") or 0,
-            avg_outcome_7d=row["avg_outcome_7d"] or Decimal(0),
-            avg_outcome_30d=row["avg_outcome_30d"] or Decimal(0),
-            win_rate_7d=row["win_rate_7d"] or Decimal(0),
-            win_rate_30d=row["win_rate_30d"] or Decimal(0),
+            avg_outcome_7d=row["avg_outcome_7d"] if row["avg_outcome_7d"] is not None else Decimal(0),
+            avg_outcome_30d=row["avg_outcome_30d"],
+            win_rate_7d=row["win_rate_7d"] if row["win_rate_7d"] is not None else Decimal(0),
+            win_rate_30d=row["win_rate_30d"],
         )
 
     # New attribution numbers — invalidate the formatted-summary memo so the

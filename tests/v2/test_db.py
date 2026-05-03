@@ -93,6 +93,36 @@ class TestNewsSignals:
         sql = mock_exec_values.call_args[0][1]
         assert "alpaca_id" in sql
 
+    def test_alpaca_id_uniqueness_includes_ticker(self):
+        """Regression: a single Alpaca news article (one alpaca_id) routinely
+        produces multiple ticker_signals (e.g. "AAPL/MSFT/NVDA rally"). The
+        UNIQUE index must be on (alpaca_id, ticker), not (alpaca_id) alone,
+        or `ON CONFLICT DO NOTHING` silently drops all but the first ticker.
+        Migration 021 fixes the index from migration 019.
+
+        Verifies the live DB schema since the migration file is not mounted
+        into the trading container.
+        """
+        import psycopg2
+        from v2.database.connection import get_cursor
+        try:
+            with get_cursor() as cur:
+                cur.execute("""
+                    SELECT indexdef FROM pg_indexes
+                    WHERE tablename = 'news_signals'
+                      AND indexname LIKE 'idx_news_signals_alpaca%'
+                """)
+                rows = cur.fetchall()
+        except psycopg2.OperationalError:
+            pytest.skip("Live DB not reachable")
+
+        assert len(rows) == 1, f"expected exactly one alpaca_id index, got {len(rows)}: {rows}"
+        indexdef = rows[0]["indexdef"]
+        assert "(alpaca_id, ticker)" in indexdef, (
+            f"index must be composite (alpaca_id, ticker) — found: {indexdef}"
+        )
+        assert "WHERE (alpaca_id IS NOT NULL)" in indexdef
+
     def test_get_news_signals(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"id": 1, "ticker": "AAPL"}]
         from v2.database.trading_db import get_news_signals

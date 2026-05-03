@@ -68,7 +68,14 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
                 AVG(d.outcome_7d - d.benchmark_7d) as avg_outcome_7d,
                 AVG(d.outcome_30d - d.benchmark_30d) as avg_outcome_30d,
                 AVG(CASE WHEN d.outcome_7d - d.benchmark_7d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_7d,
-                AVG(CASE WHEN d.outcome_30d - d.benchmark_30d > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate_30d
+                -- Bug fix: when 30d outcome/benchmark are NULL (decision too
+                -- young), the subtraction is NULL and NULL > 0 evaluates to
+                -- NULL → falls into ELSE → counted as a loss. Explicit guard
+                -- so NULL propagates through AVG and "no data" stays
+                -- distinguishable from "0% wins".
+                AVG(CASE WHEN d.outcome_30d IS NULL OR d.benchmark_30d IS NULL THEN NULL
+                         WHEN d.outcome_30d - d.benchmark_30d > 0 THEN 1.0
+                         ELSE 0.0 END) * 100 as win_rate_30d
             FROM decision_signals ds
             JOIN decisions d ON d.id = ds.decision_id
             LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
