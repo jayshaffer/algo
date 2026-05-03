@@ -48,6 +48,49 @@ class OrderResult:
     error: str | None
 
 
+def _validate_alpaca_env() -> None:
+    """T1.4: enforce explicit paper/prod selection.
+
+    Pre-fix behavior silently defaulted ALPACA_BASE_URL to paper when unset and
+    derived `paper=True` from the URL substring — meaning a prod key with a
+    missing/wrong URL would route to the paper endpoint (Alpaca then 401s, but
+    the failure is opaque). Worse, `paper=true` paired with a prod URL would
+    submit live orders against a paper-flagged client.
+
+    Skips validation when ALPACA_API_KEY is unset so module imports in
+    non-trading test contexts (CLI tools that don't need Alpaca, conftest
+    collection before fixtures fire) don't crash.
+    """
+    if not os.environ.get("ALPACA_API_KEY"):
+        return
+
+    paper_raw = os.environ.get("ALPACA_PAPER")
+    if paper_raw is None:
+        raise RuntimeError(
+            "ALPACA_PAPER env var is required (true|false). "
+            "Set explicitly to prevent silent paper/prod misrouting."
+        )
+    paper_raw = paper_raw.strip().lower()
+    if paper_raw not in ("true", "false"):
+        raise RuntimeError(
+            f"ALPACA_PAPER must be 'true' or 'false', got: {paper_raw!r}"
+        )
+    paper = paper_raw == "true"
+
+    base_url = os.environ.get("ALPACA_BASE_URL")
+    if base_url is None:
+        raise RuntimeError("ALPACA_BASE_URL is required when ALPACA_API_KEY is set")
+    url_is_paper = "paper" in base_url
+    if paper != url_is_paper:
+        raise RuntimeError(
+            f"ALPACA_PAPER={paper_raw} disagrees with ALPACA_BASE_URL={base_url!r}. "
+            "Set both consistently to avoid routing prod orders to paper or vice versa."
+        )
+
+
+_validate_alpaca_env()
+
+
 def get_trading_client() -> TradingClient:
     """Create Alpaca trading client from environment variables."""
     api_key = os.environ.get("ALPACA_API_KEY")
@@ -57,7 +100,10 @@ def get_trading_client() -> TradingClient:
     if not api_key or not secret_key:
         raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set")
 
-    paper = "paper" in base_url
+    # Re-validate on every client construction; cheap, and catches monkeypatched
+    # env in tests that bypassed the module-load gate.
+    _validate_alpaca_env()
+    paper = os.environ.get("ALPACA_PAPER", "").strip().lower() == "true"
     return TradingClient(api_key, secret_key, paper=paper)
 
 

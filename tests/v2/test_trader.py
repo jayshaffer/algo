@@ -1,6 +1,6 @@
 """Tests for trading session executor."""
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -698,6 +698,57 @@ class TestBuyingPowerRefresh:
         assert insert_calls[1].kwargs["account_equity"] == after_first_fill["portfolio_value"]
 
 
+class TestRefreshBuyingPowerLocalEstimate:
+    """T1.1: when get_account_info raises, the local-estimate fallback must
+    debit buys AND credit sells. Pre-fix the sell branch was a no-op, leaving
+    later size-checks reading a stale buying_power that ignored cash freed by
+    earlier sells in the same loop."""
+
+    def _decision(self, action: str) -> ExecutorDecision:
+        return ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action=action,
+            intent_type="invest_dollar", intent_magnitude=Decimal("500"),
+            reasoning="x", confidence="medium",
+            is_off_playbook=False, signal_refs=[], thesis_id=None,
+        )
+
+    def test_sell_credits_buying_power_real_branch(self):
+        from v2.trader import _refresh_buying_power
+        bp_before = Decimal("1000")
+        pv_before = Decimal("10000")
+        trade_value = Decimal("250")
+
+        with patch("v2.trader.get_account_info", side_effect=Exception("api down")):
+            bp_after, pv_after = _refresh_buying_power(
+                self._decision("sell"), bp_before, pv_before, trade_value, dry_run=False,
+            )
+        assert bp_after == bp_before + trade_value
+        assert pv_after == pv_before
+
+    def test_sell_credits_buying_power_dry_run(self):
+        from v2.trader import _refresh_buying_power
+        bp_before = Decimal("1000")
+        pv_before = Decimal("10000")
+        trade_value = Decimal("250")
+
+        bp_after, pv_after = _refresh_buying_power(
+            self._decision("sell"), bp_before, pv_before, trade_value, dry_run=True,
+        )
+        assert bp_after == bp_before + trade_value
+        assert pv_after == pv_before
+
+    def test_buy_still_debits_buying_power(self):
+        from v2.trader import _refresh_buying_power
+        bp_before = Decimal("1000")
+        trade_value = Decimal("250")
+
+        with patch("v2.trader.get_account_info", side_effect=Exception("api down")):
+            bp_after, _ = _refresh_buying_power(
+                self._decision("buy"), bp_before, Decimal("10000"), trade_value, dry_run=False,
+            )
+        assert bp_after == bp_before - trade_value
+
+
 class TestTradingSessionResult:
     def test_has_required_fields(self):
         result = TradingSessionResult(
@@ -955,6 +1006,48 @@ class TestSectorCapHardGate:
         # Sell goes through (no sector-cap rejection); other gates may
         # still affect it but the sector check must not.
         assert "sector" not in decision.reasoning.lower()
+
+    def test_sector_cap_refreshed_mid_loop(self, mock_db, mock_cursor):
+        """T1.2: position_values must update after each fill so cumulative
+        same-sector buys can't sneak past the gate.
+
+        Setup: $100k portfolio, $20k existing tech (NVDA), MAX_SECTOR_PCT=40%.
+        Three new tech buys at $10k each (capped by MAX_POSITION_PCT=10%):
+          - Buy 1 (AAPL): projected sector = $30k → pass
+          - Buy 2 (MSFT): projected sector = $40k → at cap (not > 40%) → pass
+          - Buy 3 (GOOGL): projected sector = $50k → 50% > 40% → REJECT
+        Pre-fix: all three would see the stale $20k pre-loop snapshot and pass.
+        """
+        d1 = _make_decision(ticker="AAPL", action="buy", intent_magnitude=Decimal("10000"), playbook_action_id=1)
+        d2 = _make_decision(ticker="MSFT", action="buy", intent_magnitude=Decimal("10000"), playbook_action_id=2)
+        d3 = _make_decision(ticker="GOOGL", action="buy", intent_magnitude=Decimal("10000"), playbook_action_id=3)
+
+        # Existing $20k tech position: 100 * $200 NVDA. Need a per-ticker price
+        # source: get_latest_trade_price values the existing book; get_latest_price
+        # quotes new buys. Set both to $200 so 100 shares = $20k for NVDA and
+        # $10k buys resolve to 50 shares (50 * $200 = $10k trade_value).
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[d1, d2, d3], overrides={
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "NVDA", "shares": Decimal("100")},
+                ]),
+                "get_latest_price": MagicMock(return_value=Decimal("200")),
+                "get_latest_trade_price": MagicMock(return_value=Decimal("200")),
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=True, order_id="ord-1", error=None,
+                    filled_qty=Decimal("50"), filled_avg_price=Decimal("200"),
+                )),
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=True, order_id="ord-1", error=None,
+                    filled_qty=Decimal("50"), filled_avg_price=Decimal("200"),
+                )),
+            })
+            run_trading_session(dry_run=False)
+
+        assert d1.action == "buy", f"buy 1 should pass, got: {d1.reasoning}"
+        assert d2.action == "buy", f"buy 2 should pass, got: {d2.reasoning}"
+        assert d3.action == "invalid", f"buy 3 should be rejected by sector cap, got: {d3.reasoning}"
+        assert "sector" in d3.reasoning.lower()
 
 
 class TestZeroResolvedQty:
@@ -1331,24 +1424,29 @@ class TestDecisionLoggingBranches:
         mocks["insert_decision"].assert_not_called()
 
     def test_insert_decision_exception_recorded_and_loop_continues(self, mock_db, mock_cursor):
+        """T1.5: a decision that fails ALL retries records an error and the
+        loop continues to the next decision. With retry=3, the first three
+        calls fail then the 4th (next decision) succeeds.
+        """
         d1 = _make_decision(ticker="AAA", action="buy")
         d2 = _make_decision(ticker="BBB", action="buy")
         with ExitStack() as stack:
             insert_calls = [0]
 
-            def fail_then_pass(*a, **kw):
+            def fail_3_then_pass(*a, **kw):
                 insert_calls[0] += 1
-                if insert_calls[0] == 1:
+                if insert_calls[0] <= 3:
                     raise RuntimeError("insert broke")
                 return 2
 
             mocks = _happy_path(stack, decisions=[d1, d2], overrides={
-                "insert_decision": MagicMock(side_effect=fail_then_pass),
+                "insert_decision": MagicMock(side_effect=fail_3_then_pass),
             })
+            stack.enter_context(patch("v2.trader.time.sleep"))
             result = run_trading_session(dry_run=True)
-        assert any("Failed to log decision for AAA" in e for e in result.errors)
-        # Second insert attempted after continue
-        assert mocks["insert_decision"].call_count == 2
+        assert any("AAA" in e and "after retries" in e for e in result.errors)
+        # 3 retries on AAA + 1 success on BBB
+        assert mocks["insert_decision"].call_count == 4
 
     def test_logged_qty_falls_back_to_decision_quantity(self, mock_db, mock_cursor):
         """Dry run: result has no filled_qty → logged_qty uses decision.quantity."""
@@ -1402,6 +1500,134 @@ class TestDecisionLoggingBranches:
             result = run_trading_session(dry_run=False)
         assert any("No price available" in e for e in result.errors)
         mocks["insert_decision"].assert_not_called()
+
+
+class TestInsertDecisionRetryAndOrphanFallback:
+    """T1.5: filled order + failed insert_decision must not produce a silent
+    orphan position. Three bounded retries first; final failure with a real
+    fill triggers logs/orphan_decisions.jsonl. No fill → no orphan.
+    """
+
+    def test_retry_succeeds_on_second_attempt(self, mock_db, mock_cursor, tmp_path, monkeypatch):
+        from v2.trader import _insert_decision_with_retry
+        monkeypatch.setattr("v2.trader._ORPHAN_DECISIONS_LOG", tmp_path / "orphans.jsonl")
+        monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
+
+        decision = _make_decision(ticker="AAPL", action="buy")
+        order_result = MagicMock(success=True, filled_qty=Decimal("5"), filled_avg_price=Decimal("150"))
+        attempts = [0]
+
+        def insert(**kwargs):
+            attempts[0] += 1
+            if attempts[0] < 2:
+                raise RuntimeError("transient")
+            return 42
+
+        with patch("v2.trader.insert_decision", side_effect=insert):
+            result = _insert_decision_with_retry(
+                decision=decision, order_id="ord-1", order_result=order_result,
+                payload={"ticker": "AAPL", "action": "buy", "quantity": Decimal("5"),
+                         "decision_date": date(2026, 5, 3), "price": Decimal("150"),
+                         "reasoning": "r", "signals_used": {},
+                         "account_equity": Decimal("100000"), "buying_power": Decimal("50000"),
+                         "playbook_action_id": 1, "is_off_playbook": False, "order_id": "ord-1"},
+            )
+        assert result == 42
+        assert attempts[0] == 2
+        # No orphan file written on success
+        assert not (tmp_path / "orphans.jsonl").exists()
+
+    def test_filled_order_then_persistent_failure_writes_orphan_jsonl(
+        self, mock_db, mock_cursor, tmp_path, monkeypatch,
+    ):
+        from v2.trader import _insert_decision_with_retry
+        orphan_log = tmp_path / "orphans.jsonl"
+        monkeypatch.setattr("v2.trader._ORPHAN_DECISIONS_LOG", orphan_log)
+        monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
+
+        decision = _make_decision(
+            ticker="AAPL", action="buy",
+            signal_refs=[{"type": "news_signal", "id": 99}],
+            playbook_action_id=7, thesis_id=12,
+        )
+        order_result = MagicMock(
+            success=True, filled_qty=Decimal("5"),
+            filled_avg_price=Decimal("150.25"),
+        )
+
+        with patch("v2.trader.insert_decision", side_effect=RuntimeError("db down")):
+            result = _insert_decision_with_retry(
+                decision=decision, order_id="ord-abc", order_result=order_result,
+                payload={"ticker": "AAPL", "action": "buy", "quantity": Decimal("5"),
+                         "decision_date": date(2026, 5, 3), "price": Decimal("150.25"),
+                         "reasoning": "buy thesis hit", "signals_used": {},
+                         "account_equity": Decimal("100000"), "buying_power": Decimal("50000"),
+                         "playbook_action_id": 7, "is_off_playbook": False, "order_id": "ord-abc"},
+            )
+
+        assert result is None
+        assert orphan_log.exists(), "orphan JSONL must be written when fill happened"
+        import json
+        line = orphan_log.read_text().strip()
+        record = json.loads(line)
+        assert record["ticker"] == "AAPL"
+        assert record["action"] == "buy"
+        assert record["order_id"] == "ord-abc"
+        assert record["filled_qty"] == "5"
+        assert record["filled_avg_price"] == "150.25"
+        assert record["playbook_action_id"] == 7
+        assert record["thesis_id"] == 12
+        assert record["signal_refs"] == [{"type": "news_signal", "id": 99}]
+        assert "db down" in record["last_error"]
+
+    def test_unfilled_order_failure_does_not_write_orphan(
+        self, mock_db, mock_cursor, tmp_path, monkeypatch,
+    ):
+        """A decision that wasn't actually executed (no real position) must
+        NOT pollute the orphan log. Operator reconciliation only matters when
+        Alpaca shows shares moved."""
+        from v2.trader import _insert_decision_with_retry
+        orphan_log = tmp_path / "orphans.jsonl"
+        monkeypatch.setattr("v2.trader._ORPHAN_DECISIONS_LOG", orphan_log)
+        monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
+
+        decision = _make_decision(ticker="AAPL", action="hold")
+        # No order_result: decision never went to Alpaca
+        with patch("v2.trader.insert_decision", side_effect=RuntimeError("db down")):
+            result = _insert_decision_with_retry(
+                decision=decision, order_id=None, order_result=None,
+                payload={"ticker": "AAPL", "action": "hold", "quantity": None,
+                         "decision_date": date(2026, 5, 3), "price": Decimal("150"),
+                         "reasoning": "r", "signals_used": {},
+                         "account_equity": Decimal("100000"), "buying_power": Decimal("50000"),
+                         "playbook_action_id": 1, "is_off_playbook": False, "order_id": None},
+            )
+        assert result is None
+        assert not orphan_log.exists()
+
+    def test_zero_fill_does_not_produce_orphan(
+        self, mock_db, mock_cursor, tmp_path, monkeypatch,
+    ):
+        """Order submitted but filled_qty=0 (e.g., canceled before fill) is not
+        an orphan — nothing to reconcile.
+        """
+        from v2.trader import _insert_decision_with_retry
+        orphan_log = tmp_path / "orphans.jsonl"
+        monkeypatch.setattr("v2.trader._ORPHAN_DECISIONS_LOG", orphan_log)
+        monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
+
+        decision = _make_decision(ticker="AAPL", action="buy")
+        order_result = MagicMock(success=True, filled_qty=Decimal("0"), filled_avg_price=None)
+        with patch("v2.trader.insert_decision", side_effect=RuntimeError("db down")):
+            _insert_decision_with_retry(
+                decision=decision, order_id="ord-1", order_result=order_result,
+                payload={"ticker": "AAPL", "action": "buy", "quantity": Decimal("0"),
+                         "decision_date": date(2026, 5, 3), "price": Decimal("150"),
+                         "reasoning": "r", "signals_used": {},
+                         "account_equity": Decimal("100000"), "buying_power": Decimal("50000"),
+                         "playbook_action_id": 1, "is_off_playbook": False, "order_id": "ord-1"},
+            )
+        assert not orphan_log.exists()
 
 
 class TestSignalRefValidation:

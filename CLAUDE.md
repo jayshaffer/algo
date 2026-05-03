@@ -135,7 +135,9 @@ docker compose exec trading python -m v2.learn
 ## Environment Variables
 
 Required in `.env`:
-- `APCA_API_KEY_ID` — Alpaca API key
-- `APCA_API_SECRET_KEY` — Alpaca API secret
+- `ALPACA_API_KEY` — Alpaca API key
+- `ALPACA_SECRET_KEY` — Alpaca API secret
+- `ALPACA_BASE_URL` — Alpaca REST endpoint (`https://api.alpaca.markets` for live, `https://paper-api.alpaca.markets` for paper)
+- `ALPACA_PAPER` — `true` or `false`, must agree with `ALPACA_BASE_URL`. Cross-checked at module load — mismatched values raise immediately to prevent silent paper/prod misrouting.
 - `ANTHROPIC_API_KEY` — Anthropic API key for Claude
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — Database credentials

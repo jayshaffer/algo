@@ -44,39 +44,39 @@ These are reachable on the next strategist or trader run and silently corrupt da
 Real correctness/safety risks but not single-session blockers.
 
 ### T1.1 — `trader.py:369-381` sells don't credit buying_power on local-estimate fallback
-- [ ] Add `elif decision.action == "sell": buying_power += trade_value` in both real and dry-run branches
-- [ ] Test: simulate `get_account_info` raising; run a sell; assert returned `buying_power` increased by `trade_value`
+- [x] Add `elif decision.action == "sell": buying_power += trade_value` in both real and dry-run branches
+- [x] Test: simulate `get_account_info` raising; run a sell; assert returned `buying_power` increased by `trade_value`
 
 ### T1.2 — `trader.py:579-586` sector cap not refreshed mid-loop
-- [ ] After each successful buy fill in `_execute_decisions` (around line 619-622), update `position_values[ticker] = position_values.get(ticker, Decimal(0)) + outcome.trade_value`
-- [ ] Test: feed 3 buys in same sector that individually fit but cumulatively breach `MAX_SECTOR_PCT`; assert the 3rd is rejected
+- [x] After each successful buy fill in `_execute_decisions` (around line 619-622), update `position_values[ticker] = position_values.get(ticker, Decimal(0)) + outcome.trade_value`
+- [x] Test: feed 3 buys in same sector that individually fit but cumulatively breach `MAX_SECTOR_PCT`; assert the 3rd is rejected
 
 ### T1.3 — `agent.py:259-270` ticker normalization missing
-- [ ] Normalize at parse boundary: `ticker=(d.get("ticker") or "").strip().upper()`
-- [ ] Audit `signal_refs` and any other LLM-emitted ticker fields; normalize consistently
-- [ ] Test: feed `aapl ` (lowercase + trailing space) through the parse path; assert downstream sector lookup hits `SECTOR_MAP["AAPL"]`
+- [x] Normalize at parse boundary: `ticker=(d.get("ticker") or "").strip().upper()`
+- [x] Audit `signal_refs` and any other LLM-emitted ticker fields; normalize consistently (added `_norm_ticker` to tools.py and applied to `tool_get_active_theses`, `tool_create_thesis`, `tool_adopt_thesis`, `tool_get_news_signals`, `tool_write_playbook` action items)
+- [x] Test: feed `aapl ` (lowercase + trailing space) through the parse path; assert downstream sector lookup hits `SECTOR_MAP["AAPL"]`
 
 ### T1.4 — `executor.py:51-61` paper-vs-prod silent fallback
-- [ ] Add hard assertion at module load: require explicit `ALPACA_PAPER=true|false` env var
-- [ ] Cross-check `ALPACA_PAPER` against `ALPACA_BASE_URL` — raise on mismatch (e.g. `paper=true` with prod URL)
-- [ ] Update `.env.example`, `.env.paper.example`, and CLAUDE.md to document the new requirement
-- [ ] Test: missing `ALPACA_PAPER` raises at import; mismatched pair raises with clear message
+- [x] Add hard assertion at module load: require explicit `ALPACA_PAPER=true|false` env var (skipped when `ALPACA_API_KEY` unset so test imports/non-trading code paths don't crash)
+- [x] Cross-check `ALPACA_PAPER` against `ALPACA_BASE_URL` — raise on mismatch (e.g. `paper=true` with prod URL)
+- [x] Update `.env`, `.env.example`, `.env.paper`, and CLAUDE.md to document the new requirement; updated `tests/conftest.py::alpaca_env` fixture
+- [x] Test: missing `ALPACA_PAPER` raises (RuntimeError); mismatched pair raises with clear message
 
 ### T1.5 — `trader.py:693-738` `insert_decision` failure orphans filled order
-- [ ] Wrap `insert_decision` in a bounded retry (3 attempts, exponential backoff)
-- [ ] On final failure: append the full decision payload (ticker, action, qty, price, order_id, reasoning, signal_refs) to `logs/orphan_decisions.jsonl`
-- [ ] Log at ERROR with full payload so an operator can manually reconcile
-- [ ] Test: mock `insert_decision` to always raise; assert the JSONL fallback file contains the decision
+- [x] Wrap `insert_decision` in a bounded retry (3 attempts, 0.5s/1s exponential backoff) via `_insert_decision_with_retry`
+- [x] On final failure: append the full decision payload (ticker, action, qty, price, order_id, reasoning, signal_refs) to `logs/orphan_decisions.jsonl` ONLY when order actually filled (not for unfilled/zero-qty cases)
+- [x] Log at ERROR with full payload so an operator can manually reconcile
+- [x] Test: mock `insert_decision` to always raise; assert the JSONL fallback file contains the decision; verify unfilled cases don't pollute the log
 
 ### T1.6 — `tools.py:343-391` `write_playbook` accepts duplicate-side actions for same ticker
-- [ ] Pre-insert validation: reject playbook where any (ticker, action) pair appears more than once
-- [ ] Return a clean tool_result error to the strategist loop so it can retry with deduped actions
-- [ ] Test: feed a playbook with two buys for AAPL; assert validation error before any DB write
+- [x] Pre-insert validation: reject playbook where any (ticker, action) pair appears more than once
+- [x] Return a clean tool_result error to the strategist loop so it can retry with deduped actions
+- [x] Test: feed a playbook with two buys for AAPL; assert validation error before any DB write; case-insensitive ("aapl" + "AAPL" both blocked after normalization)
 
 ### T1.7 — `tools.py:240` `tool_update_thesis` no existence check on add_signal_refs-only path
-- [ ] Top of `tool_update_thesis`: if `not has_field_updates and not add_signal_refs`, return `"Error: no updates provided"`
-- [ ] Then call `get_thesis_by_id(thesis_id)`; if None, return `"Error: thesis ID {id} not found"`
-- [ ] Test: invalid thesis_id with only `add_signal_refs` returns clean error string, not raw psycopg2 error
+- [x] Top of `tool_update_thesis`: if `not has_field_updates and not add_signal_refs`, return `"Error: no updates provided"`
+- [x] Then call `get_thesis_by_id(thesis_id)`; if None, return `"Error: thesis ID {id} not found"`
+- [x] Test: invalid thesis_id with only `add_signal_refs` returns clean error string, not raw psycopg2 error
 
 ### T1.8 — Truthy-check bug repeated in 5 sites (P3.41 not propagated)
 - [ ] `attribution.py:185-186` (`build_attribution_constraints`): replace `if r.get(...) else 0` with `is not None` checks

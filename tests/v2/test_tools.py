@@ -100,8 +100,11 @@ class TestWritePlaybook:
         assert "Error" not in result
         assert "conflict" not in result.lower()
 
-    def test_same_ticker_same_action_allowed(self, mock_db, mock_cursor):
-        """Should allow duplicate buy+buy for same ticker (not conflicting)."""
+    def test_duplicate_ticker_action_pair_rejected(self, mock_db, mock_cursor):
+        """T1.6: two buys for the same ticker were previously accepted, letting
+        the executor evaluate both and risk doubling up against the same idea.
+        Reject at write-time so the strategist deduplicates in its own loop.
+        """
         mock_cursor.fetchone.return_value = {"id": 1}
         result = tool_write_playbook(
             market_outlook="Bullish",
@@ -112,8 +115,50 @@ class TestWritePlaybook:
             watch_list=[],
             risk_notes="",
         )
-        assert "Error" not in result
-        assert "conflict" not in result.lower()
+        assert "Error" in result
+        assert "Duplicate" in result
+        assert "AAPL" in result
+        # Returns clean string (not raw exception) — strategist tool loop reads it
+        # and can retry on the next turn with deduped actions.
+        assert "buy" in result
+
+    def test_duplicate_pair_rejection_is_case_insensitive(self, mock_db, mock_cursor):
+        """T1.3 + T1.6 interact: 'aapl' and 'AAPL' as buys both normalize to AAPL,
+        then dedup catches them.
+        """
+        mock_cursor.fetchone.return_value = {"id": 1}
+        result = tool_write_playbook(
+            market_outlook="Mixed",
+            priority_actions=[
+                {"ticker": "aapl", "action": "buy", "reasoning": "r1", "confidence": "high"},
+                {"ticker": "AAPL", "action": "buy", "reasoning": "r2", "confidence": "high"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Duplicate" in result
+
+    def test_normalizes_action_tickers_before_persist(self, mock_db, mock_cursor):
+        """T1.3: lowercase / whitespace tickers in playbook actions are
+        canonicalized before validation and DB write. Without this, the
+        playbook stores 'aapl ' and the executor's downstream
+        SECTOR_MAP / position lookups all miss.
+        """
+        mock_cursor.fetchone.return_value = {"id": 1}
+        actions = [
+            {"ticker": "aapl ", "action": "buy", "reasoning": "r", "confidence": "high"},
+            {"ticker": " msft", "action": "sell", "reasoning": "r", "confidence": "medium"},
+        ]
+        tool_write_playbook(
+            market_outlook="Mixed",
+            priority_actions=actions,
+            watch_list=[],
+            risk_notes="",
+        )
+        # In-place normalization: the dicts the strategist passed are mutated
+        # and that is what reaches replace_playbook_actions_atomic.
+        assert actions[0]["ticker"] == "AAPL"
+        assert actions[1]["ticker"] == "MSFT"
 
     def test_actions_inserted_with_priority(self, mock_db, mock_cursor):
         """Each action should be inserted with its priority (1-indexed)."""
@@ -340,10 +385,11 @@ class TestAdoptThesisSignalRefs:
 
 class TestUpdateThesisSignalRefs:
 
+    @patch("v2.tools.get_thesis_by_id", return_value={"id": 5})
     @patch("v2.tools.insert_thesis_signals")
     @patch("v2.tools.validate_signal_refs")
     @patch("v2.tools.update_thesis")
-    def test_adds_signal_refs(self, mock_update, mock_validate, mock_insert_links):
+    def test_adds_signal_refs(self, mock_update, mock_validate, mock_insert_links, _mock_get):
         from v2.tools import tool_update_thesis
         mock_update.return_value = True
         mock_validate.return_value = [{"type": "news_signal", "id": 200}]
@@ -356,14 +402,67 @@ class TestUpdateThesisSignalRefs:
         # signal-only updates are still a successful no-op result.
         assert "Updated" in result or "5" in result
 
+    @patch("v2.tools.get_thesis_by_id", return_value={"id": 5})
     @patch("v2.tools.insert_thesis_signals")
     @patch("v2.tools.update_thesis")
-    def test_no_signal_refs_keeps_existing_behaviour(self, mock_update, mock_insert_links):
+    def test_no_signal_refs_keeps_existing_behaviour(self, mock_update, mock_insert_links, _mock_get):
         from v2.tools import tool_update_thesis
         mock_update.return_value = True
         result = tool_update_thesis(thesis_id=5, thesis="New text")
         assert "Updated" in result
         mock_insert_links.assert_not_called()
+
+
+class TestUpdateThesisExistenceGuard:
+    """T1.7: invalid thesis_id on the add_signal_refs-only path used to crash
+    inside _persist_signal_refs with a raw psycopg2 FK error. Tool callers in
+    the strategist loop need a clean string error so they can self-correct.
+    """
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.update_thesis")
+    @patch("v2.tools.get_thesis_by_id", return_value=None)
+    def test_invalid_thesis_id_with_signal_refs_only_returns_clean_error(
+        self, mock_get, mock_update, mock_insert,
+    ):
+        from v2.tools import tool_update_thesis
+        result = tool_update_thesis(
+            thesis_id=999,
+            add_signal_refs=[{"type": "news_signal", "id": 1}],
+        )
+        assert "Error" in result
+        assert "999" in result
+        assert "not found" in result.lower()
+        mock_update.assert_not_called()
+        mock_insert.assert_not_called()
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.update_thesis")
+    @patch("v2.tools.get_thesis_by_id", return_value=None)
+    def test_invalid_thesis_id_with_field_update_returns_clean_error(
+        self, mock_get, mock_update, mock_insert,
+    ):
+        from v2.tools import tool_update_thesis
+        result = tool_update_thesis(thesis_id=999, thesis="New")
+        assert "Error" in result
+        assert "999" in result
+        assert "not found" in result.lower()
+        mock_update.assert_not_called()
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.update_thesis")
+    @patch("v2.tools.get_thesis_by_id")
+    def test_no_updates_at_all_returns_clean_error(
+        self, mock_get, mock_update, mock_insert,
+    ):
+        from v2.tools import tool_update_thesis
+        result = tool_update_thesis(thesis_id=5)
+        assert "Error" in result
+        assert "no updates" in result.lower()
+        # Existence check is short-circuited; no DB roundtrip needed
+        mock_get.assert_not_called()
+        mock_update.assert_not_called()
+        mock_insert.assert_not_called()
 
 
 class TestToolAdoptThesis:
