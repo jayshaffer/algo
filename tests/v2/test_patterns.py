@@ -353,3 +353,93 @@ class TestGeneratePatternReport:
 
         assert report.startswith("Pattern Analysis Report (30 days)")
         assert "=" * 50 in report
+
+    def test_zero_alpha_renders_as_percent_not_na(self, mock_db):
+        """T1.8: a category with avg_outcome_7d=Decimal(0) used to render as
+        'N/A' because the truthy check `if x else None` collapsed Decimal(0)
+        to None at the dataclass boundary, then the report's truthy check
+        rendered it as N/A. Both checks must use `is not None` so a
+        genuine 0% measurement stays distinguishable from missing data.
+        """
+        zero_signal_cat = [
+            {
+                "category": "news_signal:flat",
+                "total_signals": 10,
+                "avg_outcome_7d": Decimal("0"),
+                "avg_outcome_30d": Decimal("0"),
+                "win_rate_7d": Decimal("50.0"),
+                "win_rate_30d": Decimal("50.0"),
+            },
+        ]
+        zero_sentiment = [
+            {
+                "sentiment": "neutral",
+                "total_decisions": 10,
+                "avg_outcome_7d": Decimal("0"),
+                "avg_outcome_30d": Decimal("0"),
+                "win_rate_7d": Decimal("50.0"),
+            },
+        ]
+        zero_ticker = [
+            {
+                "ticker": "FLAT",
+                "total_decisions": 5,
+                "buys": 3,
+                "sells": 2,
+                "avg_outcome_7d": Decimal("0"),
+                "avg_outcome_30d": Decimal("0"),
+                "total_pnl_7d": Decimal("0"),
+            },
+        ]
+        zero_conf = [
+            {
+                "confidence": "medium",
+                "total_decisions": 8,
+                "avg_outcome_7d": Decimal("0"),
+                "win_rate_7d": Decimal("50.0"),
+            },
+        ]
+        mock_db.fetchall.side_effect = [
+            zero_signal_cat,  # analyze_signal_categories
+            zero_sentiment,   # analyze_sentiment_performance
+            zero_ticker,      # analyze_ticker_performance
+            zero_conf,        # analyze_confidence_correlation
+            [],               # get_best_performing_signals
+            [],               # get_worst_performing_signals
+        ]
+        report = generate_pattern_report(days=90)
+
+        # Each section must show "+0.00%", not "N/A".
+        assert "news_signal:flat: +0.00%" in report, (
+            f"Zero-alpha signal category rendered as N/A.\n{report}"
+        )
+        assert "neutral: +0.00%" in report, (
+            f"Zero-alpha sentiment rendered as N/A.\n{report}"
+        )
+        assert "FLAT: +0.00%" in report, (
+            f"Zero-pnl ticker rendered as N/A.\n{report}"
+        )
+        assert "medium: +0.00%" in report, (
+            f"Zero-alpha confidence bucket rendered as N/A.\n{report}"
+        )
+
+    def test_none_alpha_still_renders_as_na(self, mock_db):
+        """Defense check: rows with None (no data yet) must still render as
+        'N/A' — the fix preserves the None vs 0.0 distinction.
+        """
+        none_signal_cat = [
+            {
+                "category": "news_signal:nodata",
+                "total_signals": 0,
+                "avg_outcome_7d": None,
+                "avg_outcome_30d": None,
+                "win_rate_7d": None,
+                "win_rate_30d": None,
+            },
+        ]
+        mock_db.fetchall.side_effect = [
+            none_signal_cat,
+            [], [], [], [], [],
+        ]
+        report = generate_pattern_report(days=90)
+        assert "news_signal:nodata: N/A" in report

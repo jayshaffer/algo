@@ -30,6 +30,26 @@ def trading_day_offset(start: date, trading_days: int) -> date:
     return current
 
 
+def trading_day_cutoff(today: date, trading_days: int) -> date:
+    """Return the date `trading_days` trading days before `today`.
+
+    The eligibility filter for backfill compares a decision's date against
+    this cutoff: `date <= cutoff` means the N-trading-day outcome window
+    has closed. Using calendar days (`today - timedelta(days=N)`) lets a
+    Friday decision become "eligible" on the next Friday — only 5 trading
+    days have passed for a 7d window, so the price hasn't actually moved
+    7 sessions yet. Holidays still aren't tracked (matches
+    `trading_day_offset`).
+    """
+    current = today
+    days_counted = 0
+    while days_counted < trading_days:
+        current -= timedelta(days=1)
+        if current.weekday() < 5:  # Mon-Fri
+            days_counted += 1
+    return current
+
+
 def get_data_client() -> StockHistoricalDataClient:
     """Create Alpaca data client from environment variables."""
     api_key = os.environ.get("ALPACA_API_KEY")
@@ -72,7 +92,7 @@ def get_price_on_date(client: StockHistoricalDataClient, ticker: str, target_dat
 def get_decisions_needing_backfill(days_threshold: int) -> list:
     """Get decisions that need outcome backfill."""
     outcome_col = f"outcome_{days_threshold}d"
-    cutoff_date = date.today() - timedelta(days=days_threshold)
+    cutoff_date = trading_day_cutoff(date.today(), days_threshold)
 
     with get_cursor() as cur:
         cur.execute(f"""
@@ -140,8 +160,22 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
 
     client = get_data_client()
 
-    # Pre-fetch SPY entry prices for benchmark computation
-    spy_prices: dict[date, Decimal] = {}
+    # Pre-fetch SPY prices for benchmark computation. Two caches keyed by
+    # date — entries (decision_date) and exits (exit_date) often overlap
+    # across decisions, so each call should hit the cache for the second
+    # ticker that shares the same date. T1.10: only cache successful
+    # fetches; caching None on a transient failure poisons every later
+    # decision sharing that date.
+    spy_entry_prices: dict[date, Decimal] = {}
+    spy_exit_prices: dict[date, Decimal] = {}
+
+    def _spy_price(target_date: date, cache: dict[date, Decimal]) -> Decimal | None:
+        if target_date in cache:
+            return cache[target_date]
+        price = get_price_on_date(client, BENCHMARK_TICKER, target_date)
+        if price is not None:
+            cache[target_date] = price
+        return price
 
     for decision in decisions:
         decision_id = decision["id"]
@@ -167,10 +201,8 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
         # the sell beat the market. Without this, every sell during a bull
         # market gets a wrongly-negative alpha.
         benchmark = None
-        if decision_date not in spy_prices:
-            spy_prices[decision_date] = get_price_on_date(client, BENCHMARK_TICKER, decision_date)
-        spy_entry = spy_prices.get(decision_date)
-        spy_exit = get_price_on_date(client, BENCHMARK_TICKER, exit_date)
+        spy_entry = _spy_price(decision_date, spy_entry_prices)
+        spy_exit = _spy_price(exit_date, spy_exit_prices)
         if spy_entry and spy_exit and spy_entry > 0 and spy_exit > 0:
             benchmark = ((spy_exit - spy_entry) / spy_entry) * 100
             if action == "sell":

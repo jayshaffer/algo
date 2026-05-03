@@ -242,6 +242,51 @@ class TestToolGetSessionSummary:
         result = tool_get_session_summary()
         assert "No recent decisions" in result
 
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_orphan_fk_guards_present_in_sql(
+        self, mock_decisions, mock_attr, mock_db, mock_cursor,
+    ):
+        """T1.11: SQL must LEFT JOIN theses and filter all three orphan
+        signal types so reflection doesn't read broken FK rows as evidence.
+        """
+        from v2.strategy import tool_get_session_summary
+        mock_decisions.return_value = [make_decision_row()]
+        mock_attr.return_value = "Attribution data here"
+        mock_cursor.fetchall.return_value = []
+
+        tool_get_session_summary()
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "LEFT JOIN theses" in sql, "Must LEFT JOIN theses for thesis orphan filter"
+        assert "ds.signal_type != 'news_signal' OR ns.id IS NOT NULL" in sql
+        assert "ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL" in sql
+        assert "ds.signal_type != 'thesis' OR t.id IS NOT NULL" in sql
+
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_orphan_thesis_excluded_from_signal_labels(
+        self, mock_decisions, mock_attr, mock_db, mock_cursor,
+    ):
+        """If the SQL filtering works, an orphan thesis row simply doesn't
+        come back from the join; the rendered signal label list for that
+        decision is empty.
+        """
+        from v2.strategy import tool_get_session_summary
+        mock_decisions.return_value = [make_decision_row()]
+        mock_attr.return_value = "Attribution data here"
+        # Simulate the DB filtering out the orphan: only the valid news_signal
+        # comes back. The orphan thesis row is suppressed by the WHERE clause.
+        mock_cursor.fetchall.return_value = [
+            {"decision_id": 1, "signal_type": "news_signal", "signal_category": "earnings"},
+        ]
+
+        result = tool_get_session_summary()
+        assert "news_signal:earnings" in result
+        assert "thesis:" not in result, (
+            "Orphan thesis label leaked through to reflection text"
+        )
+
 
 class TestStrategyToolDefinitions:
     def test_all_tools_defined(self):

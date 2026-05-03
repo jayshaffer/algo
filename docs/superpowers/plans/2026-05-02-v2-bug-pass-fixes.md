@@ -79,29 +79,29 @@ Real correctness/safety risks but not single-session blockers.
 - [x] Test: invalid thesis_id with only `add_signal_refs` returns clean error string, not raw psycopg2 error
 
 ### T1.8 — Truthy-check bug repeated in 5 sites (P3.41 not propagated)
-- [ ] `attribution.py:185-186` (`build_attribution_constraints`): replace `if r.get(...) else 0` with `is not None` checks
-- [ ] `patterns.py:93-97` (`analyze_signal_categories` builder)
-- [ ] `patterns.py:131-134` (`analyze_sentiment_buckets` builder)
-- [ ] `patterns.py:165-167` (`analyze_ticker_performance` builder)
-- [ ] `patterns.py:204-205` (`analyze_confidence_buckets` builder)
-- [ ] `attribution.py:149,156` (`_format_attribution_summary` — coincidentally correct output, but fix for consistency)
-- [ ] Test: insert a category with `avg_outcome_7d=Decimal(0)`; assert it appears in the underperforming bucket and pattern report (not "N/A")
+- [x] `attribution.py:185-186` (`build_attribution_constraints`): replaced `if r.get(...) else 0` with `is not None` checks
+- [x] `patterns.py` `analyze_signal_categories` builder
+- [x] `patterns.py` `analyze_sentiment_performance` builder
+- [x] `patterns.py` `analyze_ticker_performance` builder
+- [x] `patterns.py` `analyze_confidence_correlation` builder
+- [x] `attribution.py` `_format_attribution_summary` (already partially fixed by P3.41 for bucket gating; remaining truthy formatting checks fixed for consistency)
+- [x] Also fixed `generate_pattern_report` rendering — without this fix the dataclass-level `0.0` still renders "N/A" because the report uses the same truthy pattern
+- [x] Test: signal_categories/sentiment/ticker/confidence rows with `Decimal(0)` render as "+0.00%" not "N/A" in `generate_pattern_report`; None still renders as "N/A"
 
 ### T1.9 — `backfill.py:75,152` calendar vs trading-day cutoff mismatch
-- [ ] Replace `today - timedelta(days=days_threshold)` with a trading-day-aware cutoff: scan back `days_threshold` trading days from today and use that date
-- [ ] Reuse the existing `trading_day_offset` logic in reverse, or build a small `trading_day_cutoff(today, n)` helper
-- [ ] Test: a decision made 7 calendar days ago on a Friday is NOT eligible; one made 10 calendar days ago (= 7 trading days) IS eligible
+- [x] Added `trading_day_cutoff(today, n)` helper (mirror of `trading_day_offset` in reverse)
+- [x] `get_decisions_needing_backfill` now uses trading-day cutoff
+- [x] Test: from a Friday, calendar-day cutoff would be 7 days back (the prior Friday); trading-day cutoff lands on the Wednesday before — verified
 
 ### T1.10 — `backfill.py:170-172` SPY cache stores None on transient failure
-- [ ] Only cache successful fetches: `if result is not None: spy_prices[date] = result`
-- [ ] Add parallel `spy_exit_prices` cache keyed by `exit_date` (perf — eliminates redundant fetches)
-- [ ] Test: mock first SPY fetch to return None; assert second call to same date refetches (cache miss); third with success caches
+- [x] Cache only successful fetches via `_spy_price` helper that gates on `price is not None`
+- [x] Added parallel `spy_exit_prices` cache keyed by `exit_date` to eliminate redundant exit-side fetches
+- [x] Tests: transient failure does NOT poison cache (refetch on second access); successful fetches cached for subsequent decisions sharing the same date
 
-### T1.11 — `strategy.py:246-253` `tool_get_session_summary` missing orphan guards
-- [ ] Add `LEFT JOIN theses t ON ds.signal_type = 'thesis' AND ds.signal_id = t.id`
-- [ ] Add WHERE clauses: `(ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)`, same for macro_signal and thesis
-- [ ] Mirror the pattern from `attribution.py:70-72`
-- [ ] Test: insert a `decision_signals` row pointing to a deleted thesis; assert `tool_get_session_summary` excludes it
+### T1.11 — `strategy.py` `tool_get_session_summary` missing orphan guards
+- [x] Added `LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id`
+- [x] Added WHERE filters for all three signal types (news/macro/thesis), mirroring `attribution.py`
+- [x] Test: SQL contains the three orphan-FK guards; orphan thesis labels do not leak through to reflection text
 
 ---
 

@@ -243,13 +243,22 @@ def tool_get_session_summary(days: int = 30) -> str:
         signal_map: dict[int, list[str]] = {}
         if decision_ids:
             with get_cursor() as cur:
+                # T1.11: orphan-FK guards mirror attribution.py / patterns.py.
+                # Without them, a `decision_signals` row pointing to a deleted
+                # thesis (or news/macro signal) renders here as
+                # "thesis:" with empty category — the strategist sees a broken
+                # row and reads it as real signal evidence.
                 cur.execute("""
                     SELECT ds.decision_id, ds.signal_type,
                            COALESCE(ns.category, ms.category, '') AS signal_category
                     FROM decision_signals ds
                     LEFT JOIN news_signals ns ON ds.signal_type = 'news_signal' AND ns.id = ds.signal_id
                     LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
+                    LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
                     WHERE ds.decision_id = ANY(%s)
+                      AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
+                      AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
+                      AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
                 """, (decision_ids,))
                 for row in cur.fetchall():
                     did = row["decision_id"]
