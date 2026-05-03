@@ -188,7 +188,9 @@ class TestAnalyzeTickerPerformance:
         assert "macro_signals" not in sql.lower()
 
     def test_returns_ticker_objects(self, mock_db):
-        """Returns TickerPerformance dataclasses."""
+        """Returns TickerPerformance dataclasses. T2.5: SUM column renamed
+        to `sum_pct_returns_7d` so the misleading `total_pnl_7d` label is
+        retired."""
         mock_db.fetchall.return_value = [
             {
                 "ticker": "AAPL",
@@ -197,7 +199,7 @@ class TestAnalyzeTickerPerformance:
                 "sells": 4,
                 "avg_outcome_7d": Decimal("1.8"),
                 "avg_outcome_30d": Decimal("4.5"),
-                "total_pnl_7d": Decimal("21.6"),
+                "sum_pct_returns_7d": Decimal("21.6"),
             },
             {
                 "ticker": "TSLA",
@@ -206,7 +208,7 @@ class TestAnalyzeTickerPerformance:
                 "sells": 3,
                 "avg_outcome_7d": None,
                 "avg_outcome_30d": None,
-                "total_pnl_7d": None,
+                "sum_pct_returns_7d": None,
             },
         ]
         results = analyze_ticker_performance(days=90)
@@ -219,11 +221,24 @@ class TestAnalyzeTickerPerformance:
         assert results[0].buys == 8
         assert results[0].sells == 4
         assert results[0].avg_outcome_7d == 1.8
-        assert results[0].total_pnl_7d == 21.6
+        assert results[0].sum_pct_returns_7d == 21.6
 
         assert results[1].ticker == "TSLA"
         assert results[1].avg_outcome_7d is None
-        assert results[1].total_pnl_7d is None
+        assert results[1].sum_pct_returns_7d is None
+
+    def test_orders_by_avg_outcome_not_sum(self, mock_db):
+        """T2.5: ORDER BY must be `avg_outcome_7d`, not `total_pnl_7d`/SUM —
+        averaging percentage returns is a defensible per-ticker metric;
+        summing percentages across heterogeneous notional sizes is not.
+        """
+        mock_db.fetchall.return_value = []
+        analyze_ticker_performance(days=90)
+        sql = mock_db.execute.call_args[0][0]
+        assert "ORDER BY avg_outcome_7d" in sql
+        assert "ORDER BY total_pnl_7d" not in sql
+        # The SUM column must be aliased to the new name.
+        assert "as sum_pct_returns_7d" in sql
 
 
 class TestAnalyzeConfidenceCorrelation:
@@ -388,7 +403,7 @@ class TestGeneratePatternReport:
                 "sells": 2,
                 "avg_outcome_7d": Decimal("0"),
                 "avg_outcome_30d": Decimal("0"),
-                "total_pnl_7d": Decimal("0"),
+                "sum_pct_returns_7d": Decimal("0"),
             },
         ]
         zero_conf = [

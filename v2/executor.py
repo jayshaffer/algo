@@ -46,6 +46,12 @@ class OrderResult:
     filled_qty: Decimal | None
     filled_avg_price: Decimal | None
     error: str | None
+    # T2.8: when wait_for_fill cancels a timed-out order and the post-cancel
+    # re-fetch fails, we don't actually know whether a partial fill landed.
+    # Setting `unknown_partial_fill=True` lets the trader treat this as a
+    # "needs reconciliation" case rather than ambiguously False (= clean
+    # failure) or True (= clean fill).
+    unknown_partial_fill: bool = False
 
 
 def _validate_alpaca_env() -> None:
@@ -197,7 +203,21 @@ def sync_positions_from_alpaca() -> int:
 
 
 def sync_orders_from_alpaca() -> int:
-    """Sync open orders from Alpaca to local database."""
+    """Sync the local `open_orders` table to Alpaca's set of OPEN orders.
+
+    This table is a transient mirror of "what is currently working at the
+    broker," not an audit log. `client.get_orders()` returns only open
+    orders by default, so any local row whose order_id no longer appears
+    in Alpaca's list is treated as resolved (filled, cancelled, expired,
+    or rejected) and deleted here. Filled orders have already produced a
+    `decisions` row when they came back through `wait_for_fill`, so this
+    delete does not lose audit information — the historical record lives
+    in `decisions`.
+
+    T2.11: previously the docstring left the intent ambiguous, which
+    invited future readers to add audit-log expectations to a function
+    that's structurally a mirror.
+    """
     client = get_trading_client()
     orders = client.get_orders()
 
@@ -353,15 +373,44 @@ def wait_for_fill(
     timeout_seconds: float = 30,
     poll_interval: float = 0.5,
 ) -> OrderResult:
-    """Poll Alpaca until order is filled, cancelled, or timeout."""
+    """Poll Alpaca until order is filled, cancelled, or timeout.
+
+    T2.8: post-cancel re-fetch failures used to silently degrade to a
+    clean "Timeout" failure, hiding the possibility of a partial fill
+    that we couldn't read. The result now carries `unknown_partial_fill`
+    when the post-cancel state is genuinely unknown.
+
+    T2.9: get_order_by_id is a network call; transient hiccups must not
+    abort the polling loop. Each polling iteration retries the fetch a
+    small number of times before treating the error as fatal.
+    """
     import time
 
     client = get_trading_client()
     terminal_failures = {"canceled", "cancelled", "expired", "rejected", "suspended"}
     start = time.monotonic()
+    consecutive_fetch_errors = 0
+    fetch_retry_limit = 3
 
     while time.monotonic() - start < timeout_seconds:
-        order = client.get_order_by_id(order_id)
+        try:
+            order = client.get_order_by_id(order_id)
+        except Exception as fetch_err:
+            consecutive_fetch_errors += 1
+            if consecutive_fetch_errors >= fetch_retry_limit:
+                logger.error(
+                    "Order %s fetch failed %d times in a row: %s",
+                    order_id, consecutive_fetch_errors, fetch_err,
+                )
+                # Fall through to the cancel + re-fetch dance below.
+                break
+            logger.warning(
+                "Order %s fetch transient error (%d/%d): %s — retrying",
+                order_id, consecutive_fetch_errors, fetch_retry_limit, fetch_err,
+            )
+            time.sleep(poll_interval)
+            continue
+        consecutive_fetch_errors = 0
         status = order.status.value if hasattr(order.status, "value") else str(order.status)
 
         if status == "filled":
@@ -413,16 +462,36 @@ def wait_for_fill(
                 ),
                 error=f"Timeout with partial fill ({filled_qty} shares); order cancelled",
             )
+        # T2.8: re-fetch succeeded and confirmed zero fill. This is an
+        # actual clean failure.
+        return OrderResult(
+            success=False,
+            order_id=order_id,
+            filled_qty=Decimal("0"),
+            filled_avg_price=None,
+            error=f"Timeout waiting for fill after {timeout_seconds}s (cancel attempted)",
+        )
     except Exception as fetch_err:
-        logger.error("Order %s post-cancel re-fetch failed: %s", order_id, fetch_err)
-
-    return OrderResult(
-        success=False,
-        order_id=order_id,
-        filled_qty=None,
-        filled_avg_price=None,
-        error=f"Timeout waiting for fill after {timeout_seconds}s (cancel attempted)",
-    )
+        # T2.8: post-cancel re-fetch failed. We do NOT know whether a
+        # partial fill landed; mark the result so the trader can avoid
+        # treating this as a clean miss (and skip orphan logging that
+        # would assume nothing filled).
+        logger.error(
+            "Order %s post-cancel re-fetch failed: %s — partial fill unknown",
+            order_id, fetch_err,
+        )
+        return OrderResult(
+            success=False,
+            order_id=order_id,
+            filled_qty=None,
+            filled_avg_price=None,
+            error=(
+                f"Timeout waiting for fill after {timeout_seconds}s "
+                f"(cancel attempted; post-cancel re-fetch failed: {fetch_err}) "
+                "— partial-fill state unknown"
+            ),
+            unknown_partial_fill=True,
+        )
 
 
 def get_latest_price(

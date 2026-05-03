@@ -215,8 +215,12 @@ def tool_adopt_thesis(
 
     note = _persist_signal_refs(thesis_id, signal_refs)
     logger.info(f"Adopted position {ticker} as thesis ID {thesis_id}")
+    # T2.12: distinct return prefix so `count_actions` can separate adoption
+    # (an existing position pulled under thesis management) from outright
+    # creation. Conflating them inflated the "created" counter on sessions
+    # whose work was mostly housekeeping for orphans.
     return (
-        f"Created thesis ID {thesis_id} for {ticker} "
+        f"Adopted thesis ID {thesis_id} for {ticker} "
         f"(adopted existing position, {direction}, {confidence} confidence).{note}"
     )
 

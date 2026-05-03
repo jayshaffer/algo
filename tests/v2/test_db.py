@@ -269,6 +269,26 @@ class TestDecisions:
         result = get_recent_decisions(days=30)
         assert result == []
 
+    def test_get_recent_decisions_uses_inclusive_boundary(self, mock_db, mock_cursor):
+        """T2.13: lookback must use `>=` so a decision logged exactly
+        `days` calendar days ago is included. The previous strict `>`
+        silently shrank the window by one day.
+        """
+        mock_cursor.fetchall.return_value = []
+        from v2.database.trading_db import get_recent_decisions
+        get_recent_decisions(days=7)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "date >= CURRENT_DATE - INTERVAL '1 day' * %s" in sql
+
+    def test_get_account_snapshots_uses_inclusive_boundary(self, mock_db, mock_cursor):
+        """T2.13: same fix for the snapshot lookback so window math is
+        consistent across the codebase."""
+        mock_cursor.fetchall.return_value = []
+        from v2.database.trading_db import get_account_snapshots
+        get_account_snapshots(days=30)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "date >= CURRENT_DATE - INTERVAL '1 day' * %s" in sql
+
     def test_update_decision_outcome_7d(self, mock_db, mock_cursor):
         from v2.database.trading_db import update_decision_outcome
         update_decision_outcome(1, outcome_7d=Decimal("2.5"))

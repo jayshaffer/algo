@@ -132,10 +132,16 @@ def insert_account_snapshot(snapshot_date, cash, portfolio_value, buying_power, 
 
 
 def get_account_snapshots(days=30) -> list:
+    """Return snapshots within the last `days` calendar days, inclusive
+    of the boundary day. T2.13: `>` excluded the boundary day, which
+    silently shrank every lookback window by one day. The semantic now
+    matches `get_recent_decisions` and the rest of the codebase: a
+    `days=30` window covers exactly 30 calendar days back through today.
+    """
     with get_cursor() as cur:
         cur.execute("""
             SELECT * FROM account_snapshots
-            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date DESC
         """, (days,))
         return cur.fetchall()
@@ -181,10 +187,15 @@ def check_decision_exists(decision_date, ticker: str, action: str) -> int | None
 
 
 def get_recent_decisions(days=30) -> list:
+    """Return decisions within the last `days` calendar days, inclusive
+    of the boundary day. T2.13: `>` excluded a decision logged exactly
+    `days` days ago — formation reads this with `days=7` and was
+    silently missing decisions from the same day a week earlier.
+    """
     with get_cursor() as cur:
         cur.execute("""
             SELECT * FROM decisions
-            WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
             ORDER BY date DESC
         """, (days,))
         return cur.fetchall()

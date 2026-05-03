@@ -483,7 +483,10 @@ class TestToolAdoptThesis:
             invalidation="iPhone sales decline 3 consecutive quarters",
             confidence="medium",
         )
-        assert "Created thesis ID 42" in result
+        # T2.12: adopt now uses a distinct "Adopted" prefix so count_actions
+        # can separate adoption from creation. Older test asserted
+        # "Created thesis ID 42"; the new contract is "Adopted thesis ID 42".
+        assert "Adopted thesis ID 42" in result
         assert "adopted" in result.lower() or "AAPL" in result
         mock_insert.assert_called_once()
         # Verify source is "adoption" not "claude_ideation"

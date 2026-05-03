@@ -1,6 +1,6 @@
 """Tests for v2/strategy.py — strategy reflection stage (Stage 4)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +9,32 @@ from tests.v2.conftest import (
     make_strategy_state_row,
 )
 from v2.strategy import run_strategy_reflection
+
+
+class TestUtcDateHelper:
+    """T2.7: `_utc_date` normalises tz-aware and naive datetimes to a
+    UTC-frame date so throttle/tenure comparisons stay consistent.
+    """
+
+    def test_naive_datetime_treated_as_utc(self):
+        from datetime import datetime as dt_cls
+
+        from v2.strategy import _utc_date
+        # 23:30 — naive datetime; we treat the value itself as UTC.
+        naive = dt_cls(2026, 5, 1, 23, 30, 0)
+        assert _utc_date(naive) == naive.date()
+
+    def test_aware_datetime_converted_to_utc(self):
+        from datetime import datetime as dt_cls
+        from datetime import timedelta, timezone as tz
+
+        from v2.strategy import _utc_date
+        # 23:30 ET = 03:30 UTC the next day. Old code's `.date()` on the
+        # aware ET datetime keeps ET's date — but for consistent age math
+        # we want the UTC date (May 2, not May 1).
+        et = tz(timedelta(hours=-4))  # EDT
+        aware = dt_cls(2026, 5, 1, 23, 30, 0, tzinfo=et)
+        assert _utc_date(aware) == date(2026, 5, 2)
 
 
 class TestStrategyReflectionResult:
@@ -78,8 +104,9 @@ class TestToolUpdateStrategyIdentity:
 class TestToolProposeRule:
     @patch("v2.strategy.insert_strategy_rule")
     def test_creates_rule(self, mock_insert):
-        from v2.strategy import tool_propose_rule
+        from v2.strategy import reset_session, tool_propose_rule
         mock_insert.return_value = 5
+        reset_session()
 
         result = tool_propose_rule(
             rule_text="Favor earnings signals",
@@ -91,6 +118,82 @@ class TestToolProposeRule:
         mock_insert.assert_called_once()
         assert "5" in result
         assert "Created rule" in result
+
+    @patch("v2.strategy.insert_strategy_rule")
+    def test_proposal_session_cap(self, mock_insert):
+        """T2.6: per-session proposal cap mirrors the retirement cap so the
+        rule table can only grow at a measured rate from either side.
+        """
+        from v2.strategy import (
+            MAX_PROPOSALS_PER_SESSION,
+            reset_session,
+            tool_propose_rule,
+        )
+        mock_insert.side_effect = list(range(100, 200))
+        reset_session()
+
+        for i in range(MAX_PROPOSALS_PER_SESSION):
+            r = tool_propose_rule(
+                rule_text=f"rule {i}",
+                category="news_signal:earnings",
+                direction="preference",
+                confidence=0.5,
+                supporting_evidence="evidence",
+            )
+            assert "Created rule" in r
+
+        # Next call hits the cap; no further DB writes.
+        capped = tool_propose_rule(
+            rule_text="extra",
+            category="news_signal:earnings",
+            direction="preference",
+            confidence=0.5,
+            supporting_evidence="evidence",
+        )
+        assert "limit reached" in capped
+        assert mock_insert.call_count == MAX_PROPOSALS_PER_SESSION
+
+    @patch("v2.strategy.insert_strategy_rule")
+    def test_proposals_isolated_across_threads(self, mock_insert):
+        """T2.6: per-session proposal counter must not leak between
+        concurrent invocations. Mirrors the retirement-counter test."""
+        import threading
+
+        from v2.strategy import (
+            MAX_PROPOSALS_PER_SESSION,
+            reset_session,
+            tool_propose_rule,
+        )
+
+        mock_insert.side_effect = list(range(1, 200))
+
+        results: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def worker(label: str):
+            reset_session()
+            barrier.wait()
+            local: list[str] = []
+            for i in range(MAX_PROPOSALS_PER_SESSION + 1):
+                r = tool_propose_rule(
+                    rule_text=f"{label}-{i}",
+                    category="news_signal:earnings",
+                    direction="preference",
+                    confidence=0.5,
+                    supporting_evidence="ev",
+                )
+                local.append(r)
+            results.extend(local)
+
+        t1 = threading.Thread(target=worker, args=("t1",))
+        t2 = threading.Thread(target=worker, args=("t2",))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        created = [r for r in results if "Created rule" in r]
+        capped = [r for r in results if "limit reached" in r]
+        assert len(created) == MAX_PROPOSALS_PER_SESSION * 2
+        assert len(capped) == 2
 
 
 class TestToolRetireRule:

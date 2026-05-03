@@ -8,7 +8,7 @@ rules, and write session memos.
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 
 from .attribution import get_attribution_summary
 from .claude_client import get_claude_client, run_agentic_loop
@@ -29,11 +29,32 @@ logger = logging.getLogger(__name__)
 MIN_RULE_TENURE_DAYS = 5
 MAX_RETIREMENTS_PER_SESSION = 2
 
-# Per-session retirement counter. Stored in a ContextVar so concurrent
-# strategy reflections (e.g. paper + prod sharing one process) don't
-# stomp each other's state. Each context (thread / asyncio task / explicit
+
+def _utc_date(dt: datetime) -> date:
+    """Convert a possibly-naive datetime to a UTC date.
+
+    T2.7: Postgres TIMESTAMPTZ columns come back tz-aware; older TIMESTAMP
+    columns come back naive. Comparing `.date()` on a naive datetime
+    against `date.today()` (local) drifts by up to a day around midnight
+    UTC. Treating naive values as UTC matches how the writers interpret
+    them and gives a single consistent reference frame.
+    """
+    if dt.tzinfo is None:
+        return dt.date()
+    return dt.astimezone(UTC).date()
+# T2.6: previously the strategist could propose unlimited new rules per
+# session while retirement was capped at 2. That asymmetry let runaway
+# proposal loops bloat the rule table during a single session and
+# dwarf the slow retirement rate. Mirror the retirement cap so the rule
+# population can only churn at a measured rate from either side.
+MAX_PROPOSALS_PER_SESSION = 3
+
+# Per-session counters. Stored in ContextVars so concurrent strategy
+# reflections (e.g. paper + prod sharing one process) don't stomp each
+# other's state. Each context (thread / asyncio task / explicit
 # `Context.run`) gets its own list.
 _session_retirements: ContextVar[list[int]] = ContextVar("_session_retirements")
+_session_proposals: ContextVar[list[int]] = ContextVar("_session_proposals")
 
 
 def _get_session_retirements() -> list[int]:
@@ -45,9 +66,19 @@ def _get_session_retirements() -> list[int]:
         return fresh
 
 
+def _get_session_proposals() -> list[int]:
+    try:
+        return _session_proposals.get()
+    except LookupError:
+        fresh: list[int] = []
+        _session_proposals.set(fresh)
+        return fresh
+
+
 def reset_session():
     """Reset per-session counters. Called at start of strategy reflection."""
     _session_retirements.set([])
+    _session_proposals.set([])
 
 
 @dataclass
@@ -109,7 +140,7 @@ Before proposing a new rule:
 
 Rules have a minimum tenure of 5 days. You cannot retire a rule until it has been active for at least 5 sessions. This prevents oscillation (propose → retire → re-propose). If a new rule seems wrong, write a memo instead and revisit next session.
 
-You can retire at most 2 rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
+You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
 
 
 # --- Write Tool Handlers ---
@@ -131,10 +162,18 @@ def tool_update_strategy_identity(
     # immediately after a successful write the freshly-stamped state is 0 days
     # old, so the next call would also be rejected). The instruction misled
     # the LLM into wasting turns. Reject with a memo-only path instead.
-    if current and (date.today() - current["created_at"].date()).days < 3:
+    #
+    # T2.7: created_at can be tz-aware or naive depending on the upstream
+    # writer; subtracting `.date()` from `date.today()` (a tz-naive local
+    # date) compares two different reference frames around midnight UTC.
+    # Normalise both sides to UTC dates so a write at 23:30 ET (= 03:30
+    # UTC the next day) doesn't read as "yesterday" elsewhere in the
+    # session.
+    today_utc = datetime.now(UTC).date()
+    if current and (today_utc - _utc_date(current["created_at"])).days < 3:
         return (
             f"Warning: Identity was updated within the last 3 days "
-            f"(v{current['version']} on {current['created_at'].date()}) — "
+            f"(v{current['version']} on {_utc_date(current['created_at'])}) — "
             f"this update has been rejected. Identity updates are gated to "
             f"one per 3 days to prevent oscillation. Write a memo to record "
             f"the change you wanted; if the case still holds in 3 days, "
@@ -163,6 +202,13 @@ def tool_propose_rule(
     supporting_evidence: str,
 ) -> str:
     """Propose a new strategy rule."""
+    # T2.6: same per-session cap pattern as retirements.
+    proposals = _get_session_proposals()
+    if len(proposals) >= MAX_PROPOSALS_PER_SESSION:
+        return (
+            f"Proposal limit reached ({MAX_PROPOSALS_PER_SESSION} per session). "
+            f"Note any further rule ideas in your memo for next session."
+        )
     logger.info(f"Proposing rule: {rule_text[:50]}...")
     rule_id = insert_strategy_rule(
         rule_text=rule_text,
@@ -171,6 +217,7 @@ def tool_propose_rule(
         confidence=confidence,
         supporting_evidence=supporting_evidence,
     )
+    proposals.append(rule_id)
     return f"Created rule ID {rule_id}: {rule_text}"
 
 
@@ -184,8 +231,10 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
     if rule["status"] != "active":
         return f"Error: Rule ID {rule_id} is already {rule['status']}"
 
-    # Tenure guard: rules must be active for minimum days
-    age_days = (date.today() - rule["created_at"].date()).days
+    # Tenure guard: rules must be active for minimum days. T2.7: same
+    # UTC-normalisation as the identity throttle so the boundary is
+    # consistent regardless of when the rule was inserted.
+    age_days = (datetime.now(UTC).date() - _utc_date(rule["created_at"])).days
     if age_days < MIN_RULE_TENURE_DAYS:
         remaining = MIN_RULE_TENURE_DAYS - age_days
         return (
