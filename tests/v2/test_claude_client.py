@@ -263,6 +263,44 @@ class TestMaxTokensRecovery:
         assert result.stop_reason == "max_tokens"
         assert client.messages.stream.call_count == 2  # one retry only
 
+    def test_recovery_preserves_role_alternation(self):
+        """Bug regression: the prior turn already ends with a `user` message
+        (initial prompt on turn 1, tool_results on later turns). Appending the
+        concision-nudge user message without a synthetic assistant in between
+        produces user→user adjacency, which the Anthropic API rejects.
+        Verify no two consecutive messages share the same role after recovery.
+        """
+        truncated = _make_response(
+            content=[_text_block("Long preamble that ran out of...")],
+            stop_reason="max_tokens",
+        )
+        recovered = _make_response(
+            content=[_text_block("Done concisely.")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([truncated, recovered])
+
+        result = run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="hi",
+            tools=[],
+            tool_handlers={},
+            max_turns=5,
+        )
+
+        # Inspect the messages list as it stood when the second API call was
+        # made — that's `result.messages` minus the final assistant turn that
+        # was appended after the second response returned.
+        # Easier check: the messages list has no two adjacent same-role
+        # entries at any point.
+        roles = [m["role"] for m in result.messages]
+        for i in range(1, len(roles)):
+            assert roles[i] != roles[i - 1], (
+                f"adjacent same-role messages at index {i - 1}/{i}: {roles}"
+            )
+
     def test_recovery_preserves_prior_tool_results(self):
         """Recovery must not erase tool_results from earlier successful turns —
         only the most recent (truncated) assistant response."""
@@ -373,6 +411,49 @@ class TestContextLengthRecovery:
 
         # One initial attempt + one recovery attempt — no third try.
         assert client.messages.stream.call_count == 2
+
+    def test_aggressive_prune_preserves_role_alternation(self):
+        """Bug regression: `_aggressive_prune` returns
+        `[messages[0], *messages[-4:]]`. Under the loop's normal alternating
+        invariant the slice is safe, but if any upstream perturbation puts a
+        `user` at the head of the tail (matching the prepended initial
+        prompt), the API rejects same-role adjacency. Verify the prune
+        always emits an alternating sequence regardless of input shape."""
+        from v2.claude_client import _aggressive_prune
+
+        # Pathological input: tail starts with `user`, matching messages[0].
+        bad_input = [
+            {"role": "user", "content": "init"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u2"},
+            # Extra user tail that would collide with messages[0]:
+            {"role": "user", "content": "u3"},
+            {"role": "assistant", "content": "a3"},
+            {"role": "user", "content": "u4"},
+            {"role": "assistant", "content": "a4"},
+        ]
+        out = _aggressive_prune(bad_input)
+        roles = [m["role"] for m in out]
+        for i in range(1, len(roles)):
+            assert roles[i] != roles[i - 1], (
+                f"adjacent same-role messages at index {i - 1}/{i}: {roles}"
+            )
+
+        # Also verify the canonical alternating shape passes through unchanged.
+        good_input = [
+            {"role": "user", "content": "init"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a3"},
+            {"role": "user", "content": "u3"},
+        ]
+        out = _aggressive_prune(good_input)
+        roles = [m["role"] for m in out]
+        assert roles == ["user", "assistant", "user", "assistant", "user"]
 
     def test_unrelated_bad_request_error_is_not_retried(self):
         """A 400 that isn't a context-length issue (e.g. invalid tool

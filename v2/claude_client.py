@@ -143,7 +143,19 @@ def _aggressive_prune(messages: list[dict]) -> list[dict]:
     # First message is the initial user prompt; keep last 4 messages so we
     # preserve a complete (assistant tool_use → user tool_result) exchange
     # plus its reply pair.
-    return [messages[0], *messages[-4:]]
+    pruned = [messages[0], *messages[-4:]]
+    # Defense in depth: slicing can collapse `user → user` adjacency between
+    # the prepended initial prompt and the start of the tail (the tail starts
+    # with `user` whenever the loop's invariant gets perturbed by an
+    # upstream bug). The Anthropic API rejects same-role adjacency, so drop
+    # the offending head-of-tail entry to restore alternation. Walking the
+    # whole list keeps us safe against any future shape drift too.
+    deduped: list[dict] = [pruned[0]]
+    for msg in pruned[1:]:
+        if msg["role"] == deduped[-1]["role"]:
+            continue
+        deduped.append(msg)
+    return deduped
 
 
 def _truncate_old_tool_results(messages: list[dict]) -> list[dict]:
@@ -271,6 +283,17 @@ def run_agentic_loop(
                 "retrying with concision instruction",
                 turn + 1,
             )
+            # Bug fix: the prior turn already ended with a `user` message
+            # (initial prompt on turn 1, tool_results on later turns).
+            # Appending a second `user` here would put two user messages
+            # back-to-back — the Anthropic API rejects that. Insert a
+            # synthetic assistant stand-in so role alternation holds. We
+            # can't reuse `response.content` because it contains the
+            # truncated/partial tool_use blocks we're explicitly discarding.
+            messages.append({
+                "role": "assistant",
+                "content": "[response truncated by output limit — discarded]",
+            })
             messages.append({
                 "role": "user",
                 "content": (

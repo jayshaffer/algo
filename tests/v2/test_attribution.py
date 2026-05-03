@@ -185,16 +185,33 @@ class TestComputeSignalAttribution:
             win_rate_7d=Decimal("0.60"),
             win_rate_30d=Decimal("0.55"),
         )
-        # Second call: fed — None outcome_30d/win_rate_30d should become Decimal(0)
+        # Second call: fed — None outcome_30d/win_rate_30d MUST pass through
+        # so the storage layer preserves "no 30d-eligible decisions yet".
+        # Coercing to Decimal(0) here would re-introduce the NULL-as-loss bias
+        # the SQL fix removed.
         mock_upsert.assert_any_call(
             category="macro_signal:fed",
             sample_size=5,
             sample_size_30d=0,
             avg_outcome_7d=Decimal("-1.0"),
-            avg_outcome_30d=Decimal(0),
+            avg_outcome_30d=None,
             win_rate_7d=Decimal("0.40"),
-            win_rate_30d=Decimal(0),
+            win_rate_30d=None,
         )
+
+    def test_win_rate_30d_sql_guards_null_alpha(self, mock_db, mock_cursor):
+        """Regression: NULL alpha_30d must propagate through AVG, not be
+        counted as a loss. Verify the CASE explicitly handles IS NULL."""
+        mock_cursor.fetchall.return_value = []
+
+        with patch("v2.attribution.upsert_signal_attribution"):
+            from v2.attribution import compute_signal_attribution
+            compute_signal_attribution()
+
+        sql = mock_cursor.execute.call_args[0][0]
+        # The fix: WHEN alpha_30d IS NULL THEN NULL must precede the
+        # > 0 / ELSE 0.0 branches.
+        assert "WHEN alpha_30d IS NULL THEN NULL" in sql
 
     def test_returns_results_list(self, mock_db, mock_cursor):
         """Verify compute_signal_attribution returns a list of dicts."""

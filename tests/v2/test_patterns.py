@@ -75,6 +75,16 @@ class TestAnalyzeSignalCategories:
         assert "JOIN theses" in sql
         assert "t.id IS NOT NULL" in sql
 
+    def test_win_rate_30d_sql_guards_null(self, mock_db):
+        """Regression: NULL outcome_30d/benchmark_30d (decision too young)
+        must propagate through AVG, not collapse to a loss via NULL > 0 → ELSE.
+        """
+        mock_db.fetchall.return_value = []
+        analyze_signal_categories(days=90)
+        sql = mock_db.execute.call_args[0][0]
+        # The fix: explicit IS NULL guard on 30d operands.
+        assert "d.outcome_30d IS NULL OR d.benchmark_30d IS NULL THEN NULL" in sql
+
     def test_returns_signal_performance_objects(self, mock_db):
         """Returns list of SignalPerformance dataclasses."""
         mock_db.fetchall.return_value = [
