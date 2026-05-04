@@ -898,3 +898,59 @@ def render_activity_page(*, base_url: str, memos: list[dict]) -> str:
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/activity/",
     )
+
+
+def render_learning_hub(*, attribution_top3: list[dict],
+                        losers_top3: list[dict], retired_rules_count: int,
+                        base_url: str) -> str:
+    base = base_url.rstrip("/")
+
+    if attribution_top3:
+        rows = "".join(
+            f'<li><strong>{_esc(a.get("category") or "")}</strong> · '
+            f'{a.get("sample_size") or 0} trades · '
+            f'{_fmt_signed_pct(a.get("avg_outcome_30d"))} avg</li>'
+            for a in attribution_top3[:3]
+        )
+        working_body = f'<ul>{rows}</ul>'
+    else:
+        working_body = '<p>Not enough samples yet.</p>'
+
+    if losers_top3:
+        rows = "".join(
+            f'<li><span class="ticker">{_esc(l.get("ticker") or "")}</span> '
+            f'<span class="loss">{_fmt_signed_pct(l.get("outcome_30d_pct"))}</span></li>'
+            for l in losers_top3[:3]
+        )
+        didnt_body = (
+            f'<ul>{rows}</ul>'
+            f'<p>{retired_rules_count} retired rule(s) recently.</p>'
+        )
+    else:
+        didnt_body = (
+            '<p>No closed losers in window.</p>'
+            f'<p>{retired_rules_count} retired rule(s) recently.</p>'
+        )
+
+    content = (
+        '<section class="hero"><h1>What this thing has learned</h1></section>'
+        '<section class="section"><div class="card-grid">'
+        f'<a class="card" href="/attribution/">'
+        f'<div class="lbl">What\'s working</div>'
+        f'<h3>Top signals</h3>{working_body}'
+        f'<p class="more">See all →</p></a>'
+        f'<a class="card" href="/mistakes/">'
+        f'<div class="lbl">What didn\'t</div>'
+        f'<h3>Recent losers</h3>{didnt_body}'
+        f'<p class="more">See all →</p></a>'
+        '</div></section>'
+    )
+
+    return _render_page_shell(
+        title="Learning",
+        description="What this AI agent has learned: signals that work, mistakes it's made.",
+        active_nav="learning",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/learning/",
+    )

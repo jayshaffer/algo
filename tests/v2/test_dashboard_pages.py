@@ -660,3 +660,65 @@ class TestRenderActivityPage:
     def test_memos_empty_state(self):
         html = render_activity_page(**self._data(memos=[]))
         assert "No memos yet" in html
+
+
+from v2.dashboard_pages import render_learning_hub
+
+
+class TestRenderLearningHub:
+    def _data(self, **overrides):
+        defaults = dict(
+            attribution_top3=[
+                {"category": "earnings_beat", "sample_size": 18,
+                 "avg_outcome_30d": Decimal("3.2")},
+                {"category": "macro_pivot", "sample_size": 12,
+                 "avg_outcome_30d": Decimal("1.8")},
+                {"category": "sector_rotation", "sample_size": 9,
+                 "avg_outcome_30d": Decimal("1.1")},
+            ],
+            losers_top3=[
+                {"ticker": "PLTR", "outcome_30d_pct": Decimal("-8.4")},
+                {"ticker": "TSLA", "outcome_30d_pct": Decimal("-5.1")},
+                {"ticker": "F", "outcome_30d_pct": Decimal("-3.2")},
+            ],
+            retired_rules_count=4,
+            base_url="https://example.com",
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_learning_active(self):
+        html = render_learning_hub(**self._data())
+        assert 'data-page="learning"' in html
+        assert 'class="active" href="/learning/"' in html
+
+    def test_renders_two_cards(self):
+        html = render_learning_hub(**self._data())
+        assert "What's working" in html
+        assert "What didn't" in html
+        assert 'href="/attribution/"' in html
+        assert 'href="/mistakes/"' in html
+
+    def test_attribution_top3_listed(self):
+        html = render_learning_hub(**self._data())
+        assert "earnings_beat" in html
+        assert "macro_pivot" in html
+        assert "sector_rotation" in html
+
+    def test_losers_top3_listed(self):
+        html = render_learning_hub(**self._data())
+        assert "PLTR" in html
+        assert "TSLA" in html
+
+    def test_retired_rules_count_shown(self):
+        html = render_learning_hub(**self._data())
+        assert "4" in html
+        assert "retired" in html.lower()
+
+    def test_attribution_empty_shows_placeholder(self):
+        html = render_learning_hub(**self._data(attribution_top3=[]))
+        assert "Not enough samples yet" in html
+
+    def test_losers_empty_shows_placeholder(self):
+        html = render_learning_hub(**self._data(losers_top3=[]))
+        assert "No closed losers in window" in html
