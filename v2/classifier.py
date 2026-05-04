@@ -62,7 +62,10 @@ def _validate_ticker(raw: str) -> str | None:
     blocking them would cost real signal."""
     if not isinstance(raw, str):
         return None
-    cleaned = raw.strip().lstrip("$").upper()
+    # Strip trailing sentence punctuation copied from prose (e.g. "AAPL.", "NVDA,").
+    # Class-share tickers like "BRK.A" are unaffected because their dot is followed
+    # by a letter, not by end-of-string.
+    cleaned = raw.strip().lstrip("$").rstrip(".,;:!?").upper()
     if not cleaned:
         return None
     if not _TICKER_RE.match(cleaned):

@@ -343,6 +343,46 @@ class TestTickerValidation:
             )
             assert result.ticker_signals[0].ticker == t
 
+    def test_strips_trailing_sentence_punctuation(self):
+        """Haiku occasionally emits tickers with trailing punctuation
+        copied from sentence boundaries (e.g. 'AAPL.', 'NVDA,'). Strip
+        these before validating so we don't lose real signals."""
+        for raw, expected in [
+            ("AAPL.", "AAPL"),
+            ("NVDA,", "NVDA"),
+            ("MSFT;", "MSFT"),
+            ("TSLA:", "TSLA"),
+            ("AMD!", "AMD"),
+            ("GOOG?", "GOOG"),
+        ]:
+            entry = {
+                "type": "ticker_specific",
+                "tickers": [raw],
+                "category": "earnings",
+                "sentiment": "neutral",
+                "confidence": "low",
+            }
+            result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+            assert len(result.ticker_signals) == 1, (
+                f"Expected trailing punctuation to be stripped from {raw!r}"
+            )
+            assert result.ticker_signals[0].ticker == expected
+
+    def test_preserves_class_share_dot_when_stripping_trailing_punct(self):
+        """The trailing-punctuation strip must not damage class-share
+        tickers like BRK.B / BRK.A — the embedded dot is followed by a
+        letter, not whitespace/punctuation, so rstrip leaves it alone."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["BRK.A.", "BRK.B,"],
+            "category": "earnings",
+            "sentiment": "neutral",
+            "confidence": "low",
+        }
+        result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+        tickers = sorted(s.ticker for s in result.ticker_signals)
+        assert tickers == ["BRK.A", "BRK.B"]
+
 
 # ---------------------------------------------------------------------------
 # classify_news tests
