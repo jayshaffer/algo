@@ -642,6 +642,17 @@ def _execute_decisions(
             new_val = position_values.get(decision.ticker, Decimal(0)) - outcome.trade_value
             position_values[decision.ticker] = new_val if new_val > 0 else Decimal(0)
 
+        # Mirror the position_values refresh for the share-count dict.
+        # Without this, a second sell of the same ticker reads the
+        # pre-loop holding and the thesis-lifecycle close check at
+        # _execute_decision_order computes the wrong `remaining`.
+        held = positions.get(decision.ticker, Decimal(0))
+        if decision.action == "buy":
+            positions[decision.ticker] = held + decision.quantity
+        elif decision.action == "sell":
+            new_held = held - decision.quantity
+            positions[decision.ticker] = new_held if new_held > Decimal(0) else Decimal(0)
+
         buying_power, portfolio_value = _refresh_buying_power(
             decision, buying_power, portfolio_value, outcome.trade_value, dry_run,
         )

@@ -390,6 +390,78 @@ class TestRunTradingSession:
 
         mock_close.assert_called_once_with(thesis_id=5, status="invalidated", reason="Conditions changed")
 
+    def test_positions_dict_refreshed_after_each_fill(self, mock_db, mock_cursor):
+        """Two sequential sells of the same ticker must see the post-fill
+        share count, not the pre-loop snapshot. The thesis-lifecycle close
+        test depends on `held_before - decision.quantity == 0` after a full
+        sell across multiple decisions.
+        """
+        from decimal import Decimal
+        from unittest.mock import patch, MagicMock
+        from datetime import date
+        from v2.trader import _execute_decisions, ExecutorDecision
+        from v2.agent import AgentResponse
+
+        decisions = [
+            ExecutorDecision(
+                ticker="AAPL", action="sell",
+                reasoning="first half", thesis_id=42,
+                intent_type="exit_partial_pct", intent_magnitude=Decimal("50"),
+                playbook_action_id=None, is_off_playbook=False,
+                confidence="high",
+            ),
+            ExecutorDecision(
+                ticker="AAPL", action="sell",
+                reasoning="second half", thesis_id=42,
+                intent_type="exit_full", intent_magnitude=None,
+                playbook_action_id=None, is_off_playbook=False,
+                confidence="high",
+            ),
+        ]
+        response = AgentResponse(
+            decisions=decisions, market_summary="", risk_assessment="",
+            thesis_invalidations=[],
+        )
+        positions = {"AAPL": Decimal("100")}
+        account_info = {"buying_power": Decimal("10000"), "portfolio_value": Decimal("50000")}
+        errors: list[str] = []
+
+        closed_thesis_ids: list[int] = []
+
+        def fake_close_thesis(*, thesis_id, status, reason):
+            closed_thesis_ids.append(thesis_id)
+
+        with patch("v2.trader.get_latest_price", return_value=Decimal("150")), \
+             patch("v2.trader._precheck_sell_against_alpaca", return_value=True), \
+             patch("v2.trader.execute_market_order") as mock_order, \
+             patch("v2.trader.wait_for_fill") as mock_wait, \
+             patch("v2.trader._refresh_buying_power",
+                   return_value=(Decimal("10000"), Decimal("50000"))), \
+             patch("v2.trader.close_thesis", side_effect=fake_close_thesis), \
+             patch("v2.trader.check_decision_exists", return_value=None):
+            order_result = MagicMock(success=True, order_id="O1",
+                                     filled_qty=Decimal("50"),
+                                     filled_avg_price=Decimal("150"))
+            mock_order.return_value = order_result
+            mock_wait.return_value = order_result
+
+            _execute_decisions(
+                response, positions, account_info, MagicMock(),
+                False, errors, date(2026, 5, 3),
+            )
+
+        # After both sells, the second sell's thesis-lifecycle must compute
+        # remaining=0 and close thesis 42. With the bug present, the second
+        # sell sees positions["AAPL"]=100 (stale), remaining=50, and the
+        # thesis stays open.
+        assert 42 in closed_thesis_ids, (
+            "Thesis 42 should close after two 50-share sells from a 100-share "
+            "position. positions dict was not refreshed between decisions."
+        )
+        assert positions["AAPL"] == Decimal("0"), (
+            f"positions['AAPL'] should be 0 after both sells, got {positions['AAPL']}"
+        )
+
 
 class TestSessionDateConsistency:
     """T2.10: session_date must be captured once at the top of
