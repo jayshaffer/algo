@@ -557,3 +557,54 @@ class TestRenderHomepage:
         )
         assert ("x" * 150 + "…") in html
         assert ("x" * 151) not in html
+
+
+from v2.dashboard_pages import render_performance_page
+
+
+class TestRenderPerformancePage:
+    def _data(self, **overrides):
+        defaults = dict(
+            summary={
+                "portfolio_value": Decimal("104231.00"),
+                "daily_pnl_pct": Decimal("0.62"),
+                "total_return_pct": Decimal("4.2"),
+                "vs_spy_pct": Decimal("2.1"),
+            },
+            performance={
+                "max_drawdown_pct": -5.2,
+                "win_rate_pct": 60.0,
+                "avg_days_held": 4.0,
+                "best_day_pct": 2.0,
+                "worst_day_pct": -3.0,
+            },
+            base_url="https://example.com",
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_performance_active(self):
+        html = render_performance_page(**self._data())
+        assert 'data-page="performance"' in html
+        assert 'class="active" href="/performance/"' in html
+
+    def test_renders_stat_strip(self):
+        html = render_performance_page(**self._data())
+        assert "$104,231.00" in html
+        assert "+0.62%" in html
+        assert "+2.1" in html
+
+    def test_renders_chart_canvases(self):
+        html = render_performance_page(**self._data())
+        assert 'id="equity-chart"' in html
+        assert 'id="benchmark-chart"' in html
+
+    def test_renders_stats_panel(self):
+        html = render_performance_page(**self._data())
+        assert "Max drawdown" in html
+        assert "Win rate" in html
+        assert "60.0" in html
+
+    def test_loads_chart_js(self):
+        html = render_performance_page(**self._data())
+        assert "chart.js" in html.lower() or "Chart.js" in html

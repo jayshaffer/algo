@@ -765,3 +765,69 @@ def render_homepage(*, summary: dict, theses: list[dict],
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/",
     )
+
+
+_CHART_JS_CDN = (
+    '<script src="https://cdn.jsdelivr.net/npm/'
+    'chart.js@4.4.7/dist/chart.umd.min.js"></script>'
+)
+
+
+def _stat(lbl: str, val: str, cls: str = "") -> str:
+    return (
+        f'<div class="stat"><div class="lbl">{_esc(lbl)}</div>'
+        f'<div class="val {cls}">{val}</div></div>'
+    )
+
+
+def render_performance_page(*, summary: dict, performance: dict,
+                            base_url: str) -> str:
+    base = base_url.rstrip("/")
+    portfolio = _fmt_money(summary.get("portfolio_value"))
+    daily = _fmt_signed_pct(summary.get("daily_pnl_pct"))
+    total = _fmt_signed_pct(summary.get("total_return_pct"))
+    vs_spy = _fmt_signed_pct(summary.get("vs_spy_pct"))
+
+    stat_strip = (
+        '<div class="stat-row">'
+        + _stat("Portfolio", portfolio)
+        + _stat("Today", daily)
+        + _stat("All time", total)
+        + _stat("vs S&P", vs_spy)
+        + '</div>'
+    )
+
+    p = performance or {}
+    stats_panel = (
+        '<section class="section"><div class="head"><h2>Stats</h2></div>'
+        '<div class="stat-row">'
+        + _stat("Max drawdown", f"{p.get('max_drawdown_pct', 0):+.2f}%")
+        + _stat("Win rate", f"{p.get('win_rate_pct', 0):.1f}%")
+        + _stat("Avg days held", f"{p.get('avg_days_held', 0):.1f}")
+        + _stat("Best day", f"{p.get('best_day_pct', 0):+.2f}%")
+        + _stat("Worst day", f"{p.get('worst_day_pct', 0):+.2f}%")
+        + '</div></section>'
+    )
+
+    charts = (
+        '<section class="section"><div class="head"><h2>Equity curve</h2></div>'
+        '<div class="chart-wrap"><canvas id="equity-chart"></canvas></div>'
+        '<p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>'
+        '</section>'
+        '<section class="section"><div class="head"><h2>Performance vs S&amp;P 500</h2></div>'
+        '<div class="chart-wrap"><canvas id="benchmark-chart"></canvas></div>'
+        '<p class="empty-state" id="benchmark-empty" style="display:none;">No benchmark data yet</p>'
+        '</section>'
+    )
+
+    content = stat_strip + charts + stats_panel
+
+    return _render_page_shell(
+        title="Performance",
+        description=f"Equity curve and benchmark comparison. Portfolio: {portfolio}.",
+        active_nav="performance",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/performance/",
+        head_extra=_CHART_JS_CDN,
+    )
