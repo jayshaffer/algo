@@ -8,7 +8,10 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Independent of the daily session. Self-skips on NYSE holidays.
 # Posts a forward-looking take based on active theses + latest memo.
 # Idempotent on retries via posted_tweet_exists(today, "premarket", platform).
-30 5 * * 1-5 cd /home/jay/dev/algo && (task premarket ; task docker:stop:session)
+30 5 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.premarket
+
+# Paper trading session (12:30 PM MST / 2:30 PM ET, Mon-Fri)
+30 12 * * 1-5 cd /home/jay/dev/algo/ && task paper:session
 
 # Daily session (1 PM MST / 3 PM ET, Mon-Fri)
 # Stage 0: backfill outcomes + compute attribution + build constraints
@@ -22,7 +25,7 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 #          legacy single recap. Off by default — flip ALGO_ENABLE_TRADE_POSTS
 #          to "1" in .env once paper smoke-test confirms behavior.
 # Stage 6: dashboard publish
-0 13 * * 1-5 cd /home/jay/dev/algo && (task session ; task docker:stop:session)
+0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
-0 5 * * 0 cd /home/jay/dev/algo && (task learn -- --days 60 ; task docker:stop:session)
+0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
