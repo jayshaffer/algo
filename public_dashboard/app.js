@@ -28,20 +28,12 @@ function pnlClass(n) {
   return Number(n) >= 0 ? "gain" : "loss";
 }
 
-function truncate(s, max) {
-  if (!s) return "—";
-  return s.length > max ? s.slice(0, max) + "..." : s;
-}
-
 function shortOrderId(id) {
   if (!id) return "—";
   return id.length > 12 ? id.slice(0, 8) + "..." : id;
 }
 
 function computeTWR(snapshots) {
-  // Time-weighted return: chains daily sub-period returns, excluding deposit effects.
-  // Each sub-period: return = V_end / (V_start + deposit) where deposit is new cash in.
-  // Returns array of cumulative % returns aligned to each snapshot.
   if (!snapshots || snapshots.length === 0) return [];
 
   var returns = [0];
@@ -64,99 +56,36 @@ function computeTWR(snapshots) {
   return returns;
 }
 
-// === Data Fetching ===
-
 async function fetchJSON(file) {
-  var resp = await fetch("data/" + file);
+  var resp = await fetch("/data/" + file);
   if (!resp.ok) return null;
   return resp.json();
 }
 
-async function fetchAllData() {
-  var [summary, snapshots, positions, decisions, theses, benchmark, mistakes, attribution] = await Promise.all([
-    fetchJSON("summary.json"),
-    fetchJSON("snapshots.json"),
-    fetchJSON("positions.json"),
-    fetchJSON("decisions.json"),
-    fetchJSON("theses.json"),
-    fetchJSON("benchmark.json"),
-    fetchJSON("mistakes.json"),
-    fetchJSON("attribution.json"),
-  ]);
-  return { summary: summary, snapshots: snapshots, positions: positions,
-           decisions: decisions, theses: theses, benchmark: benchmark,
-           mistakes: mistakes, attribution: attribution };
+// === Hamburger toggle (all pages) ===
+function setupHamburger() {
+  var btn = document.querySelector(".site-nav .hamburger");
+  var links = document.querySelector(".site-nav .links");
+  if (!btn || !links) return;
+  btn.addEventListener("click", function () {
+    links.classList.toggle("open");
+  });
 }
 
-// === Renderers ===
-
-function renderSummary(s, snapshots, benchmark) {
-  if (!s) return;
-
-  document.getElementById("last-updated").textContent =
-    s.last_updated ? "Last updated " + s.last_updated : "";
-
-  document.getElementById("portfolio-value").textContent = formatCurrency(s.portfolio_value);
-
-  var dailyEl = document.getElementById("daily-pnl");
-  if (s.daily_pnl != null) {
-    dailyEl.textContent = formatCurrency(s.daily_pnl) + " (" + formatPct(s.daily_pnl_pct) + ")";
-    dailyEl.className = "card-value " + pnlClass(s.daily_pnl);
-  }
-
-  var totalEl = document.getElementById("total-return");
-  if (s.total_pnl != null) {
-    totalEl.textContent = formatCurrency(s.total_pnl) + " (" + formatPct(s.total_pnl_pct) + ")";
-    totalEl.className = "card-value " + pnlClass(s.total_pnl);
-  }
-
-  document.getElementById("positions-count").textContent =
-    s.positions_count != null ? s.positions_count : "—";
-
-  document.getElementById("cash-value").textContent = formatCurrency(s.cash);
-
-  // vs S&P: TWR portfolio return minus SPY return
-  var vsSp = document.getElementById("vs-sp");
-  if (snapshots && snapshots.length > 1 && benchmark && benchmark.length > 0) {
-    var twrReturns = computeTWR(snapshots);
-    var portfolioReturn = twrReturns[twrReturns.length - 1];
-
-    var spyMap = {};
-    benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
-    var spyStart = null;
-    for (var i = 0; i < snapshots.length; i++) {
-      if (spyMap[snapshots[i].date] != null) { spyStart = spyMap[snapshots[i].date]; break; }
-    }
-    var spyEnd = null;
-    for (var j = snapshots.length - 1; j >= 0; j--) {
-      if (spyMap[snapshots[j].date] != null) { spyEnd = spyMap[snapshots[j].date]; break; }
-    }
-
-    if (spyStart && spyEnd) {
-      var spyReturn = ((spyEnd - spyStart) / spyStart) * 100;
-      var alpha = portfolioReturn - spyReturn;
-      vsSp.textContent = formatPct(alpha);
-      vsSp.className = "card-value " + pnlClass(alpha);
-    }
-  }
-}
+// === Equity / benchmark charts (Performance page) ===
 
 function renderEquityCurve(snapshots, benchmark) {
   var canvas = document.getElementById("equity-chart");
   var emptyMsg = document.getElementById("chart-empty");
+  if (!canvas) return;
 
   if (!snapshots || snapshots.length === 0) {
     canvas.style.display = "none";
-    emptyMsg.style.display = "block";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
   var labels = snapshots.map(function (s) { return s.date; });
-
-  // Use twr_value (deposit-neutral, compounded growth starting at the first
-  // snapshot's portfolio_value) so the line stays on the same dollar axis as
-  // SPY without cliffs on deposit days. Fall back to portfolio_value if the
-  // backend didn't populate twr_value.
   var portfolioValues = snapshots.map(function (s) {
     return s.twr_value != null ? s.twr_value : s.portfolio_value;
   });
@@ -164,8 +93,8 @@ function renderEquityCurve(snapshots, benchmark) {
   var datasets = [{
     label: "Portfolio",
     data: portfolioValues,
-    borderColor: "#00d4aa",
-    backgroundColor: "rgba(0, 212, 170, 0.08)",
+    borderColor: "#58a6ff",
+    backgroundColor: "rgba(88, 166, 255, 0.08)",
     fill: true,
     tension: 0.3,
     pointRadius: 0,
@@ -173,13 +102,11 @@ function renderEquityCurve(snapshots, benchmark) {
     borderWidth: 2,
   }];
 
-  // Add SPY benchmark if available, normalized to portfolio's starting value
   if (benchmark && benchmark.length > 0) {
     var spyMap = {};
     benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
 
     var spyBase = spyMap[labels[0]];
-
     if (spyBase) {
       var baseValue = snapshots[0].portfolio_value;
       var spyNormalized = labels.map(function (date) {
@@ -191,7 +118,7 @@ function renderEquityCurve(snapshots, benchmark) {
       datasets.push({
         label: "S&P 500",
         data: spyNormalized,
-        borderColor: "#5a6a7a",
+        borderColor: "#8b949e",
         borderDash: [6, 3],
         backgroundColor: "transparent",
         fill: false,
@@ -205,14 +132,11 @@ function renderEquityCurve(snapshots, benchmark) {
 
   new Chart(canvas, {
     type: "line",
-    data: {
-      labels: labels,
-      datasets: datasets,
-    },
+    data: { labels: labels, datasets: datasets },
     options: {
       responsive: true,
       plugins: {
-        legend: { display: datasets.length > 1, labels: { color: "#8892a4" } },
+        legend: { display: datasets.length > 1, labels: { color: "#8b949e" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
@@ -223,15 +147,15 @@ function renderEquityCurve(snapshots, benchmark) {
       },
       scales: {
         x: {
-          ticks: { color: "#8892a4", maxTicksLimit: 8 },
-          grid: { color: "rgba(30, 58, 95, 0.4)" },
+          ticks: { color: "#8b949e", maxTicksLimit: 8 },
+          grid: { color: "rgba(48, 54, 61, 0.5)" },
         },
         y: {
           ticks: {
-            color: "#8892a4",
+            color: "#8b949e",
             callback: function (v) { return formatCurrency(v); },
           },
-          grid: { color: "rgba(30, 58, 95, 0.4)" },
+          grid: { color: "rgba(48, 54, 61, 0.5)" },
         },
       },
     },
@@ -241,30 +165,27 @@ function renderEquityCurve(snapshots, benchmark) {
 function renderBenchmark(snapshots, benchmark) {
   var canvas = document.getElementById("benchmark-chart");
   var emptyMsg = document.getElementById("benchmark-empty");
+  if (!canvas) return;
 
   if (!snapshots || snapshots.length === 0 || !benchmark || benchmark.length === 0) {
     canvas.style.display = "none";
-    emptyMsg.style.display = "block";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
   var labels = snapshots.map(function (s) { return s.date; });
-
-  // Time-weighted portfolio returns (excludes deposit effects)
   var portfolioReturns = computeTWR(snapshots);
 
-  // Build a date->close map for SPY
   var spyMap = {};
   benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
 
-  // Find first available benchmark close (dates may not align on weekends)
   var spyBase = null;
   for (var i = 0; i < labels.length; i++) {
     if (spyMap[labels[i]] != null) { spyBase = spyMap[labels[i]]; break; }
   }
   if (!spyBase) {
     canvas.style.display = "none";
-    emptyMsg.style.display = "block";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
@@ -282,8 +203,8 @@ function renderBenchmark(snapshots, benchmark) {
         {
           label: "Portfolio",
           data: portfolioReturns,
-          borderColor: "#00d4aa",
-          backgroundColor: "rgba(0, 212, 170, 0.08)",
+          borderColor: "#58a6ff",
+          backgroundColor: "rgba(88, 166, 255, 0.08)",
           fill: true,
           tension: 0.3,
           pointRadius: 0,
@@ -293,7 +214,7 @@ function renderBenchmark(snapshots, benchmark) {
         {
           label: "S&P 500",
           data: spyReturns,
-          borderColor: "#5a6a7a",
+          borderColor: "#8b949e",
           borderDash: [6, 3],
           backgroundColor: "transparent",
           fill: false,
@@ -307,7 +228,7 @@ function renderBenchmark(snapshots, benchmark) {
     options: {
       responsive: true,
       plugins: {
-        legend: { display: true, labels: { color: "#8892a4" } },
+        legend: { display: true, labels: { color: "#8b949e" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
@@ -318,28 +239,32 @@ function renderBenchmark(snapshots, benchmark) {
       },
       scales: {
         x: {
-          ticks: { color: "#8892a4", maxTicksLimit: 8 },
-          grid: { color: "rgba(30, 58, 95, 0.4)" },
+          ticks: { color: "#8b949e", maxTicksLimit: 8 },
+          grid: { color: "rgba(48, 54, 61, 0.5)" },
         },
         y: {
           ticks: {
-            color: "#8892a4",
+            color: "#8b949e",
             callback: function (v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; },
           },
-          grid: { color: "rgba(30, 58, 95, 0.4)" },
+          grid: { color: "rgba(48, 54, 61, 0.5)" },
         },
       },
     },
   });
 }
 
+// === Activity-page renderers ===
+
 function renderPositions(positions) {
   var tbody = document.querySelector("#positions-table tbody");
   var emptyMsg = document.getElementById("positions-empty");
+  if (!tbody) return;
 
   if (!positions || positions.length === 0) {
-    document.getElementById("positions-table").style.display = "none";
-    emptyMsg.style.display = "block";
+    var t = document.getElementById("positions-table");
+    if (t) t.style.display = "none";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
@@ -356,10 +281,12 @@ function renderPositions(positions) {
 function renderDecisions(decisions) {
   var tbody = document.querySelector("#decisions-table tbody");
   var emptyMsg = document.getElementById("decisions-empty");
+  if (!tbody) return;
 
   if (!decisions || decisions.length === 0) {
-    document.getElementById("decisions-table").style.display = "none";
-    emptyMsg.style.display = "block";
+    var t = document.getElementById("decisions-table");
+    if (t) t.style.display = "none";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
@@ -380,113 +307,80 @@ function renderDecisions(decisions) {
 function renderTheses(theses) {
   var container = document.getElementById("theses-list");
   var emptyMsg = document.getElementById("theses-empty");
+  if (!container) return;
 
   if (!theses || theses.length === 0) {
-    emptyMsg.style.display = "block";
+    if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
 
   theses.forEach(function (t) {
     var card = document.createElement("div");
     card.className = "thesis-card";
+    var direction = t.direction || "";
     card.innerHTML =
-      '<div class="thesis-header">' +
-        '<span class="thesis-ticker">' + escapeHtml(t.ticker) + "</span>" +
-        '<span class="thesis-direction ' + escapeHtml(t.direction || "") + '">' + escapeHtml(t.direction || "") + "</span>" +
-        '<span class="thesis-confidence">' + escapeHtml(t.confidence || "") + "</span>" +
+      '<div class="head">' +
+        '<span class="ticker">' + escapeHtml(t.ticker) + "</span>" +
+        '<span class="direction ' + escapeHtml(direction) + '">' + escapeHtml(direction) + "</span>" +
       "</div>" +
-      '<p class="thesis-body">' + escapeHtml(t.thesis || "") + "</p>" +
-      '<div class="thesis-triggers">' +
+      '<p class="body">' + escapeHtml(t.thesis || "") + "</p>" +
+      '<div class="triggers">' +
         "Entry: " + escapeHtml(t.entry_trigger || "—") + " &nbsp;|&nbsp; Exit: " + escapeHtml(t.exit_trigger || "—") +
       "</div>";
     container.appendChild(card);
   });
 }
 
-function renderMistakes(data) {
-  var tbody = document.querySelector("#mistakes-losers-table tbody");
-  var empty = document.getElementById("mistakes-empty");
-  var rulesList = document.getElementById("mistakes-rules-list");
-  var hasLosers = data && data.closed_losers && data.closed_losers.length > 0;
-  var hasRules = data && data.retired_rules && data.retired_rules.length > 0;
+// === Per-page initializers ===
 
-  if (!hasLosers && !hasRules) {
-    if (empty) empty.style.display = "";
-    return;
-  }
-
-  if (tbody) {
-    var losers = (data.closed_losers || []).slice(0, 3);
-    tbody.innerHTML = losers.map(function (d) {
-      var o30 = d.outcome_30d != null ? formatPct(d.outcome_30d) : "—";
-      return "<tr>" +
-        "<td><a href=\"/trade/" + Number(d.id) + "/\">" + escapeHtml(d.ticker || "") + "</a></td>" +
-        "<td>" + escapeHtml((d.action || "").toUpperCase()) + "</td>" +
-        "<td class=\"num " + pnlClass(d.outcome_30d) + "\">" + o30 + "</td>" +
-      "</tr>";
-    }).join("");
-  }
-
-  if (rulesList) {
-    var rules = (data.retired_rules || []).slice(0, 2);
-    rulesList.innerHTML = rules.map(function (r) {
-      return "<li>" + escapeHtml(r.rule_text || "") + "<br>" +
-        "<span class=\"rule-meta\">retired " + escapeHtml(String(r.retired_at || "")) +
-        " — " + escapeHtml(r.retirement_reason || "") + "</span></li>";
-    }).join("");
-  }
-}
-
-function renderAttribution(data) {
-  var canvas = document.getElementById("attribution-chart");
-  var empty = document.getElementById("attribution-empty");
-
-  if (!data || data.length === 0) {
-    if (empty) empty.style.display = "";
-    if (canvas) canvas.style.display = "none";
-    return;
-  }
-
-  var top = data.slice().sort(function (a, b) {
-    return (Number(b.sample_size) || 0) - (Number(a.sample_size) || 0);
-  }).slice(0, 5);
-
-  new Chart(canvas, {
-    type: "bar",
-    data: {
-      labels: top.map(function (r) { return r.category; }),
-      datasets: [{
-        label: "avg 30d outcome",
-        data: top.map(function (r) { return Number(r.avg_outcome_30d || 0); }),
-        backgroundColor: top.map(function (r) {
-          return Number(r.avg_outcome_30d || 0) >= 0
-            ? "rgba(0, 212, 170, 0.7)"
-            : "rgba(220, 80, 80, 0.7)";
-        }),
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true } }
-    }
+function initPerformancePage() {
+  Promise.all([
+    fetchJSON("snapshots.json"),
+    fetchJSON("benchmark.json"),
+  ]).then(function (parts) {
+    var snapshots = parts[0];
+    var benchmark = parts[1];
+    renderEquityCurve(snapshots, benchmark);
+    renderBenchmark(snapshots, benchmark);
+  }).catch(function (err) {
+    console.error("Failed to load performance data:", err);
   });
 }
 
-// === Init ===
+function initActivityPage() {
+  Promise.all([
+    fetchJSON("positions.json"),
+    fetchJSON("theses.json"),
+    fetchJSON("decisions.json"),
+  ]).then(function (parts) {
+    renderPositions(parts[0]);
+    renderTheses(parts[1]);
+    renderDecisions(parts[2]);
+  }).catch(function (err) {
+    console.error("Failed to load activity data:", err);
+  });
+}
+
+// === Dispatcher ===
 
 document.addEventListener("DOMContentLoaded", function () {
-  fetchAllData().then(function (data) {
-    renderSummary(data.summary, data.snapshots, data.benchmark);
-    renderEquityCurve(data.snapshots, data.benchmark);
-    renderBenchmark(data.snapshots, data.benchmark);
-    renderPositions(data.positions);
-    renderDecisions(data.decisions);
-    renderTheses(data.theses);
-    renderMistakes(data.mistakes);
-    renderAttribution(data.attribution);
-  }).catch(function (err) {
-    console.error("Failed to load dashboard data:", err);
-    document.getElementById("last-updated").textContent = "Failed to load data";
-  });
+  setupHamburger();
+  var page = document.body.dataset.page;
+  switch (page) {
+    case "performance":
+      initPerformancePage();
+      break;
+    case "activity":
+      initActivityPage();
+      break;
+    case "home":
+    case "learning":
+    case "how-it-works":
+    case "mistakes":
+    case "attribution":
+      // Fully server-rendered.
+      break;
+    default:
+      break;
+  }
 });
