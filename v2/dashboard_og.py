@@ -109,6 +109,37 @@ def _wrap_pixels(draw, text: str, font, max_width_px: int, max_lines: int) -> li
     return lines
 
 
+def render_home_og(summary: dict) -> bytes:
+    """Return PNG bytes (1200x630) for the OG card of the homepage."""
+    img, draw = _canvas()
+
+    portfolio_value = summary.get("portfolio_value") or 0
+    daily_pnl = summary.get("daily_pnl") or 0
+    daily_pnl_pct = summary.get("daily_pnl_pct") or 0
+
+    try:
+        pv = Decimal(str(portfolio_value))
+        pv_str = f"${pv:,.2f}"
+    except Exception:
+        pv_str = "$0.00"
+
+    try:
+        pnl = Decimal(str(daily_pnl))
+        pct = Decimal(str(daily_pnl_pct))
+        sign = "+" if pnl > 0 else ""
+        pnl_str = f"Today: {sign}${abs(pnl):,.2f} ({sign}{float(pct):+.2f}%)"
+        pnl_color = _ACCENT if pnl > 0 else _MUTED
+    except Exception:
+        pnl_str = "Today: $0.00 (+0.00%)"
+        pnl_color = _MUTED
+
+    draw.text((48, 90), "BIKINI BOTTOM CAPITAL", fill=_ACCENT, font=_load_font(64))
+    draw.text((48, 170), pv_str, fill=_FG, font=_load_font(180))
+    draw.text((48, 410), pnl_str, fill=pnl_color, font=_load_font(42))
+
+    return _to_png_bytes(img)
+
+
 def render_thesis_og(thesis: dict) -> bytes:
     """Return PNG bytes (1200x630) for the OG card of one thesis."""
     img, draw = _canvas()

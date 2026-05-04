@@ -991,6 +991,9 @@ class TestAssembleDeployDirEndToEnd:
         # Homepage OG meta injected
         assert "<!-- OG_META -->" not in (deploy / "index.html").read_text()
         assert '<meta property="og:title"' in (deploy / "index.html").read_text()
+        # Homepage OG image is emitted unconditionally
+        assert (deploy / "og" / "home.png").is_file()
+        assert (deploy / "og" / "home.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 class TestGatherTradeDetail:

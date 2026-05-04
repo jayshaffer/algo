@@ -54,7 +54,36 @@ class TestRenderTradeOg:
         assert len(distinct) >= 4, f"Only {len(distinct)} distinct colors — text didn't render?"
 
 
-from v2.dashboard_og import render_thesis_og
+from v2.dashboard_og import render_home_og, render_thesis_og
+
+
+class TestRenderHomeOg:
+    def test_returns_valid_png(self):
+        summary = {"portfolio_value": Decimal("12345.67"),
+                   "daily_pnl": Decimal("123.45"),
+                   "daily_pnl_pct": Decimal("1.01")}
+        png = render_home_og(summary)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_correct_dimensions(self):
+        summary = {"portfolio_value": 0, "daily_pnl": 0, "daily_pnl_pct": 0}
+        img = _decoded(render_home_og(summary))
+        assert img.size == (1200, 630)
+
+    def test_handles_negative_pnl(self):
+        summary = {"portfolio_value": Decimal("12345.67"),
+                   "daily_pnl": Decimal("-456.78"),
+                   "daily_pnl_pct": Decimal("-3.50")}
+        png = render_home_og(summary)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_renders_non_trivial_content(self):
+        summary = {"portfolio_value": Decimal("12345.67"),
+                   "daily_pnl": Decimal("123.45"),
+                   "daily_pnl_pct": Decimal("1.01")}
+        img = _decoded(render_home_og(summary)).convert("RGB")
+        distinct = set(img.getdata())
+        assert len(distinct) >= 4
 
 
 class TestRenderThesisOg:

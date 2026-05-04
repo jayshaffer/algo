@@ -18,7 +18,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
-from .dashboard_og import render_thesis_og, render_trade_og
+from .dashboard_og import render_home_og, render_thesis_og, render_trade_og
 from .dashboard_pages import (
     render_homepage_meta,
     render_thesis_page,
@@ -420,6 +420,18 @@ def inject_homepage_og_meta(deploy_dir: str, summary: dict, base_url: str) -> No
         f.write(html)
 
 
+def emit_home_og_image(summary: dict, deploy_dir: str) -> None:
+    """Render the homepage OG card to deploy_dir/og/home.png."""
+    try:
+        png = render_home_og(summary)
+        og_dir = os.path.join(deploy_dir, "og")
+        os.makedirs(og_dir, exist_ok=True)
+        with open(os.path.join(og_dir, "home.png"), "wb") as f:
+            f.write(png)
+    except Exception:
+        logger.warning("Failed to render homepage OG image", exc_info=True)
+
+
 def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
                       deploy_dir: str, base_url: str) -> dict:
     """Render per-trade and per-thesis HTML pages into deploy_dir.
@@ -659,6 +671,8 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
         inject_homepage_og_meta(deploy_dir, data.get("summary", {}), base_url=base_url)
     except Exception:
         logger.warning("Failed to inject homepage OG meta", exc_info=True)
+
+    emit_home_og_image(data.get("summary", {}), deploy_dir)
 
     # Per-trade / per-thesis pages + OG images
     pages = data.get("_pages")
