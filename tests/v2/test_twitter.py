@@ -158,9 +158,9 @@ class TestPostedTweetForDecisionExists:
 
         assert posted_tweet_for_decision_exists(decision_id=42, platform="twitter") is False
         sql, _params = mock_cursor.execute.call_args[0]
-        # Confirm the SQL filters posted=TRUE
-        assert "posted" in sql.lower(), (
-            f"Lookup must filter on posted=TRUE; got SQL: {sql}"
+        normalized = " ".join(sql.split()).lower()
+        assert "posted = true" in normalized, (
+            f"Lookup must filter posted = TRUE literally; got SQL: {sql}"
         )
 
 
