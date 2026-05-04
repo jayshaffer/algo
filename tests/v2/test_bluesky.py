@@ -54,16 +54,25 @@ class TestGetBlueskyClient:
         client = get_bluesky_client()
         assert client is None
 
-    def test_returns_none_on_login_failure(self, monkeypatch):
+    def test_propagates_login_failure(self, monkeypatch):
+        """Auth failures on login must propagate so the calling stage
+        can record them as stage errors (and operators see them outside
+        of raw logs). The pre-fix behavior swallowed login exceptions
+        and returned None, indistinguishable from the no-credentials
+        skip path.
+        """
         monkeypatch.setenv("BLUESKY_HANDLE", "test.bsky.social")
-        monkeypatch.setenv("BLUESKY_APP_PASSWORD", "bad-password")
-        mock_atproto = MagicMock()
-        mock_client = MagicMock()
-        mock_client.login.side_effect = Exception("Invalid credentials")
-        mock_atproto.Client.return_value = mock_client
-        with patch.dict("sys.modules", {"atproto": mock_atproto}):
-            client = get_bluesky_client()
-        assert client is None
+        monkeypatch.setenv("BLUESKY_APP_PASSWORD", "wrongpass")
+
+        fake_client = MagicMock()
+        fake_client.login.side_effect = Exception("Invalid credentials")
+
+        fake_module = MagicMock()
+        fake_module.Client = MagicMock(return_value=fake_client)
+
+        with patch.dict("sys.modules", {"atproto": fake_module}):
+            with pytest.raises(Exception, match="Invalid credentials"):
+                get_bluesky_client()
 
 
 class TestPostToBluesky:

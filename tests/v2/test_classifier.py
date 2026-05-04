@@ -187,6 +187,22 @@ class TestBuildClassificationResult:
         assert macro.affected_sectors == ["energy", "industrial"]
         assert macro.sentiment == "bullish"
 
+    def test_sector_type_propagates_alpaca_id(self):
+        """Sector MacroSignals must carry alpaca_id like macro_political does;
+        otherwise dedup-on-rerun fails and the source-news link is lost.
+        """
+        entry = {
+            "type": "sector",
+            "affected_sectors": ["semiconductors"],
+            "sentiment": "bullish",
+        }
+        result = _build_classification_result(
+            entry, "Chips up across the board", SAMPLE_PUBLISHED_AT,
+            alpaca_id="alp-news-12345",
+        )
+        assert result.macro_signal is not None
+        assert result.macro_signal.alpaca_id == "alp-news-12345"
+
     def test_noise_type(self):
         entry = {"type": "noise"}
         result = _build_classification_result(entry, "Celebrity gossip", SAMPLE_PUBLISHED_AT)

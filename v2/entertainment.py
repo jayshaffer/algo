@@ -12,7 +12,7 @@ from datetime import date
 from .bluesky import generate_bluesky_entertainment_post, get_bluesky_client, post_to_bluesky
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
-from .database.trading_db import insert_tweet
+from .database.trading_db import insert_tweet, posted_tweet_exists
 from .market_data import format_market_snapshot, get_market_snapshot
 from .news import fetch_broad_news
 from .twitter import get_twitter_client, post_tweet
@@ -129,9 +129,21 @@ def _post_entertainment_bluesky(
     model: str,
     result: EntertainmentResult,
 ) -> None:
-    bluesky_client = get_bluesky_client()
+    try:
+        bluesky_client = get_bluesky_client()
+    except Exception as e:
+        result.bluesky_error = f"Bluesky auth failed: {e}"
+        logger.error("Entertainment Bluesky skipped — auth failed: %s", e)
+        return
     if bluesky_client is None:
         return
+
+    try:
+        if posted_tweet_exists(today, "entertainment", "bluesky"):
+            logger.info("Entertainment Bluesky skipped — already posted today")
+            return
+    except Exception as e:
+        logger.warning("Entertainment Bluesky: posted_tweet_exists check failed (%s); proceeding", e)
 
     try:
         bs_post = generate_bluesky_entertainment_post(context, model=model)
@@ -186,6 +198,17 @@ def run_entertainment_pipeline(
         result.skipped = True
         logger.info("Entertainment pipeline skipped — no credentials")
         return result
+
+    # Rerun guard mirroring the recap stage in twitter.py / bluesky.py.
+    # If today's entertainment tweet was already posted, short-circuit
+    # before re-burning Anthropic spend on generation.
+    try:
+        if posted_tweet_exists(today, "entertainment", "twitter"):
+            result.skipped = True
+            logger.info("Entertainment pipeline skipped — already posted today")
+            return result
+    except Exception as e:
+        logger.warning("Entertainment stage: posted_tweet_exists check failed (%s); proceeding", e)
 
     try:
         context = gather_market_context(news_hours=news_hours, news_limit=news_limit)

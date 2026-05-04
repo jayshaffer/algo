@@ -256,7 +256,8 @@ def _build_classification_result(
             category="sector",
             affected_sectors=entry.get("affected_sectors", ["all"]),
             sentiment=entry.get("sentiment", "neutral"),
-            published_at=published_at
+            published_at=published_at,
+            alpaca_id=alpaca_id,
         )
 
     return ClassificationResult(

@@ -40,13 +40,13 @@ def get_bluesky_client():
         logger.warning("Bluesky credentials not configured — skipping")
         return None
 
-    try:
-        client = Client()
-        client.login(handle, app_password)
-        return client
-    except Exception as e:
-        logger.error("Failed to login to Bluesky: %s", e)
-        return None
+    # Let auth failures propagate so the calling stage records them as
+    # stage errors. Returning None on a login crash made auth failures
+    # indistinguishable from the no-credentials skip path, hiding the
+    # problem from anything above the log scraper.
+    client = Client()
+    client.login(handle, app_password)
+    return client
 
 
 def post_to_bluesky(post: dict, client=None) -> dict:
@@ -329,8 +329,17 @@ def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
 
     result = BlueskyStageResult()
 
-    # Check credentials early
-    client = get_bluesky_client()
+    # Check credentials early. None means no creds configured (skip
+    # quietly); a raised exception means auth was attempted and failed
+    # (record as a stage error so the failure surfaces beyond the log
+    # scraper).
+    try:
+        client = get_bluesky_client()
+    except Exception as e:
+        result.skipped = True
+        result.errors.append(f"Bluesky auth failed: {e}")
+        logger.error("Bluesky stage skipped — auth failed: %s", e)
+        return result
     if client is None:
         result.skipped = True
         logger.info("Bluesky stage skipped — no credentials")

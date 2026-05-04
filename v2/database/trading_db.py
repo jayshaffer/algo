@@ -654,7 +654,15 @@ def fail_session(session_id, error_text):
 # --- Strategy State ---
 
 def insert_strategy_state(identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version) -> int:
+    """Atomically clear the prior current state and insert the new one.
+
+    The clear+insert pair shares one transaction so a mid-write failure
+    leaves the prior is_current=TRUE row intact rather than wiping all
+    state. Caller no longer needs to call clear_current_strategy_state()
+    separately.
+    """
     with get_cursor() as cur:
+        cur.execute("UPDATE strategy_state SET is_current = FALSE WHERE is_current = TRUE")
         cur.execute("""
             INSERT INTO strategy_state (identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version)
             VALUES (%s, %s, %s, %s, %s, %s)
