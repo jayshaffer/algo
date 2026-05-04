@@ -722,3 +722,54 @@ class TestRenderLearningHub:
     def test_losers_empty_shows_placeholder(self):
         html = render_learning_hub(**self._data(losers_top3=[]))
         assert "No closed losers in window" in html
+
+
+from v2.dashboard_pages import render_how_it_works_hub
+
+
+class TestRenderHowItWorksHub:
+    def _data(self, **overrides):
+        defaults = dict(
+            child_state={"about": True, "internals": True, "trace": False},
+            base_url="https://example.com",
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_how_it_works_active(self):
+        html = render_how_it_works_hub(**self._data())
+        assert 'data-page="how-it-works"' in html
+        assert 'class="active" href="/how-it-works/"' in html
+
+    def test_renders_three_cards(self):
+        html = render_how_it_works_hub(**self._data())
+        assert "Methodology" in html
+        assert "Model &amp; cost" in html
+        assert "Tool-call trace" in html
+
+    def test_ready_children_link_to_pages(self):
+        html = render_how_it_works_hub(**self._data())
+        assert 'href="/about/"' in html
+        assert 'href="/internals/"' in html
+
+    def test_unready_child_renders_disabled(self):
+        html = render_how_it_works_hub(**self._data())
+        assert 'href="/trace/"' not in html
+        assert 'class="card disabled"' in html
+        assert "Coming soon" in html
+
+    def test_all_unready(self):
+        html = render_how_it_works_hub(
+            **self._data(child_state={"about": False, "internals": False, "trace": False})
+        )
+        assert html.count('class="card disabled"') == 3
+        assert html.count("Coming soon") == 3
+
+    def test_all_ready(self):
+        html = render_how_it_works_hub(
+            **self._data(child_state={"about": True, "internals": True, "trace": True})
+        )
+        assert 'href="/about/"' in html
+        assert 'href="/internals/"' in html
+        assert 'href="/trace/"' in html
+        assert 'class="card disabled"' not in html

@@ -954,3 +954,48 @@ def render_learning_hub(*, attribution_top3: list[dict],
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/learning/",
     )
+
+
+_HOW_IT_WORKS_CHILDREN = (
+    ("about", "/about/", "Methodology",
+     "How decisions get made — the agentic loop, the prompts, the data."),
+    ("internals", "/internals/", "Model & cost",
+     "Which Claude model runs each stage, how often, and what it costs."),
+    ("trace", "/trace/", "Tool-call trace",
+     "A real strategist session — every tool call, redacted but unedited."),
+)
+
+
+def render_how_it_works_hub(*, child_state: dict, base_url: str) -> str:
+    base = base_url.rstrip("/")
+    cards = []
+    for key, href, title, blurb in _HOW_IT_WORKS_CHILDREN:
+        ready = bool(child_state.get(key))
+        if ready:
+            cards.append(
+                f'<a class="card" href="{href}">'
+                f'<h3>{_esc(title)}</h3>'
+                f'<p>{_esc(blurb)}</p>'
+                f'<p class="more">Read →</p></a>'
+            )
+        else:
+            cards.append(
+                f'<div class="card disabled">'
+                f'<h3>{_esc(title)}</h3>'
+                f'<p>{_esc(blurb)}</p>'
+                f'<p class="more">Coming soon</p></div>'
+            )
+
+    content = (
+        '<section class="hero"><h1>How this thing works</h1></section>'
+        f'<section class="section"><div class="card-grid">{"".join(cards)}</div></section>'
+    )
+
+    return _render_page_shell(
+        title="How it works",
+        description="Methodology, model & cost transparency, and a sample tool-call trace.",
+        active_nav="how-it-works",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/how-it-works/",
+    )
