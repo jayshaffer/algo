@@ -18,6 +18,7 @@ from v2.dashboard_publish import (
     deploy_to_cloudflare,
     fetch_spy_benchmark,
     gather_dashboard_data,
+    gather_trade_detail,
     run_dashboard_stage,
     write_json_files,
 )
@@ -913,6 +914,47 @@ class TestAssembleDeployDir:
         assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
 
         assert deploy_dir.exists()
+
+
+class TestGatherTradeDetail:
+    def test_returns_decision_thesis_position(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            # decision row
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+             "quantity": Decimal("12"), "price": Decimal("450.25"),
+             "reasoning": "AI capex", "outcome_7d": None, "outcome_30d": None,
+             "thesis_id": 7, "order_id": "abc12345-...-uuid"},
+            # thesis row
+            {"id": 7, "ticker": "NVDA", "direction": "long", "thesis": "AI capex",
+             "entry_trigger": "<$440", "exit_trigger": "$520", "invalidation": "no",
+             "confidence": "high", "status": "active"},
+            # position row (may be None if closed)
+            {"ticker": "NVDA", "shares": Decimal("12"), "avg_cost": Decimal("450.25")},
+        ]
+
+        result = gather_trade_detail(mock_db, decision_id=42)
+
+        assert result["decision"]["id"] == 42
+        assert result["thesis"]["id"] == 7
+        assert result["position"]["ticker"] == "NVDA"
+        # Order ID truncated even on detail page
+        assert "..." in result["decision"]["order_id"]
+
+    def test_returns_none_when_decision_missing(self, mock_db):
+        mock_db.fetchone.side_effect = [None]
+        result = gather_trade_detail(mock_db, decision_id=999)
+        assert result is None
+
+    def test_no_thesis_when_thesis_id_null(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+             "quantity": Decimal("12"), "price": Decimal("450.25"),
+             "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
+             "thesis_id": None, "order_id": None},
+            None,  # position lookup
+        ]
+        result = gather_trade_detail(mock_db, decision_id=42)
+        assert result["thesis"] is None
 
 
 class TestFetchSpyBenchmark:

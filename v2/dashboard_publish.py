@@ -295,6 +295,49 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     }
 
 
+def gather_trade_detail(cur, decision_id: int) -> dict | None:
+    """Return full detail for one decision page: decision + thesis + position.
+
+    Caller passes a cursor so this can run in any open transaction.
+    Returns None if the decision_id doesn't exist.
+    """
+    cur.execute(
+        """
+        SELECT id, date, ticker, action, quantity, price, reasoning,
+               outcome_7d, outcome_30d, thesis_id, order_id
+        FROM decisions WHERE id = %s
+        """,
+        (decision_id,),
+    )
+    decision = cur.fetchone()
+    if decision is None:
+        return None
+    decision = dict(decision)
+    decision["order_id"] = _redact_order_id(decision.get("order_id"))
+
+    thesis = None
+    if decision.get("thesis_id"):
+        cur.execute(
+            """
+            SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+                   invalidation, confidence, status
+            FROM theses WHERE id = %s
+            """,
+            (decision["thesis_id"],),
+        )
+        row = cur.fetchone()
+        thesis = dict(row) if row else None
+
+    cur.execute(
+        "SELECT ticker, shares, avg_cost FROM positions WHERE ticker = %s",
+        (decision["ticker"],),
+    )
+    pos_row = cur.fetchone()
+    position = dict(pos_row) if pos_row else None
+
+    return {"decision": decision, "thesis": thesis, "position": position}
+
+
 def _build_summary(latest, first, previous, positions_count, session_date,
                    net_deposits=None, daily_deposit=Decimal("0")):
     """Build summary dict from query results.
