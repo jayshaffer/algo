@@ -69,7 +69,8 @@ class TestGatherDashboardData:
         session_date = date(2025, 6, 15)
 
         # Set up fetchall side_effect for sequential calls:
-        # 1. snapshots, 2. positions, 3. decisions, 4. theses
+        # 1. snapshots, 2. positions, 3. decisions, 4. theses,
+        # 5. all-decision-ids, 6. all-thesis-ids
         mock_db.fetchall.side_effect = [
             # snapshots (last 90 days)
             [
@@ -96,6 +97,10 @@ class TestGatherDashboardData:
                  "thesis": "Growth story", "entry_trigger": "Above 150",
                  "exit_trigger": "Above 180", "created_at": datetime(2025, 6, 10)},
             ],
+            # all-decision-ids (gather_all_pages_data)
+            [],
+            # all-thesis-ids (gather_all_pages_data)
+            [],
         ]
 
         # Set up fetchone side_effect for sequential calls:
@@ -113,7 +118,7 @@ class TestGatherDashboardData:
         result = gather_dashboard_data(session_date)
 
         # Verify all top-level keys present
-        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark"}
+        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark", "_pages"}
 
         # Verify snapshots
         assert len(result["snapshots"]) == 2
@@ -155,7 +160,7 @@ class TestGatherDashboardData:
         """When net_deposits provided, total return = portfolio_value - net_deposits."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
              "long_market_value": Decimal("55000")},
@@ -175,7 +180,7 @@ class TestGatherDashboardData:
         """Without net_deposits, falls back to first snapshot comparison."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
              "long_market_value": Decimal("55000")},
@@ -194,7 +199,7 @@ class TestGatherDashboardData:
         session_date = date(2025, 6, 15)
 
         # All fetchall calls return empty
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
 
         # All fetchone calls return None
         mock_db.fetchone.side_effect = [None, None, None]
@@ -229,6 +234,8 @@ class TestGatherDashboardData:
             [],  # no positions
             [],  # no decisions
             [],  # no theses
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("100000"),
@@ -257,6 +264,8 @@ class TestGatherDashboardData:
               "avg_cost": Decimal("150.00"), "updated_at": datetime(2025, 6, 15)}],
             [],
             [],
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
@@ -274,15 +283,15 @@ class TestGatherDashboardData:
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
     def test_query_count(self, mock_benchmark, mock_db):
-        """Verifies exactly 7 queries are executed (4 fetchall + 3 fetchone)."""
+        """Verifies exactly 9 queries are executed (4 fetchall + 3 fetchone + 2 pages)."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [None, None, None]
 
         gather_dashboard_data(session_date)
 
-        assert mock_db.execute.call_count == 7
+        assert mock_db.execute.call_count == 9
 
     @patch("v2.dashboard_publish.get_deposit_history")
     def test_daily_pnl_excludes_same_day_deposit_end_to_end(self, mock_history, mock_benchmark, mock_db):
@@ -304,7 +313,7 @@ class TestGatherDashboardData:
                 {"date": date(2026, 4, 24), "portfolio_value": Decimal("7964.33"),
                  "cash": Decimal("6810.20"), "buying_power": Decimal("6810.20")},
             ],
-            [], [], [],
+            [], [], [], [], [],
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("7964.33"), "cash": Decimal("6810.20"),
@@ -339,6 +348,8 @@ class TestGatherDashboardData:
               "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
               "order_id": full_uuid}],
             [],  # theses
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [None, None, None]
 
@@ -358,7 +369,7 @@ class TestGatherDashboardData:
               "cash": Decimal("49000"), "buying_power": Decimal("49000")},
              {"date": date(2025, 6, 15), "portfolio_value": Decimal("100000"),
               "cash": Decimal("50000"), "buying_power": Decimal("50000")}],
-            [], [], [],
+            [], [], [], [], [],
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
@@ -916,6 +927,70 @@ class TestAssembleDeployDir:
         assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
 
         assert deploy_dir.exists()
+
+
+class TestAssembleDeployDirEndToEnd:
+    def _stub_trade_detail(self, decision_id):
+        return {"decision": {
+            "id": decision_id, "date": date(2026, 5, 3), "ticker": "NVDA",
+            "action": "buy", "quantity": Decimal("1"), "price": Decimal("100"),
+            "reasoning": "x",
+            "outcome_7d": None, "outcome_30d": None, "thesis_id": None,
+            "order_id": None,
+        }, "thesis": None, "position": None}
+
+    def _stub_thesis_detail(self, thesis_id):
+        return {"thesis": {
+            "id": thesis_id, "ticker": "NVDA", "direction": "long",
+            "confidence": "high", "thesis": "x",
+            "entry_trigger": None, "exit_trigger": None, "invalidation": None,
+            "status": "active",
+        }, "decisions": [], "position": None}
+
+    def test_emits_static_assets_json_pages_and_og(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        # Set up a fake assets dir with the static files assemble_deploy_dir copies.
+        assets = tmp_path / "assets"
+        assets.mkdir()
+        (assets / "index.html").write_text("<html><head><!-- OG_META --></head></html>")
+        (assets / "styles.css").write_text("body{}")
+        (assets / "app.js").write_text("// app")
+
+        deploy = tmp_path / "deploy"
+
+        data = {
+            "summary": {"portfolio_value": 100, "daily_pnl": 0,
+                        "daily_pnl_pct": 0, "last_updated": "2026-05-03"},
+            "snapshots": [], "positions": [], "decisions": [], "theses": [],
+            "benchmark": [],
+            "_pages": {"decision_ids": [1], "thesis_ids": [7]},
+        }
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=lambda cur, did: self._stub_trade_detail(did)), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            assemble_deploy_dir(
+                data, deploy_dir=str(deploy), assets_dir=str(assets),
+                base_url="https://example.com",
+            )
+
+        # Static assets present
+        assert (deploy / "index.html").is_file()
+        assert (deploy / "styles.css").is_file()
+        # JSON files
+        assert (deploy / "data" / "summary.json").is_file()
+        # Per-trade and per-thesis HTML
+        assert (deploy / "trade" / "1" / "index.html").is_file()
+        assert (deploy / "thesis" / "7" / "index.html").is_file()
+        # OG images
+        assert (deploy / "og" / "trade" / "1.png").is_file()
+        assert (deploy / "og" / "thesis" / "7.png").is_file()
+        # Homepage OG meta injected
+        assert "<!-- OG_META -->" not in (deploy / "index.html").read_text()
+        assert '<meta property="og:title"' in (deploy / "index.html").read_text()
 
 
 class TestGatherTradeDetail:

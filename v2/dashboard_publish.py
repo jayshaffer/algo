@@ -288,6 +288,10 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     summary = _build_summary(latest, first, previous, len(positions), session_date,
                              net_deposits, daily_deposit=daily_deposit)
 
+    # NEW: gather full ID lists for page emission (link permanence)
+    with get_cursor() as cur2:
+        pages = gather_all_pages_data(cur2)
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
@@ -298,6 +302,7 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         ],
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
+        "_pages": pages,  # NEW
     }
 
 
@@ -624,26 +629,48 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
 
-def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str) -> str:
-    """Assemble a complete deploy directory with static assets and JSON data.
+def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
+                        base_url: str = "") -> str:
+    """Assemble the full deploy directory: static assets, JSON, detail pages, OG images.
 
-    Args:
-        data: Dashboard data dict (from gather_dashboard_data).
-        deploy_dir: Path to create/populate the deploy directory.
-        assets_dir: Path to public_dashboard/ directory containing static assets.
-
-    Returns the deploy_dir path.
+    `data` must include a `_pages` key with `decision_ids` and `thesis_ids`
+    (added by the extended `gather_dashboard_data` flow). When `_pages` is
+    missing, only the static + JSON path runs (legacy behavior).
     """
     os.makedirs(deploy_dir, exist_ok=True)
 
-    # Copy static assets
+    # Static assets
     for filename in _STATIC_ASSETS:
         src = os.path.join(assets_dir, filename)
         dst = os.path.join(deploy_dir, filename)
         shutil.copy2(src, dst)
 
-    # Write JSON data files
     write_json_files(data, deploy_dir)
+
+    # Inject homepage OG meta (no-op if placeholder absent)
+    try:
+        inject_homepage_og_meta(deploy_dir, data.get("summary", {}), base_url=base_url)
+    except Exception:
+        logger.warning("Failed to inject homepage OG meta", exc_info=True)
+
+    # Per-trade / per-thesis pages + OG images
+    pages = data.get("_pages")
+    if pages and base_url:
+        with get_cursor() as cur:
+            page_stats = emit_detail_pages(
+                cur,
+                decision_ids=pages.get("decision_ids", []),
+                thesis_ids=pages.get("thesis_ids", []),
+                deploy_dir=deploy_dir,
+                base_url=base_url,
+            )
+            og_stats = emit_og_images(
+                cur,
+                decision_ids=pages.get("decision_ids", []),
+                thesis_ids=pages.get("thesis_ids", []),
+                deploy_dir=deploy_dir,
+            )
+        logger.info("Detail pages: %s; OG images: %s", page_stats, og_stats)
 
     return deploy_dir
 
@@ -718,9 +745,10 @@ def run_dashboard_stage(session_date: date | None = None) -> DashboardStageResul
         return result
 
     # Assemble deploy directory
+    base_url = os.environ.get("DASHBOARD_URL", "").rstrip("/")
     deploy_dir = tempfile.mkdtemp(prefix="dashboard_deploy_")
     try:
-        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR)
+        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR, base_url=base_url)
     except Exception as e:
         result.errors.append(f"Deploy assembly failed: {e}")
         logger.error("Failed to assemble deploy directory: %s", e)
