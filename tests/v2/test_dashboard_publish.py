@@ -1105,6 +1105,78 @@ class TestGatherAllPagesData:
         assert result == {"decision_ids": [], "thesis_ids": []}
 
 
+class TestEmitOgImages:
+    def test_writes_png_files(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_og_images
+
+        def _stub_trade(cur, did):
+            return {"decision": {
+                "id": did, "ticker": "NVDA", "action": "buy",
+                "quantity": Decimal("12"), "price": Decimal("450"),
+                "date": date(2026, 5, 3),
+            }, "thesis": None, "position": None}
+
+        def _stub_thesis(cur, tid):
+            return {"thesis": {
+                "id": tid, "ticker": "NVDA", "direction": "long",
+                "confidence": "high", "thesis": "x",
+            }, "decisions": [], "position": None}
+
+        with _patch("v2.dashboard_publish.gather_trade_detail", side_effect=_stub_trade), \
+             _patch("v2.dashboard_publish.gather_thesis_detail", side_effect=_stub_thesis):
+            stats = emit_og_images(
+                mock_db,
+                decision_ids=[1],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+            )
+
+        trade_png = tmp_path / "og" / "trade" / "1.png"
+        thesis_png = tmp_path / "og" / "thesis" / "7.png"
+        assert trade_png.is_file()
+        assert thesis_png.is_file()
+        assert trade_png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        assert stats["trades_written"] == 1
+        assert stats["theses_written"] == 1
+
+    def test_isolates_per_image_failures(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_og_images
+
+        def trade_side(cur, did):
+            if did == 2:
+                raise RuntimeError("boom")
+            return {"decision": {
+                "id": did, "ticker": "NVDA", "action": "buy",
+                "quantity": Decimal("12"), "price": Decimal("450"),
+                "date": date(2026, 5, 3),
+            }, "thesis": None, "position": None}
+
+        def thesis_side(cur, tid):
+            return {"thesis": {
+                "id": tid, "ticker": "NVDA", "direction": "long",
+                "confidence": "high", "thesis": "x",
+            }, "decisions": [], "position": None}
+
+        with _patch("v2.dashboard_publish.gather_trade_detail", side_effect=trade_side), \
+             _patch("v2.dashboard_publish.gather_thesis_detail", side_effect=thesis_side):
+            stats = emit_og_images(
+                mock_db,
+                decision_ids=[1, 2, 3],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+            )
+
+        assert (tmp_path / "og" / "trade" / "1.png").is_file()
+        assert not (tmp_path / "og" / "trade" / "2.png").exists()
+        assert (tmp_path / "og" / "trade" / "3.png").is_file()
+        assert (tmp_path / "og" / "thesis" / "7.png").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 1
+
+
 class TestEmitDetailPages:
     def _stub_trade_detail(self, decision_id):
         return {

@@ -460,6 +460,45 @@ def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
     return stats
 
 
+def emit_og_images(cur, decision_ids: list[int], thesis_ids: list[int],
+                   deploy_dir: str) -> dict:
+    """Render OG PNGs for each decision and thesis into deploy_dir/og/."""
+    stats = {"trades_written": 0, "theses_written": 0, "failed": 0}
+
+    trade_dir = os.path.join(deploy_dir, "og", "trade")
+    thesis_dir = os.path.join(deploy_dir, "og", "thesis")
+    os.makedirs(trade_dir, exist_ok=True)
+    os.makedirs(thesis_dir, exist_ok=True)
+
+    for did in decision_ids:
+        try:
+            detail = gather_trade_detail(cur, did)
+            if detail is None:
+                continue
+            png = render_trade_og(detail["decision"])
+            with open(os.path.join(trade_dir, f"{did}.png"), "wb") as f:
+                f.write(png)
+            stats["trades_written"] += 1
+        except Exception:
+            logger.warning("Failed to render trade OG %s", did, exc_info=True)
+            stats["failed"] += 1
+
+    for tid in thesis_ids:
+        try:
+            detail = gather_thesis_detail(cur, tid)
+            if detail is None:
+                continue
+            png = render_thesis_og(detail["thesis"])
+            with open(os.path.join(thesis_dir, f"{tid}.png"), "wb") as f:
+                f.write(png)
+            stats["theses_written"] += 1
+        except Exception:
+            logger.warning("Failed to render thesis OG %s", tid, exc_info=True)
+            stats["failed"] += 1
+
+    return stats
+
+
 def _build_summary(latest, first, previous, positions_count, session_date,
                    net_deposits=None, daily_deposit=Decimal("0")):
     """Build summary dict from query results.
