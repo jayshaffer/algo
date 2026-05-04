@@ -128,7 +128,8 @@ class TestGatherDashboardData:
         # Verify all top-level keys present
         assert set(result.keys()) == {
             "summary", "snapshots", "positions", "decisions", "theses",
-            "benchmark", "mistakes", "attribution", "memos", "_pages",
+            "benchmark", "mistakes", "attribution", "memos", "performance",
+            "_pages",
         }
 
         # Verify snapshots
@@ -1470,6 +1471,74 @@ class TestGatherMemos:
         with memos_file.open() as f:
             payload = json.load(f)
         assert payload[0]["content"] == "test"
+
+
+class TestComputePerformanceStats:
+    def test_empty_inputs_produce_zero_struct(self):
+        from v2.dashboard_publish import compute_performance_stats
+
+        stats = compute_performance_stats(snapshots=[], decisions=[])
+        assert stats == {
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "avg_days_held": 0.0,
+            "best_day_pct": 0.0,
+            "worst_day_pct": 0.0,
+        }
+
+    def test_max_drawdown_basic(self):
+        from v2.dashboard_publish import compute_performance_stats
+
+        snapshots = [
+            {"snapshot_date": date(2026, 1, 1), "value": Decimal("100")},
+            {"snapshot_date": date(2026, 1, 2), "value": Decimal("110")},
+            {"snapshot_date": date(2026, 1, 3), "value": Decimal("90")},
+            {"snapshot_date": date(2026, 1, 4), "value": Decimal("95")},
+        ]
+        stats = compute_performance_stats(snapshots=snapshots, decisions=[])
+        assert abs(stats["max_drawdown_pct"] - (-18.181818)) < 0.01
+
+    def test_best_and_worst_day(self):
+        from v2.dashboard_publish import compute_performance_stats
+
+        snapshots = [
+            {"snapshot_date": date(2026, 1, 1), "value": Decimal("100")},
+            {"snapshot_date": date(2026, 1, 2), "value": Decimal("105")},
+            {"snapshot_date": date(2026, 1, 3), "value": Decimal("95")},
+        ]
+        stats = compute_performance_stats(snapshots=snapshots, decisions=[])
+        assert abs(stats["best_day_pct"] - 5.0) < 0.01
+        assert abs(stats["worst_day_pct"] - (-9.523809)) < 0.01
+
+    def test_win_rate_from_closed_decisions(self):
+        from v2.dashboard_publish import compute_performance_stats
+
+        decisions = [
+            {"outcome_30d_pct": Decimal("3.0")},
+            {"outcome_30d_pct": Decimal("-2.0")},
+            {"outcome_30d_pct": Decimal("1.0")},
+            {"outcome_30d_pct": None},
+        ]
+        stats = compute_performance_stats(snapshots=[], decisions=decisions)
+        assert abs(stats["win_rate_pct"] - 66.666666) < 0.01
+
+    def test_write_json_files_emits_performance(self, tmp_path):
+        from v2.dashboard_publish import write_json_files
+
+        data = {
+            "performance": {"max_drawdown_pct": -5.0, "win_rate_pct": 60.0,
+                            "avg_days_held": 4.0, "best_day_pct": 2.0,
+                            "worst_day_pct": -3.0},
+            "summary": {}, "snapshots": [], "positions": [], "decisions": [],
+            "theses": [], "benchmark": [], "mistakes": {}, "memos": [],
+            "attribution": [],
+        }
+        write_json_files(data, str(tmp_path))
+        f = tmp_path / "data" / "performance.json"
+        assert f.exists()
+        with f.open() as fh:
+            payload = json.load(fh)
+        assert payload["win_rate_pct"] == 60.0
 
 
 class TestRenderSparklineSvg:

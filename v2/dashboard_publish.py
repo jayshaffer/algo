@@ -187,6 +187,63 @@ def _enrich_snapshots_with_twr_value(snapshots: list[dict]) -> None:
             curr["twr_value"] = prev["twr_value"]
 
 
+def compute_performance_stats(*, snapshots: list[dict],
+                              decisions: list[dict]) -> dict:
+    """Derive Performance-page stats from raw snapshots and closed decisions.
+
+    Each snapshot must carry a "value" key. Each decision may carry an
+    "outcome_30d_pct" key (None for still-open decisions, which are
+    excluded from the win-rate computation).
+    """
+    if not snapshots and not decisions:
+        return {
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "avg_days_held": 0.0,
+            "best_day_pct": 0.0,
+            "worst_day_pct": 0.0,
+        }
+
+    values = [float(s["value"]) for s in snapshots]
+
+    max_dd = 0.0
+    if values:
+        peak = values[0]
+        for v in values:
+            if v > peak:
+                peak = v
+            dd = (v - peak) / peak * 100.0 if peak else 0.0
+            if dd < max_dd:
+                max_dd = dd
+
+    best, worst = 0.0, 0.0
+    for prev, curr in zip(values, values[1:]):
+        if prev <= 0:
+            continue
+        pct = (curr - prev) / prev * 100.0
+        if pct > best:
+            best = pct
+        if pct < worst:
+            worst = pct
+
+    closed = [d for d in decisions if d.get("outcome_30d_pct") is not None]
+    if closed:
+        wins = sum(1 for d in closed if float(d["outcome_30d_pct"]) > 0)
+        win_rate = wins / len(closed) * 100.0
+    else:
+        win_rate = 0.0
+
+    avg_days_held = 0.0
+
+    return {
+        "max_drawdown_pct": round(max_dd, 4),
+        "win_rate_pct": round(win_rate, 4),
+        "avg_days_held": round(avg_days_held, 4),
+        "best_day_pct": round(best, 4),
+        "worst_day_pct": round(worst, 4),
+    }
+
+
 def render_sparkline_svg(snapshots: list[dict]) -> str:
     """Render the last 90 days of equity as an inline SVG polyline.
 
@@ -380,19 +437,32 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         for m in memo_rows
     ]
 
+    decision_dicts = [
+        {**dict(r), "order_id": _redact_order_id(dict(r).get("order_id"))}
+        for r in decisions
+    ]
+
+    performance = compute_performance_stats(
+        snapshots=[
+            {"value": s.get("twr_value", s.get("portfolio_value"))}
+            for s in snapshot_dicts
+        ],
+        decisions=[
+            {"outcome_30d_pct": d.get("outcome_30d")} for d in decision_dicts
+        ],
+    )
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
         "positions": [dict(r) for r in positions],
-        "decisions": [
-            {**dict(r), "order_id": _redact_order_id(dict(r).get("order_id"))}
-            for r in decisions
-        ],
+        "decisions": decision_dicts,
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
         "mistakes": mistakes,
         "attribution": attribution,
         "memos": memos,
+        "performance": performance,
         "_pages": pages,  # NEW
     }
 
@@ -784,6 +854,7 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     for key in (
         "summary", "snapshots", "positions", "decisions",
         "theses", "benchmark", "mistakes", "attribution", "memos",
+        "performance",
     ):
         if key not in data:
             continue
