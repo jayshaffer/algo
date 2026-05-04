@@ -25,7 +25,6 @@ from .context import build_executor_input
 from .database.trading_db import (
     check_decision_exists,
     close_thesis,
-    get_open_orders,
     get_positions,
     insert_decision,
     insert_decision_signals_batch,
@@ -168,17 +167,6 @@ def _build_executor_context(account_info: dict, data_client, errors: list[str]) 
             executor_input.risk_notes = "\n".join(sector_warnings)
 
     return executor_input
-
-
-def _build_open_sell_orders() -> dict:
-    """Build the {ticker: remaining_qty} map of live pending sell orders."""
-    open_sell_orders: dict = {}
-    for order in get_open_orders():
-        if order["side"] == "sell" and order["status"] in ("new", "accepted", "partially_filled"):
-            ticker = order["ticker"]
-            remaining = order["qty"] - (order.get("filled_qty") or Decimal(0))
-            open_sell_orders[ticker] = open_sell_orders.get(ticker, Decimal(0)) + remaining
-    return open_sell_orders
 
 
 def _resolve_decision_qty(
@@ -969,7 +957,6 @@ def run_trading_session(
     # Step 5: Validate and execute trades
     logger.info("[Step 5] Executing trades")
     positions = {p["ticker"]: p["shares"] for p in get_positions()}
-    _build_open_sell_orders()  # run for side effect (future: pass to precheck)
     totals, order_ids, order_results, decision_account_states = _execute_decisions(
         response, positions, account_info, data_client, dry_run, errors,
         session_date,

@@ -641,14 +641,3 @@ def get_daily_deposit(prev_date, today_date) -> Decimal:
         page_token = activities[-1]["id"]
 
     return total
-
-
-def calculate_position_size(
-    buying_power: Decimal,
-    price: Decimal,
-    risk_pct: float = 0.05
-) -> float:
-    """Calculate position size based on risk percentage."""
-    amount_to_risk = buying_power * Decimal(str(risk_pct))
-    shares = float(amount_to_risk / price)
-    return round(max(shares, 0), 4)

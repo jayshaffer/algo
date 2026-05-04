@@ -344,11 +344,17 @@ def validate_signal_refs(signal_refs: list[dict]) -> list[dict]:
     valid = []
     for sig_type, refs in by_type.items():
         table = _SIGNAL_TYPE_TABLES[sig_type]
+        # Defense-in-depth: f-string interpolation is safe because `table` is
+        # sourced exclusively from the hardcoded `_SIGNAL_TYPE_TABLES` allowlist
+        # (the loop above drops any sig_type not present). Assert the invariant
+        # here so a future refactor that changes how `table` is populated trips
+        # immediately rather than silently introducing an injection vector.
+        assert table in _SIGNAL_TYPE_TABLES.values(), f"unexpected table: {table!r}"
         ids = [r["id"] for r in refs if r.get("id") is not None]
         if not ids:
             continue
         with get_cursor() as cur:
-            cur.execute(f"SELECT id FROM {table} WHERE id = ANY(%s)", (ids,))
+            cur.execute(f"SELECT id FROM {table} WHERE id = ANY(%s)", (ids,))  # noqa: S608
             found_ids = {row["id"] for row in cur.fetchall()}
         for ref in refs:
             if ref.get("id") in found_ids:

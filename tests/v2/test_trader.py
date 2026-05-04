@@ -80,7 +80,6 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
             success=True, order_id="ord-1", error=None,
             filled_qty=Decimal("1"), filled_avg_price=Decimal("150"),
         )),
-        "get_open_orders": MagicMock(return_value=[]),
         "get_positions": MagicMock(return_value=[]),
         "check_decision_exists": MagicMock(return_value=None),
         "insert_decision": MagicMock(return_value=1),
@@ -226,7 +225,6 @@ class TestRunTradingSession:
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
              patch("v2.trader.insert_decision_signals_batch"), \
-             patch("v2.trader.get_open_orders", return_value=[]), \
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("10000"), "cash": Decimal("5000"), "buying_power": Decimal("5000")}
@@ -275,7 +273,6 @@ class TestRunTradingSession:
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
              patch("v2.trader.insert_decision_signals_batch"), \
-             patch("v2.trader.get_open_orders", return_value=[]), \
              patch("v2.trader.get_positions", return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("10000"), "cash": Decimal("5000"), "buying_power": Decimal("5000")}
@@ -329,7 +326,6 @@ class TestRunTradingSession:
              patch("v2.trader.wait_for_fill") as mock_wait, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
              patch("v2.trader.insert_decision_signals_batch"), \
-             patch("v2.trader.get_open_orders", return_value=[]), \
              patch("v2.trader.get_positions", return_value=[
                  {"ticker": "AMZN", "shares": Decimal("1.0")}
              ]):
@@ -927,38 +923,6 @@ class TestDecisionLoopBranches:
             result = run_trading_session(dry_run=True)
         # Exactly 10 trades executed; two decisions skipped by the limit.
         assert result.trades_executed == 10
-
-    def test_open_sell_orders_map_built_from_pending(self, mock_db, mock_cursor):
-        """The open_sell_orders-building loop runs when there is a pending
-        sell order in the open-orders list (covers lines 236-239).
-        """
-        open_sell = [{
-            "side": "sell", "status": "new",
-            "ticker": "AAPL", "qty": Decimal("5"),
-            "filled_qty": Decimal("1"),
-        }]
-        with ExitStack() as stack:
-            _happy_path(stack, decisions=[], overrides={
-                "get_open_orders": MagicMock(return_value=open_sell),
-            })
-            run_trading_session(dry_run=True)
-
-    def test_open_orders_with_non_matching_filter(self, mock_db, mock_cursor):
-        """Open orders that are buys or non-active sells are skipped by the
-        filter (covers the 'if order['side'] == 'sell' ...' False branch, L236->235).
-        """
-        orders = [
-            {"side": "buy", "status": "new", "ticker": "AAPL",
-             "qty": Decimal("5"), "filled_qty": Decimal("0")},
-            {"side": "sell", "status": "canceled", "ticker": "AAPL",
-             "qty": Decimal("5"), "filled_qty": Decimal("0")},
-        ]
-        with ExitStack() as stack:
-            _happy_path(stack, decisions=[], overrides={
-                "get_open_orders": MagicMock(return_value=orders),
-            })
-            run_trading_session(dry_run=True)
-
 
 class TestIntentResolution:
     def test_buy_without_magnitude_raises_intent_error(self, mock_db, mock_cursor):
