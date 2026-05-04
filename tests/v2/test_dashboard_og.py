@@ -52,3 +52,39 @@ class TestRenderTradeOg:
         # Should have at least 4 distinct colors: background, accent bar, ticker FG,
         # text muted color (and font anti-aliasing produces many more).
         assert len(distinct) >= 4, f"Only {len(distinct)} distinct colors — text didn't render?"
+
+
+from v2.dashboard_og import render_thesis_og
+
+
+class TestRenderThesisOg:
+    def _thesis(self, **overrides):
+        t = {
+            "id": 7, "ticker": "NVDA", "direction": "long",
+            "confidence": "high",
+            "thesis": "AI capex acceleration is real and unpriced.",
+        }
+        t.update(overrides)
+        return t
+
+    def test_returns_valid_png_bytes(self):
+        png = render_thesis_og(self._thesis())
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_correct_dimensions(self):
+        img = _decoded(render_thesis_og(self._thesis()))
+        assert img.size == (1200, 630)
+
+    def test_handles_long_thesis_text(self):
+        png = render_thesis_og(self._thesis(thesis="x" * 5000))  # Should not crash
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_renders_non_trivial_content(self):
+        img = _decoded(render_thesis_og(self._thesis())).convert("RGB")
+        distinct = set(img.getdata())
+        assert len(distinct) >= 4
+
+    def test_handles_missing_optional_fields(self):
+        # Only the absolutely required fields — must not crash.
+        png = render_thesis_og({"id": 99, "ticker": "AAPL"})
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
