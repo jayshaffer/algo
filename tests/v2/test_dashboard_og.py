@@ -145,3 +145,44 @@ class TestRenderMistakesOg:
 
         png = render_mistakes_og(top_loser=None)
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestRenderAttributionOg:
+    def _attr(self):
+        return [
+            {"category": "earnings", "avg_outcome_30d": Decimal("3.40"), "sample_size": 30},
+            {"category": "fed",      "avg_outcome_30d": Decimal("-1.20"), "sample_size": 12},
+            {"category": "macro",    "avg_outcome_30d": Decimal("0.80"),  "sample_size": 9},
+        ]
+
+    def test_returns_valid_png(self):
+        from v2.dashboard_og import render_attribution_og
+
+        png = render_attribution_og(self._attr())
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_handles_empty_attribution(self):
+        from v2.dashboard_og import render_attribution_og
+
+        png = render_attribution_og([])
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_renders_bars_at_expected_positions(self):
+        """Smoke check: pixels at known bar-center positions are not the
+        background color (i.e. a bar was actually drawn)."""
+        from io import BytesIO
+        from PIL import Image
+        from v2.dashboard_og import OG_HEIGHT, render_attribution_og
+
+        png = render_attribution_og(self._attr())
+        img = Image.open(BytesIO(png)).convert("RGB")
+        # First positive bar is positioned at x=200 (per the layout below).
+        # Sample inside the bar; the column above the baseline (y=400)
+        # should NOT match the background.
+        bg = (8, 24, 32)
+        non_bg_count = 0
+        for x in range(195, 235):
+            for y in range(330, 395):
+                if img.getpixel((x, y)) != bg:
+                    non_bg_count += 1
+        assert non_bg_count > 0, "First bar did not render any non-background pixels"
