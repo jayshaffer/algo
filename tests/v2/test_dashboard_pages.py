@@ -68,10 +68,9 @@ class TestRenderTradePage:
             position=None,
             base_url="https://example.com",
         )
-        assert "NVDA" in html
-        assert "BUY" in html or "Buy" in html or "buy" in html
-        assert "12" in html
-        assert "450.25" in html
+        assert ">BUY NVDA</h2>" in html
+        assert "shares at $450.25" in html
+        assert "12 shares" in html
 
     def test_includes_og_tags_with_correct_image_url(self):
         html = render_trade_page(
@@ -98,8 +97,7 @@ class TestRenderTradePage:
             position=None,
             base_url="https://example.com",
         )
-        assert "/thesis/7/" in html
-        assert "AI capex acceleration" in html
+        assert 'href="/thesis/7/">AI capex acceleration</a>' in html
 
     def test_no_thesis_section_when_absent(self):
         html = render_trade_page(
@@ -119,3 +117,34 @@ class TestRenderTradePage:
         )
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
+
+    def test_escapes_ticker_and_action(self):
+        """Ticker with special chars is single-escaped; double-escaping must not occur."""
+        html = render_trade_page(
+            decision=self._decision(ticker="AT&T", action="buy"),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+        )
+        # Single-escaped form must appear in og:description and h2
+        assert "AT&amp;T" in html
+        # Double-escaped form must NOT appear anywhere
+        assert "AT&amp;amp;T" not in html
+
+    def test_empty_thesis_text_falls_back_to_label(self):
+        """Empty thesis text should produce a visible link label, not an invisible link."""
+        thesis = {
+            "id": 99,
+            "ticker": "NVDA",
+            "direction": "long",
+            "thesis": "",
+            "confidence": "medium",
+        }
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=thesis,
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "Thesis #99" in html
+        assert 'href="/thesis/99/"' in html

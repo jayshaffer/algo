@@ -8,16 +8,32 @@ from decimal import Decimal
 from html import escape as _esc
 from string import Template
 
-_HOMEPAGE_META_TEMPLATE = Template(
+_META_BLOCK_TEMPLATE = Template(
     '<meta property="og:title" content="$title" />\n'
     '<meta property="og:description" content="$description" />\n'
-    '<meta property="og:image" content="$image_url" />\n'
+    '<meta property="og:image" content="$og_image" />\n'
     '<meta property="og:url" content="$page_url" />\n'
+    '<meta property="og:type" content="$og_type" />\n'
     '<meta name="twitter:card" content="summary_large_image" />\n'
     '<meta name="twitter:title" content="$title" />\n'
     '<meta name="twitter:description" content="$description" />\n'
-    '<meta name="twitter:image" content="$image_url" />\n'
+    '<meta name="twitter:image" content="$og_image" />\n'
 )
+
+
+def _render_meta_block(*, title: str, description: str, og_image: str,
+                       page_url: str, og_type: str = "website") -> str:
+    """Return the <meta> tags shared by every emitted page.
+
+    Both inputs must already be HTML-safe (caller escapes).
+    """
+    return _META_BLOCK_TEMPLATE.substitute(
+        title=title,
+        description=description,
+        og_image=og_image,
+        page_url=page_url,
+        og_type=og_type,
+    )
 
 
 def _fmt_money(value: Decimal | int | float | None) -> str:
@@ -42,11 +58,13 @@ def render_homepage_meta(summary: dict, base_url: str) -> str:
         f"Portfolio: {_fmt_money(portfolio)} · "
         f"Today: {_fmt_money(daily_pnl)} ({_fmt_pct(daily_pct)})"
     )
-    return _HOMEPAGE_META_TEMPLATE.substitute(
+    base = base_url.rstrip("/")
+    return _render_meta_block(
         title=title,
         description=description,
-        image_url=f"{base_url.rstrip('/')}/og/home.png",
-        page_url=base_url.rstrip("/") + "/",
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/",
+        og_type="website",
     )
 
 
@@ -56,15 +74,7 @@ _TRADE_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>$title — Bikini Bottom Capital</title>
-<meta property="og:title" content="$title" />
-<meta property="og:description" content="$description" />
-<meta property="og:image" content="$og_image" />
-<meta property="og:url" content="$page_url" />
-<meta property="og:type" content="article" />
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="$title" />
-<meta name="twitter:description" content="$description" />
-<meta name="twitter:image" content="$og_image" />
+$meta_block
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -72,7 +82,7 @@ _TRADE_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
 <main class="container">
 <section class="panel">
 <h2>$action_caps $ticker</h2>
-<p class="trade-summary">$qty shares at $$price on $trade_date</p>
+<p class="trade-summary">$qty_display shares at $price_display on $trade_date</p>
 <h3>Reasoning</h3>
 <p>$reasoning</p>
 $thesis_section
@@ -105,17 +115,45 @@ def render_trade_page(decision: dict, thesis: dict | None,
                       position: dict | None, base_url: str) -> str:
     """Return the full HTML page for one trade."""
     base = base_url.rstrip("/")
-    ticker = _esc(str(decision["ticker"]))
-    action = str(decision["action"]).lower()
-    title = f"{action.upper()} {ticker}"
-    qty = decision.get("quantity") or 0
-    price = decision.get("price") or 0
-    description = f"{action.upper()} {qty} {ticker} @ ${price}"
+
+    # Safely coerce IDs to int
+    decision_id = int(decision["id"])
+
+    # Raw (unescaped) values for composition
+    raw_ticker = str(decision["ticker"])
+    raw_qty = decision.get("quantity") or 0
+    raw_price = decision.get("price") or 0
+    action_upper = str(decision.get("action", "")).lower().upper()
+
+    # Escaped values for direct HTML/attribute output
+    ticker_esc = _esc(raw_ticker)
+    action_caps = _esc(action_upper)
+
+    # title uses escaped values
+    title = f"{action_caps} {ticker_esc}"
+
+    # og:description — build from raw, escape once
+    description_raw = f"{action_upper} {raw_qty} {raw_ticker} @ {_fmt_money(raw_price)}"
+    description = _esc(description_raw)
+
+    # Display values for body
+    qty_display = _esc(str(raw_qty))
+    price_display = _fmt_money(raw_price)  # e.g. "$450.25"
+
+    # trade_date — isoformat() output is always safe ASCII; escape fallback path
+    trade_date = (
+        decision["date"].isoformat()
+        if hasattr(decision["date"], "isoformat")
+        else _esc(str(decision["date"]))
+    )
 
     if thesis:
+        tid = int(thesis["id"])
+        raw_thesis_text = str(thesis.get("thesis", ""))
+        thesis_text = _esc(raw_thesis_text) if raw_thesis_text else f"Thesis #{tid}"
         thesis_section = _THESIS_LINK_TEMPLATE.substitute(
-            tid=thesis["id"],
-            thesis_text=_esc(str(thesis.get("thesis", ""))),
+            tid=tid,
+            thesis_text=thesis_text,
             direction=_esc(str(thesis.get("direction", ""))),
             confidence=_esc(str(thesis.get("confidence", ""))),
         )
@@ -130,17 +168,23 @@ def render_trade_page(decision: dict, thesis: dict | None,
     else:
         outcome_section = ""
 
+    meta_block = _render_meta_block(
+        title=title,
+        description=description,
+        og_image=f"{base}/og/trade/{decision_id}.png",
+        page_url=f"{base}/trade/{decision_id}/",
+        og_type="article",
+    )
+
     return _TRADE_PAGE_TEMPLATE.substitute(
         title=title,
-        action_caps=action.upper(),
-        ticker=ticker,
-        qty=qty,
-        price=price,
-        trade_date=decision["date"].isoformat() if hasattr(decision["date"], "isoformat") else str(decision["date"]),
+        action_caps=action_caps,
+        ticker=ticker_esc,
+        qty_display=qty_display,
+        price_display=price_display,
+        trade_date=trade_date,
         reasoning=_esc(str(decision.get("reasoning") or "")),
         thesis_section=thesis_section,
         outcome_section=outcome_section,
-        description=_esc(description),
-        og_image=f"{base}/og/trade/{decision['id']}.png",
-        page_url=f"{base}/trade/{decision['id']}/",
+        meta_block=meta_block,
     )
