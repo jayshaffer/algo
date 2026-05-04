@@ -372,3 +372,29 @@ def run_attribution_post(today: date | None = None) -> WeeklyPostResult:
         gather=gather_attribution_context,
         generate=generate_attribution_post,
     )
+
+
+def _main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="v2.social_weekly",
+        description="Weekly social posts (mistakes / attribution).",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("mistakes", help="Run the weekly mistakes post.")
+    sub.add_parser("attribution", help="Run the weekly attribution post.")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "mistakes":
+        result = run_mistakes_post()
+    else:
+        result = run_attribution_post()
+    return 1 if getattr(result, "errors", []) else 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO,
+                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                         datefmt="%Y-%m-%d %H:%M:%S")
+    sys.exit(_main())

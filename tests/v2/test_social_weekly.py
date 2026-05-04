@@ -199,3 +199,31 @@ class TestRunAttributionPost:
         mock_bs.return_value = object()
         result = run_attribution_post(today=date(2026, 5, 8))
         assert result.skipped is True
+
+
+class TestCLI:
+    @patch("v2.social_weekly.run_mistakes_post")
+    def test_mistakes_subcommand_calls_runner(self, mock_run):
+        from v2.social_weekly import _main
+
+        mock_run.return_value = MagicMock(errors=[])
+        rc = _main(["mistakes"])
+        assert rc == 0
+        mock_run.assert_called_once()
+
+    @patch("v2.social_weekly.run_attribution_post")
+    def test_attribution_subcommand_calls_runner(self, mock_run):
+        from v2.social_weekly import _main
+
+        mock_run.return_value = MagicMock(errors=[])
+        rc = _main(["attribution"])
+        assert rc == 0
+        mock_run.assert_called_once()
+
+    @patch("v2.social_weekly.run_mistakes_post")
+    def test_nonzero_exit_on_errors(self, mock_run):
+        from v2.social_weekly import _main
+
+        mock_run.return_value = MagicMock(errors=["boom"])
+        rc = _main(["mistakes"])
+        assert rc == 1
