@@ -1103,3 +1103,83 @@ class TestGatherAllPagesData:
         mock_db.fetchall.side_effect = [[], []]
         result = gather_all_pages_data(mock_db)
         assert result == {"decision_ids": [], "thesis_ids": []}
+
+
+class TestEmitDetailPages:
+    def _stub_trade_detail(self, decision_id):
+        return {
+            "decision": {
+                "id": decision_id, "date": date(2026, 5, 3), "ticker": "NVDA",
+                "action": "buy", "quantity": Decimal("12"),
+                "price": Decimal("450"), "reasoning": "x",
+                "outcome_7d": None, "outcome_30d": None, "thesis_id": None,
+                "order_id": None,
+            },
+            "thesis": None,
+            "position": None,
+        }
+
+    def _stub_thesis_detail(self, thesis_id):
+        return {
+            "thesis": {
+                "id": thesis_id, "ticker": "NVDA", "direction": "long",
+                "thesis": "AI capex", "entry_trigger": None,
+                "exit_trigger": None, "invalidation": None,
+                "confidence": "high", "status": "active",
+            },
+            "decisions": [],
+            "position": None,
+        }
+
+    def test_emits_one_html_per_trade_and_thesis(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_detail_pages
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=lambda cur, did: self._stub_trade_detail(did)), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            stats = emit_detail_pages(
+                mock_db,
+                decision_ids=[1, 2],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+                base_url="https://example.com",
+            )
+
+        assert (tmp_path / "trade" / "1" / "index.html").is_file()
+        assert (tmp_path / "trade" / "2" / "index.html").is_file()
+        assert (tmp_path / "thesis" / "7" / "index.html").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 0
+
+    def test_isolates_per_page_failures(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_detail_pages
+
+        def trade_side_effect(cur, did):
+            if did == 2:
+                raise RuntimeError("simulated render failure")
+            return self._stub_trade_detail(did)
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=trade_side_effect), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            stats = emit_detail_pages(
+                mock_db,
+                decision_ids=[1, 2, 3],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+                base_url="https://example.com",
+            )
+
+        # 1 and 3 succeed; 2 fails but doesn't abort the run.
+        assert (tmp_path / "trade" / "1" / "index.html").is_file()
+        assert not (tmp_path / "trade" / "2" / "index.html").exists()
+        assert (tmp_path / "trade" / "3" / "index.html").is_file()
+        assert (tmp_path / "thesis" / "7" / "index.html").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 1

@@ -408,6 +408,58 @@ def inject_homepage_og_meta(deploy_dir: str, summary: dict, base_url: str) -> No
         f.write(html)
 
 
+def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
+                      deploy_dir: str, base_url: str) -> dict:
+    """Render per-trade and per-thesis HTML pages into deploy_dir.
+
+    Returns a stats dict: {trades_written, theses_written, failed}.
+    Per-page failures are isolated: one bad render doesn't abort the run.
+    """
+    stats = {"trades_written": 0, "theses_written": 0, "failed": 0}
+
+    for did in decision_ids:
+        try:
+            detail = gather_trade_detail(cur, did)
+            if detail is None:
+                continue
+            html = render_trade_page(
+                decision=detail["decision"],
+                thesis=detail["thesis"],
+                position=detail["position"],
+                base_url=base_url,
+            )
+            page_dir = os.path.join(deploy_dir, "trade", str(did))
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+            stats["trades_written"] += 1
+        except Exception:
+            logger.warning("Failed to render trade page %s", did, exc_info=True)
+            stats["failed"] += 1
+
+    for tid in thesis_ids:
+        try:
+            detail = gather_thesis_detail(cur, tid)
+            if detail is None:
+                continue
+            html = render_thesis_page(
+                thesis=detail["thesis"],
+                decisions=detail["decisions"],
+                position=detail["position"],
+                base_url=base_url,
+            )
+            page_dir = os.path.join(deploy_dir, "thesis", str(tid))
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+            stats["theses_written"] += 1
+        except Exception:
+            logger.warning("Failed to render thesis page %s", tid, exc_info=True)
+            stats["failed"] += 1
+
+    return stats
+
+
 def _build_summary(latest, first, previous, positions_count, session_date,
                    net_deposits=None, daily_deposit=Decimal("0")):
     """Build summary dict from query results.
