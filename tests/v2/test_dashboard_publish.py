@@ -1036,6 +1036,46 @@ class TestFetchSpyBenchmark:
         assert result == []
 
 
+import os
+import tempfile
+
+
+class TestInjectHomepageOgMeta:
+    def test_replaces_placeholder_with_meta_block(self, tmp_path):
+        from v2.dashboard_publish import inject_homepage_og_meta
+
+        # Create a fake index.html with the placeholder
+        index = tmp_path / "index.html"
+        index.write_text(
+            "<html><head>\n"
+            "<title>x</title>\n"
+            "<!-- OG_META -->\n"
+            "</head><body></body></html>\n"
+        )
+
+        summary = {"portfolio_value": 12345, "daily_pnl": 100,
+                   "daily_pnl_pct": 1, "last_updated": "2026-05-03"}
+        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
+
+        rendered = index.read_text()
+        assert "<!-- OG_META -->" not in rendered
+        assert '<meta property="og:title"' in rendered
+        assert "https://example.com/og/home.png" in rendered
+
+    def test_no_op_when_placeholder_missing(self, tmp_path):
+        from v2.dashboard_publish import inject_homepage_og_meta
+
+        index = tmp_path / "index.html"
+        index.write_text("<html><head></head><body></body></html>")
+
+        # Must not raise; just leaves the file alone.
+        summary = {"portfolio_value": 0, "daily_pnl": 0,
+                   "daily_pnl_pct": 0, "last_updated": "2026-05-03"}
+        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
+
+        assert "OG_META" not in index.read_text()
+
+
 class TestGatherAllPagesData:
     def test_returns_all_decision_and_thesis_ids(self, mock_db):
         # Even decisions outside the homepage 30-day window must be returned —

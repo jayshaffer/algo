@@ -18,6 +18,12 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
+from .dashboard_og import render_thesis_og, render_trade_og
+from .dashboard_pages import (
+    render_homepage_meta,
+    render_thesis_page,
+    render_trade_page,
+)
 from .database.connection import get_cursor
 from .executor import get_net_deposits
 
@@ -387,6 +393,19 @@ def gather_all_pages_data(cur) -> dict:
     cur.execute("SELECT id FROM theses ORDER BY id")
     thesis_ids = [r["id"] for r in cur.fetchall()]
     return {"decision_ids": decision_ids, "thesis_ids": thesis_ids}
+
+
+def inject_homepage_og_meta(deploy_dir: str, summary: dict, base_url: str) -> None:
+    """Replace the <!-- OG_META --> placeholder in deploy_dir/index.html."""
+    index_path = os.path.join(deploy_dir, "index.html")
+    with open(index_path) as f:
+        html = f.read()
+    if "<!-- OG_META -->" not in html:
+        return
+    block = render_homepage_meta(summary, base_url=base_url)
+    html = html.replace("<!-- OG_META -->", block)
+    with open(index_path, "w") as f:
+        f.write(html)
 
 
 def _build_summary(latest, first, previous, positions_count, session_date,
