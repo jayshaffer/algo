@@ -3,7 +3,7 @@
 from datetime import date
 from decimal import Decimal
 
-from v2.dashboard_pages import render_homepage_meta, render_trade_page
+from v2.dashboard_pages import render_homepage_meta, render_trade_page, render_thesis_page
 
 
 class TestRenderHomepageMeta:
@@ -148,3 +148,95 @@ class TestRenderTradePage:
         )
         assert "Thesis #99" in html
         assert 'href="/thesis/99/"' in html
+
+
+class TestRenderThesisPage:
+    def _thesis(self, **overrides):
+        t = {
+            "id": 7,
+            "ticker": "NVDA",
+            "direction": "long",
+            "confidence": "high",
+            "thesis": "AI capex acceleration is real and unpriced.",
+            "entry_trigger": "Pullback below $440",
+            "exit_trigger": "Hit $520 or stop at $410",
+            "invalidation": "Rev growth slows two quarters",
+            "status": "active",
+        }
+        t.update(overrides)
+        return t
+
+    def test_includes_thesis_text_and_triggers(self):
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=[],
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "AI capex acceleration" in html
+        assert "Pullback below $440" in html
+        assert "Hit $520" in html
+
+    def test_og_image_url(self):
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=[],
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "https://example.com/og/thesis/7.png" in html
+        assert '<meta property="og:image"' in html
+
+    def test_lists_related_decisions(self):
+        decisions = [
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA",
+             "action": "buy", "quantity": 12, "price": Decimal("450.25")},
+            {"id": 43, "date": date(2026, 5, 5), "ticker": "NVDA",
+             "action": "sell", "quantity": 4, "price": Decimal("470.10")},
+        ]
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=decisions,
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "/trade/42/" in html
+        assert "/trade/43/" in html
+
+    def test_escapes_user_text(self):
+        html = render_thesis_page(
+            thesis=self._thesis(thesis="<img src=x onerror=alert(1)>"),
+            decisions=[],
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "<img src=x" not in html
+        assert "&lt;img" in html
+
+    def test_escapes_thesis_meta_fields(self):
+        """Direction, confidence, status all flow into HTML; verify each is escaped."""
+        html = render_thesis_page(
+            thesis=self._thesis(direction="long&short", confidence="<high>", status='ac"tive'),
+            decisions=[],
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "long&amp;short" in html
+        assert "&lt;high&gt;" in html
+        assert "ac&quot;tive" in html  # html.escape with quote=True (default)
+        # Negative — confirm not double-escaped:
+        assert "long&amp;amp;short" not in html
+
+    def test_decisions_section_renders_formatted_price(self):
+        """Related-decisions list should use $N,NNN.NN formatting (not raw repr)."""
+        decisions = [{
+            "id": 42, "date": date(2026, 5, 3), "ticker": "NVDA",
+            "action": "buy", "quantity": 12, "price": Decimal("1450.25"),
+        }]
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=decisions,
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "$1,450.25" in html

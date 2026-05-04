@@ -188,3 +188,111 @@ def render_trade_page(decision: dict, thesis: dict | None,
         outcome_section=outcome_section,
         meta_block=meta_block,
     )
+
+
+_THESIS_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>$title — Bikini Bottom Capital</title>
+$meta_block
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
+<main class="container">
+<section class="panel">
+<h2>$ticker — $direction thesis</h2>
+<p class="thesis-meta">Confidence: $confidence · Status: $status</p>
+<h3>Thesis</h3>
+<p>$thesis_text</p>
+$triggers_section
+$decisions_section
+</section>
+</main>
+<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
+</body>
+</html>
+""")
+
+
+def _render_triggers_section(thesis: dict) -> str:
+    parts = []
+    if thesis.get("entry_trigger"):
+        parts.append(f"<p><strong>Entry:</strong> {_esc(str(thesis['entry_trigger']))}</p>")
+    if thesis.get("exit_trigger"):
+        parts.append(f"<p><strong>Exit:</strong> {_esc(str(thesis['exit_trigger']))}</p>")
+    if thesis.get("invalidation"):
+        parts.append(f"<p><strong>Invalidation:</strong> {_esc(str(thesis['invalidation']))}</p>")
+    if not parts:
+        return ""
+    return "<h3>Triggers</h3>" + "".join(parts)
+
+
+def _render_decisions_section(decisions: list[dict]) -> str:
+    if not decisions:
+        return ""
+    rows = []
+    for d in decisions:
+        did = int(d["id"])
+        qty = d.get("quantity") or 0
+        price = _fmt_money(d.get("price") or 0)
+        action_upper = _esc(str(d.get("action", "")).upper())
+        trade_date = (
+            d["date"].isoformat()
+            if hasattr(d["date"], "isoformat")
+            else _esc(str(d["date"]))
+        )
+        rows.append(
+            f'<li><a href="/trade/{did}/">{trade_date} '
+            f'{action_upper} {_esc(str(qty))} @ {price}</a></li>'
+        )
+    return "<h3>Related decisions</h3><ul>" + "".join(rows) + "</ul>"
+
+
+def render_thesis_page(thesis: dict, decisions: list[dict],
+                       position: dict | None, base_url: str) -> str:
+    """Return the full HTML page for one thesis."""
+    base = base_url.rstrip("/")
+
+    # Coerce ID to int for URL construction
+    thesis_id = int(thesis["id"])
+
+    # Raw values for composition
+    raw_ticker = str(thesis["ticker"])
+    raw_direction = str(thesis.get("direction", ""))
+
+    # Escaped values for direct HTML output
+    ticker_esc = _esc(raw_ticker)
+    direction_esc = _esc(raw_direction)
+    confidence_esc = _esc(str(thesis.get("confidence", "")))
+    status_esc = _esc(str(thesis.get("status", "")))
+    thesis_text_esc = _esc(str(thesis.get("thesis", "")))
+
+    # title built from escaped pieces
+    title = f"{ticker_esc} — {direction_esc} thesis"
+
+    # og:description — build from raw, escape once
+    description_raw = str(thesis.get("thesis", ""))[:160].replace("\n", " ")
+    description = _esc(description_raw)
+
+    meta_block = _render_meta_block(
+        title=title,
+        description=description,
+        og_image=f"{base}/og/thesis/{thesis_id}.png",
+        page_url=f"{base}/thesis/{thesis_id}/",
+        og_type="article",
+    )
+
+    return _THESIS_PAGE_TEMPLATE.substitute(
+        title=title,
+        ticker=ticker_esc,
+        direction=direction_esc,
+        confidence=confidence_esc,
+        status=status_esc,
+        thesis_text=thesis_text_esc,
+        triggers_section=_render_triggers_section(thesis),
+        decisions_section=_render_decisions_section(decisions),
+        meta_block=meta_block,
+    )
