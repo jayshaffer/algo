@@ -114,3 +114,196 @@ def generate_trade_post(
 
     text = body + _build_url_suffix(decision, dashboard_base_url)
     return {"text": text, "type": "trade", "decision_id": decision["id"]}
+
+
+# ---------------------------------------------------------------------------
+# Imports for the orchestrator (kept here so the pure helpers above stay
+# importable in tests without dragging in the whole post stack).
+# ---------------------------------------------------------------------------
+
+from .twitter import get_twitter_client, post_tweet           # noqa: E402
+from .bluesky import get_bluesky_client, post_to_bluesky      # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Stage result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TradePostsStageResult:
+    """Aggregate outcome of run_trade_posts_stage.
+
+    posts_attempted: how many decisions we tried to post about
+    posts_skipped_dedup: per-(decision, platform) skips where rerun guard fired
+    posts_succeeded_*: count of successful posts per platform
+    posts_failed: per-decision generate-or-post failures (excludes dedup skips)
+    quiet_day_recap_posted: True if the no-decisions fallback fired
+    skipped: stage was a full no-op (no creds for either platform OR dry-run)
+    errors: aggregated per-decision/per-platform error strings
+    """
+    posts_attempted: int = 0
+    posts_skipped_dedup: int = 0
+    posts_succeeded_twitter: int = 0
+    posts_succeeded_bluesky: int = 0
+    posts_failed: int = 0
+    quiet_day_recap_posted: bool = False
+    skipped: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_MIN_NOTIONAL = 100.0
+DEFAULT_MAX_POSTS_PER_SESSION = 5
+
+
+def _is_dry_run() -> bool:
+    return os.environ.get("ALGO_TRADE_POST_DRY_RUN") == "1"
+
+
+def _platform_post_one(
+    platform: str,
+    post_body: dict,
+    decision: dict,
+    client,
+    poster,
+    session_date: date,
+    result: TradePostsStageResult,
+) -> None:
+    """Post one body to one platform; record the outcome."""
+    decision_id = decision["id"]
+
+    try:
+        if posted_tweet_for_decision_exists(decision_id, platform):
+            result.posts_skipped_dedup += 1
+            logger.info("Skip %s post for decision %s — already posted on %s",
+                        platform, decision_id, platform)
+            return
+    except Exception as e:
+        logger.warning("Dedup check failed for decision %s on %s: %s; proceeding",
+                       decision_id, platform, e)
+
+    if _is_dry_run():
+        logger.info("[DRY-RUN] %s post for decision %s:\n%s",
+                    platform, decision_id, post_body["text"])
+        return
+
+    try:
+        post_result = poster(post_body, client=client)
+    except Exception as e:
+        result.posts_failed += 1
+        result.errors.append(f"{platform} post failed for decision {decision_id}: {e}")
+        logger.error("%s post failed for decision %s: %s", platform, decision_id, e)
+        return
+
+    db_logged = True
+    try:
+        insert_tweet(
+            session_date=session_date,
+            tweet_type="trade",
+            tweet_text=post_result["text"],
+            tweet_id=post_result.get("tweet_id") or post_result.get("post_id"),
+            posted=post_result["posted"],
+            error=post_result.get("error"),
+            platform=platform,
+            decision_id=decision_id,
+        )
+    except Exception as e:
+        db_logged = False
+        result.errors.append(f"DB log failed for decision {decision_id} on {platform}: {e}")
+        logger.error("DB log failed for decision %s on %s: %s",
+                     decision_id, platform, e)
+
+    if post_result["posted"] and db_logged:
+        if platform == "twitter":
+            result.posts_succeeded_twitter += 1
+        else:
+            result.posts_succeeded_bluesky += 1
+    else:
+        result.posts_failed += 1
+
+
+def _post_quiet_day_recap(
+    session_date: date,
+    twitter_client,
+    bluesky_client,
+    result: TradePostsStageResult,
+) -> None:
+    """Quiet-day fallback: when no postable decisions, post the existing
+    Mr. Krabs-style recap so the account doesn't go dark on trading days.
+
+    Implemented in Task 7. Stub here so Task 6's orchestrator can wire it up.
+    """
+    return None
+
+
+def run_trade_posts_stage(
+    session_date: date | None = None,
+    min_notional: float = DEFAULT_MIN_NOTIONAL,
+    max_posts: int = DEFAULT_MAX_POSTS_PER_SESSION,
+) -> TradePostsStageResult:
+    """Post one tweet per significant non-hold decision today."""
+    if session_date is None:
+        session_date = date.today()
+
+    result = TradePostsStageResult()
+
+    twitter_client = get_twitter_client()
+    bluesky_client = get_bluesky_client()
+    if twitter_client is None and bluesky_client is None:
+        result.skipped = True
+        logger.info("Trade-posts stage skipped — no platform credentials")
+        return result
+
+    try:
+        decisions = select_postable_decisions_for_date(
+            session_date=session_date,
+            min_notional=min_notional,
+            limit=max_posts,
+        )
+    except Exception as e:
+        result.errors.append(f"Failed to select postable decisions: {e}")
+        logger.error("select_postable_decisions failed: %s", e)
+        return result
+
+    if not decisions:
+        _post_quiet_day_recap(session_date, twitter_client, bluesky_client, result)
+        return result
+
+    dashboard_base_url = os.environ.get("DASHBOARD_URL", "")
+
+    for decision in decisions:
+        result.posts_attempted += 1
+
+        post_body = generate_trade_post(
+            decision=decision,
+            dashboard_base_url=dashboard_base_url,
+        )
+        if post_body is None:
+            result.posts_failed += 1
+            result.errors.append(
+                f"Generation failed for decision {decision['id']}"
+            )
+            continue
+
+        if twitter_client is not None:
+            _platform_post_one(
+                "twitter", post_body, decision, twitter_client,
+                post_tweet, session_date, result,
+            )
+        if bluesky_client is not None:
+            _platform_post_one(
+                "bluesky", post_body, decision, bluesky_client,
+                post_to_bluesky, session_date, result,
+            )
+
+    logger.info(
+        "Trade-posts stage complete: attempted=%d, twitter_ok=%d, bluesky_ok=%d, "
+        "failed=%d, dedup_skipped=%d",
+        result.posts_attempted, result.posts_succeeded_twitter,
+        result.posts_succeeded_bluesky, result.posts_failed,
+        result.posts_skipped_dedup,
+    )
+    return result

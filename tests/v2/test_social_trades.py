@@ -120,3 +120,138 @@ class TestGenerateTradePost:
 
         result = generate_trade_post(decision=decision, dashboard_base_url="")
         assert result is None
+
+
+class TestRunTradePostsStage:
+    """End-to-end stage orchestrator. All external calls mocked."""
+
+    def _decision(self, decision_id: int, ticker: str = "NVDA"):
+        return {
+            "id": decision_id, "ticker": ticker, "action": "buy",
+            "quantity": 10, "price": 500.0, "reasoning": "AI tailwind",
+            "thesis_id": None, "thesis_text": None,
+            "thesis_direction": None, "is_off_playbook": False,
+        }
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client")
+    def test_posts_one_per_decision_to_each_platform(
+        self, mock_tw_client, mock_bs_client, mock_select,
+        mock_gen, mock_post_tw, mock_post_bs,
+        mock_dedup, mock_insert,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_select.return_value = [self._decision(1), self._decision(2, "TSLA")]
+        mock_gen.side_effect = [
+            {"text": "Bought 10 $NVDA", "type": "trade", "decision_id": 1},
+            {"text": "Bought 10 $TSLA", "type": "trade", "decision_id": 2},
+        ]
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        result = run_trade_posts_stage(date(2026, 5, 4))
+
+        assert mock_insert.call_count == 4
+        assert result.posts_attempted == 2
+        assert result.posts_succeeded_twitter == 2
+        assert result.posts_succeeded_bluesky == 2
+        assert result.skipped is False
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists")
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client", return_value=None)
+    @patch("v2.social_trades.get_twitter_client")
+    def test_per_decision_dedup_skips_already_posted(
+        self, mock_tw_client, mock_bs_client, mock_select,
+        mock_gen, mock_post_tw, mock_post_bs,
+        mock_dedup, mock_insert,
+    ):
+        """If decision 2 was already posted to Twitter, skip the post for it
+        but still attempt decision 1."""
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        mock_select.return_value = [self._decision(1), self._decision(2)]
+        mock_dedup.side_effect = lambda decision_id, platform: (
+            decision_id == 2 and platform == "twitter"
+        )
+        mock_gen.return_value = {"text": "x", "type": "trade", "decision_id": 1}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        result = run_trade_posts_stage(date(2026, 5, 4))
+
+        assert mock_post_tw.call_count == 1
+        assert result.posts_skipped_dedup == 1
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client", return_value=None)
+    @patch("v2.social_trades.get_twitter_client")
+    def test_one_decision_failure_does_not_drop_others(
+        self, mock_tw_client, mock_bs_client, mock_select,
+        mock_gen, mock_post_tw, mock_post_bs,
+        mock_dedup, mock_insert,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        mock_select.return_value = [self._decision(1), self._decision(2)]
+        mock_gen.side_effect = [None, {"text": "x", "type": "trade", "decision_id": 2}]
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        result = run_trade_posts_stage(date(2026, 5, 4))
+
+        assert mock_post_tw.call_count == 1
+        assert result.posts_succeeded_twitter == 1
+        assert result.posts_failed >= 1
+
+    @patch("v2.social_trades.select_postable_decisions_for_date", return_value=[])
+    @patch("v2.social_trades.get_bluesky_client", return_value=None)
+    @patch("v2.social_trades.get_twitter_client")
+    def test_no_decisions_falls_through_to_quiet_day_handler(
+        self, mock_tw_client, mock_bs_client, mock_select,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        with patch("v2.social_trades._post_quiet_day_recap", return_value=None) as mock_quiet:
+            result = run_trade_posts_stage(date(2026, 5, 4))
+
+        assert result.posts_attempted == 0
+        mock_quiet.assert_called_once()
+
+    @patch("v2.social_trades.get_twitter_client", return_value=None)
+    @patch("v2.social_trades.get_bluesky_client", return_value=None)
+    def test_skipped_when_no_credentials_on_either_platform(
+        self, mock_bs, mock_tw,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        result = run_trade_posts_stage(date(2026, 5, 4))
+        assert result.skipped is True
