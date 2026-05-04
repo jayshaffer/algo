@@ -608,3 +608,55 @@ class TestRenderPerformancePage:
     def test_loads_chart_js(self):
         html = render_performance_page(**self._data())
         assert "chart.js" in html.lower() or "Chart.js" in html
+
+
+from v2.dashboard_pages import render_activity_page
+
+
+class TestRenderActivityPage:
+    def _data(self, **overrides):
+        defaults = dict(
+            base_url="https://example.com",
+            memos=[
+                {"id": 1, "session_date": date(2026, 5, 4),
+                 "content": "Holding the AI book."},
+                {"id": 2, "session_date": date(2026, 5, 3),
+                 "content": "Macro chop unresolved."},
+            ],
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_activity_active(self):
+        html = render_activity_page(**self._data())
+        assert 'data-page="activity"' in html
+        assert 'class="active" href="/activity/"' in html
+
+    def test_has_all_anchored_sections(self):
+        html = render_activity_page(**self._data())
+        assert 'id="holdings"' in html
+        assert 'id="theses"' in html
+        assert 'id="decisions"' in html
+        assert 'id="memos"' in html
+
+    def test_holdings_table_skeleton(self):
+        html = render_activity_page(**self._data())
+        assert 'id="positions-table"' in html
+        assert "Ticker" in html and "Shares" in html
+
+    def test_theses_container(self):
+        html = render_activity_page(**self._data())
+        assert 'id="theses-list"' in html
+
+    def test_decisions_table_skeleton(self):
+        html = render_activity_page(**self._data())
+        assert 'id="decisions-table"' in html
+
+    def test_memos_rendered_inline(self):
+        html = render_activity_page(**self._data())
+        assert "Holding the AI book" in html
+        assert "Macro chop unresolved" in html
+
+    def test_memos_empty_state(self):
+        html = render_activity_page(**self._data(memos=[]))
+        assert "No memos yet" in html

@@ -831,3 +831,70 @@ def render_performance_page(*, summary: dict, performance: dict,
         page_url=f"{base}/performance/",
         head_extra=_CHART_JS_CDN,
     )
+
+
+def _render_memos_section(memos: list[dict]) -> str:
+    if not memos:
+        return (
+            '<section class="section" id="memos">'
+            '<div class="head"><h2>Recent memos</h2></div>'
+            '<p class="empty-state">No memos yet.</p></section>'
+        )
+    items = []
+    for m in memos[:10]:
+        body = _esc(m.get("content") or "")
+        d = _esc(str(m.get("session_date") or ""))
+        items.append(
+            f'<blockquote class="memo-block">'
+            f'<div class="meta">{d}</div>{body}</blockquote>'
+        )
+    return (
+        '<section class="section" id="memos">'
+        '<div class="head"><h2>Recent memos</h2></div>'
+        + "".join(items)
+        + '</section>'
+    )
+
+
+def render_activity_page(*, base_url: str, memos: list[dict]) -> str:
+    base = base_url.rstrip("/")
+
+    holdings = (
+        '<section class="section" id="holdings">'
+        '<div class="head"><h2>Current holdings</h2></div>'
+        '<div class="table-wrap"><table id="positions-table">'
+        '<thead><tr><th>Ticker</th><th class="num">Shares</th>'
+        '<th class="num">Avg Cost</th></tr></thead><tbody></tbody></table></div>'
+        '<p class="empty-state" id="positions-empty" style="display:none;">'
+        'No open positions</p></section>'
+    )
+
+    theses = (
+        '<section class="section" id="theses">'
+        '<div class="head"><h2>Active theses</h2></div>'
+        '<div id="theses-list"></div>'
+        '<p class="empty-state" id="theses-empty" style="display:none;">'
+        'No active theses</p></section>'
+    )
+
+    decisions = (
+        '<section class="section" id="decisions">'
+        '<div class="head"><h2>Decisions log</h2></div>'
+        '<div class="table-wrap"><table id="decisions-table">'
+        '<thead><tr><th>Date</th><th>Ticker</th><th>Action</th>'
+        '<th class="num">Qty</th><th>Reasoning</th>'
+        '<th class="num">Order ID</th></tr></thead><tbody></tbody></table></div>'
+        '<p class="empty-state" id="decisions-empty" style="display:none;">'
+        'No decisions yet</p></section>'
+    )
+
+    content = holdings + theses + decisions + _render_memos_section(memos)
+
+    return _render_page_shell(
+        title="Activity",
+        description="Holdings, active theses, decisions log, and recent memos.",
+        active_nav="activity",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/activity/",
+    )
