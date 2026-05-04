@@ -117,3 +117,31 @@ class TestRenderThesisOg:
         # Only the absolutely required fields — must not crash.
         png = render_thesis_og({"id": 99, "ticker": "AAPL"})
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestRenderMistakesOg:
+    def test_returns_valid_png_with_top_loser(self):
+        from v2.dashboard_og import render_mistakes_og
+
+        png = render_mistakes_og(
+            top_loser={"ticker": "TSLA", "outcome_30d": Decimal("-12.5")},
+        )
+        assert isinstance(png, bytes)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_correct_dimensions(self):
+        from v2.dashboard_og import render_mistakes_og
+        from io import BytesIO
+        from PIL import Image
+
+        png = render_mistakes_og(
+            top_loser={"ticker": "TSLA", "outcome_30d": Decimal("-12.5")},
+        )
+        img = Image.open(BytesIO(png))
+        assert img.size == (1200, 630)
+
+    def test_handles_no_losers(self):
+        from v2.dashboard_og import render_mistakes_og
+
+        png = render_mistakes_og(top_loser=None)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"

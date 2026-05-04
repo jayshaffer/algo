@@ -140,6 +140,36 @@ def render_home_og(summary: dict) -> bytes:
     return _to_png_bytes(img)
 
 
+def render_mistakes_og(top_loser: dict | None) -> bytes:
+    """Return PNG bytes (1200x630) for the /mistakes/ OG card."""
+    img, draw = _canvas()
+
+    draw.text((48, 90), "WHAT DIDN'T WORK", fill=_ACCENT, font=_load_font(56))
+
+    if top_loser:
+        ticker = str(top_loser.get("ticker", "?"))
+        outcome = top_loser.get("outcome_30d")
+        if outcome is not None:
+            try:
+                outcome_str = f"{Decimal(str(outcome)):+.2f}% (30d)"
+            except Exception:
+                outcome_str = ""
+        else:
+            outcome_str = ""
+        draw.text((48, 200), ticker, fill=_FG, font=_load_font(220))
+        if outcome_str:
+            draw.text((48, 460), outcome_str, fill=_MUTED, font=_load_font(48))
+    else:
+        draw.text(
+            (48, 240),
+            "No closed losers in window.",
+            fill=_FG,
+            font=_load_font(56),
+        )
+
+    return _to_png_bytes(img)
+
+
 def render_thesis_og(thesis: dict) -> bytes:
     """Return PNG bytes (1200x630) for the OG card of one thesis."""
     img, draw = _canvas()
