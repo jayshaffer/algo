@@ -430,3 +430,130 @@ class TestRenderPageShell:
     def test_loads_app_js(self):
         html = self._shell()
         assert '<script src="/app.js"></script>' in html
+
+
+from v2.dashboard_pages import render_homepage
+
+
+class TestRenderHomepage:
+    def _data(self, **overrides):
+        defaults = dict(
+            summary={
+                "portfolio_value": Decimal("104231.00"),
+                "daily_pnl": Decimal("642.00"),
+                "daily_pnl_pct": Decimal("0.62"),
+                "total_return_pct": Decimal("4.2"),
+                "vs_spy_pct": Decimal("2.1"),
+                "day_number": 142,
+                "last_updated": "2026-05-04T16:30:00",
+            },
+            theses=[
+                {"id": 7, "ticker": "NVDA", "thesis": "AI infra demand"},
+                {"id": 8, "ticker": "AMD", "thesis": "data center share"},
+                {"id": 9, "ticker": "XOM", "thesis": "macro hedge"},
+            ],
+            sparkline_svg='<svg class="sparkline"></svg>',
+            today_move={
+                "id": 42, "ticker": "NVDA", "action": "buy",
+                "notional": Decimal("2400"), "pct_of_portfolio": Decimal("2.3"),
+                "reasoning": "Earnings beat + guidance raise. Active thesis on AI infra.",
+            },
+            attribution_top={
+                "category": "earnings_beat", "sample_size": 18,
+                "avg_outcome_30d": Decimal("3.2"),
+            },
+            worst_loser={
+                "ticker": "PLTR", "outcome_30d_pct": Decimal("-8.4"),
+            },
+            memo={
+                "session_date": date(2026, 5, 4),
+                "content": "Macro chop is unresolved. Holding the AI book but tightening sizing on new entries.",
+            },
+            how_it_works_state={
+                "about": True, "internals": True, "trace": False,
+            },
+            base_url="https://example.com",
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_home_active(self):
+        html = render_homepage(**self._data())
+        assert 'data-page="home"' in html
+        assert 'class="active" href="/"' in html
+
+    def test_renders_hero_with_stats_and_chips(self):
+        html = render_homepage(**self._data())
+        assert "Day 142" in html
+        assert "$104,231.00" in html
+        assert "NVDA" in html
+        assert "AMD" in html
+        assert "XOM" in html
+        assert 'href="/thesis/7/"' in html
+
+    def test_omits_chips_when_no_active_theses(self):
+        html = render_homepage(**self._data(theses=[]))
+        assert "Currently betting on" not in html
+
+    def test_caps_chips_at_three(self):
+        many = [
+            {"id": i, "ticker": f"T{i}", "thesis": "x"} for i in range(10)
+        ]
+        html = render_homepage(**self._data(theses=many))
+        assert html.count('class="chip"') == 3
+
+    def test_renders_today_move_card(self):
+        html = render_homepage(**self._data())
+        assert 'href="/trade/42/"' in html
+        assert "Earnings beat + guidance raise" in html
+        assert "$2,400" in html or "$2,400.00" in html
+
+    def test_today_move_empty_falls_back_to_link(self):
+        html = render_homepage(**self._data(today_move=None))
+        assert "No new positions in the last 5 sessions" in html
+        assert 'href="/activity/"' in html
+
+    def test_recent_learnings_renders_both_cards(self):
+        html = render_homepage(**self._data())
+        assert "earnings_beat" in html
+        assert "PLTR" in html
+        assert 'href="/attribution/"' in html
+        assert 'href="/mistakes/"' in html
+
+    def test_recent_learnings_hidden_when_both_empty(self):
+        html = render_homepage(
+            **self._data(attribution_top=None, worst_loser=None)
+        )
+        assert "Recent learnings" not in html
+
+    def test_memo_block_present(self):
+        html = render_homepage(**self._data())
+        assert "Macro chop is unresolved" in html
+        assert "memo-block" in html
+
+    def test_memo_block_hidden_when_no_memo(self):
+        html = render_homepage(**self._data(memo=None))
+        assert "memo-block" not in html
+
+    def test_methodology_strip_links_to_existing_pages(self):
+        html = render_homepage(**self._data())
+        assert 'href="/about/"' in html
+        assert 'href="/internals/"' in html
+        assert 'href="/trace/"' not in html
+        assert 'href="/how-it-works/"' in html
+
+    def test_sparkline_embedded(self):
+        html = render_homepage(**self._data())
+        assert '<svg class="sparkline"></svg>' in html
+
+    def test_truncates_long_reasoning(self):
+        long_reasoning = "x" * 500
+        html = render_homepage(
+            **self._data(today_move={
+                "id": 1, "ticker": "Z", "action": "buy",
+                "notional": Decimal("100"), "pct_of_portfolio": Decimal("0.1"),
+                "reasoning": long_reasoning,
+            })
+        )
+        assert ("x" * 150 + "…") in html
+        assert ("x" * 151) not in html

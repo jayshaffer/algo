@@ -124,6 +124,19 @@ def _fmt_money(value: Decimal | int | float | None) -> str:
     return f"${Decimal(value):,.2f}"
 
 
+def _truncate(s: str, n: int) -> str:
+    s = s or ""
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def _fmt_signed_pct(value) -> str:
+    if value is None:
+        return "—"
+    v = float(value)
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.2f}%"
+
+
 def _fmt_pct(value: Decimal | int | float | None) -> str:
     if value is None:
         return "0.00%"
@@ -566,4 +579,189 @@ def render_attribution_page(attribution: list[dict], base_url: str) -> str:
     return _ATTRIBUTION_PAGE_TEMPLATE.substitute(
         meta_block=meta_block,
         body=body,
+    )
+
+
+def _hero_chip(t: dict) -> str:
+    ticker = _esc(t["ticker"])
+    blurb = _esc(t.get("thesis") or "")
+    tid = int(t["id"])
+    return (
+        f'<a class="chip" href="/thesis/{tid}/">'
+        f'<span class="ticker">{ticker}</span> {blurb}'
+        f'</a>'
+    )
+
+
+def _render_homepage_hero(summary: dict, theses: list[dict],
+                          sparkline_svg: str) -> str:
+    portfolio = _fmt_money(summary.get("portfolio_value"))
+    daily = _fmt_signed_pct(summary.get("daily_pnl_pct"))
+    total = _fmt_signed_pct(summary.get("total_return_pct"))
+    vs_spy = _fmt_signed_pct(summary.get("vs_spy_pct"))
+    daily_class = "gain" if (summary.get("daily_pnl_pct") or 0) >= 0 else "loss"
+
+    day_n = summary.get("day_number") or 0
+    last_updated = _esc(str(summary.get("last_updated") or ""))
+
+    chips_html = ""
+    if theses:
+        chip_items = "".join(_hero_chip(t) for t in theses[:3])
+        chips_html = (
+            f'<div class="label">Currently betting on</div>'
+            f'<div class="chips">{chip_items}</div>'
+        )
+
+    return (
+        f'<section class="hero">'
+        f'<p class="tag">Day {day_n} · Updated {last_updated}</p>'
+        f'<h1>{portfolio}'
+        f'<span class="strip {daily_class}">'
+        f' {daily} today · {total} all time · {vs_spy} vs S&amp;P</span></h1>'
+        f'{chips_html}'
+        f'{sparkline_svg}'
+        f'</section>'
+    )
+
+
+def _render_today_move(today_move: dict | None) -> str:
+    if not today_move:
+        return (
+            '<section class="section"><div class="head">'
+            '<h2>Today\'s move</h2></div>'
+            '<p class="empty-state">'
+            'No new positions in the last 5 sessions — '
+            '<a href="/activity/">see the full log →</a>'
+            '</p></section>'
+        )
+    did = int(today_move["id"])
+    action = (today_move.get("action") or "").lower()
+    badge_cls = f"badge badge-{action}" if action in ("buy", "sell", "hold") else "badge"
+    ticker = _esc(today_move.get("ticker") or "")
+    notional = _fmt_money(today_move.get("notional"))
+    pct = float(today_move.get("pct_of_portfolio") or 0)
+    reasoning = _esc(_truncate(today_move.get("reasoning") or "", 150))
+    return (
+        f'<section class="section"><div class="head">'
+        f'<h2>Today\'s move</h2>'
+        f'<a class="more" href="/activity/#decisions">All decisions →</a>'
+        f'</div>'
+        f'<a class="move-card" href="/trade/{did}/">'
+        f'<div class="head">'
+        f'<span class="{badge_cls}">{action.upper()}</span> '
+        f'<span class="ticker">{ticker}</span> · {notional} · {pct:.1f}% of portfolio'
+        f'</div>'
+        f'<p class="reasoning">{reasoning}</p>'
+        f'</a></section>'
+    )
+
+
+def _render_recent_learnings(attribution_top: dict | None,
+                             worst_loser: dict | None) -> str:
+    if not attribution_top and not worst_loser:
+        return ""
+    if attribution_top:
+        cat = _esc(attribution_top.get("category") or "")
+        n = attribution_top.get("sample_size") or 0
+        avg = _fmt_signed_pct(attribution_top.get("avg_outcome_30d"))
+        working = (
+            f'<a class="card" href="/attribution/">'
+            f'<div class="lbl">What\'s working</div>'
+            f'<h3 class="gain">{cat}</h3>'
+            f'<p>{n} trades · {avg} avg</p></a>'
+        )
+    else:
+        working = (
+            '<div class="card disabled"><div class="lbl">What\'s working</div>'
+            '<p>Not enough samples yet.</p></div>'
+        )
+    if worst_loser:
+        ticker = _esc(worst_loser.get("ticker") or "")
+        pct = _fmt_signed_pct(worst_loser.get("outcome_30d_pct"))
+        didnt = (
+            f'<a class="card" href="/mistakes/">'
+            f'<div class="lbl">What didn\'t</div>'
+            f'<h3 class="loss"><span class="ticker">{ticker}</span> {pct}</h3>'
+            f'<p>Worst recent closed loser.</p></a>'
+        )
+    else:
+        didnt = (
+            '<div class="card disabled"><div class="lbl">What didn\'t</div>'
+            '<p>No closed losers in window.</p></div>'
+        )
+    return (
+        '<section class="section"><div class="head">'
+        '<h2>Recent learnings</h2>'
+        '<a class="more" href="/learning/">Learning →</a>'
+        '</div>'
+        f'<div class="card-grid">{working}{didnt}</div>'
+        '</section>'
+    )
+
+
+def _render_memo_block(memo: dict | None) -> str:
+    if not memo:
+        return ""
+    body = _esc(_truncate(memo.get("content") or "", 280))
+    session_date = _esc(str(memo.get("session_date") or ""))
+    return (
+        '<section class="section"><div class="head">'
+        '<h2>From today\'s session memo</h2>'
+        '<a class="more" href="/activity/#memos">All memos →</a>'
+        '</div>'
+        f'<blockquote class="memo-block">'
+        f'<div class="meta">{session_date}</div>'
+        f'{body}</blockquote>'
+        '</section>'
+    )
+
+
+def _methodology_link(label: str, child_path: str, ready: bool) -> str:
+    href = child_path if ready else "/how-it-works/"
+    return f'<a href="{href}">{_esc(label)}</a>'
+
+
+def _render_methodology_strip(state: dict) -> str:
+    state = state or {}
+    return (
+        '<div class="methodology-strip">'
+        'Built by an AI agent (Claude Haiku for execution, Sonnet for strategy). '
+        + _methodology_link("How it works", "/about/", state.get("about", False))
+        + ' · '
+        + _methodology_link("Sample tool-call trace", "/trace/", state.get("trace", False))
+        + ' · '
+        + _methodology_link("Model & cost", "/internals/", state.get("internals", False))
+        + '</div>'
+    )
+
+
+def render_homepage(*, summary: dict, theses: list[dict],
+                    sparkline_svg: str, today_move: dict | None,
+                    attribution_top: dict | None, worst_loser: dict | None,
+                    memo: dict | None, how_it_works_state: dict,
+                    base_url: str) -> str:
+    """Render the curated landing homepage."""
+    base = base_url.rstrip("/")
+    daily_pnl = summary.get("daily_pnl") or 0
+    portfolio = summary.get("portfolio_value") or 0
+    description = (
+        f"Portfolio: {_fmt_money(portfolio)} · "
+        f"Today: {_fmt_money(daily_pnl)} ({_fmt_signed_pct(summary.get('daily_pnl_pct'))})"
+    )
+
+    content = (
+        _render_homepage_hero(summary, theses, sparkline_svg)
+        + _render_today_move(today_move)
+        + _render_recent_learnings(attribution_top, worst_loser)
+        + _render_memo_block(memo)
+        + _render_methodology_strip(how_it_works_state)
+    )
+
+    return _render_page_shell(
+        title="Bikini Bottom Capital",
+        description=description,
+        active_nav="home",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/",
     )
