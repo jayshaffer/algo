@@ -107,6 +107,8 @@ class TestGatherDashboardData:
             [],
             # get_signal_attribution
             [],
+            # get_recent_strategy_memos
+            [],
         ]
 
         # Set up fetchone side_effect for sequential calls:
@@ -126,7 +128,7 @@ class TestGatherDashboardData:
         # Verify all top-level keys present
         assert set(result.keys()) == {
             "summary", "snapshots", "positions", "decisions", "theses",
-            "benchmark", "mistakes", "attribution", "_pages",
+            "benchmark", "mistakes", "attribution", "memos", "_pages",
         }
 
         # Verify snapshots
@@ -292,22 +294,23 @@ class TestGatherDashboardData:
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
     def test_query_count(self, mock_benchmark, mock_db):
-        """Verifies exactly 12 queries are executed.
+        """Verifies exactly 13 queries are executed.
 
         Breakdown: 4 fetchall (snapshots/positions/decisions/theses)
         + 3 fetchone (latest/first/previous snapshots)
         + 2 pages (all-decision-ids/all-thesis-ids)
-        + 3 new helpers (get_closed_losers/get_retired_rules/get_signal_attribution)
-        = 12 total
+        + 4 new helpers (get_closed_losers/get_retired_rules/
+          get_signal_attribution/get_recent_strategy_memos)
+        = 13 total
         """
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], [], [], [], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], [], [], [], [], []]
         mock_db.fetchone.side_effect = [None, None, None]
 
         gather_dashboard_data(session_date)
 
-        assert mock_db.execute.call_count == 12
+        assert mock_db.execute.call_count == 13
 
     @patch("v2.dashboard_publish.get_deposit_history")
     def test_daily_pnl_excludes_same_day_deposit_end_to_end(self, mock_history, mock_benchmark, mock_db):
@@ -1424,6 +1427,49 @@ class TestEmitStaticPages:
         # No files should have been written
         assert not (tmp_path / "mistakes").exists()
         assert not (tmp_path / "attribution").exists()
+
+
+class TestGatherMemos:
+    def test_gather_dashboard_data_includes_memos(self):
+        from v2.dashboard_publish import gather_dashboard_data
+
+        fake_memos = [
+            {"id": 9, "session_date": date(2026, 5, 4),
+             "memo_type": "session", "content": "Holding the AI book."},
+            {"id": 8, "session_date": date(2026, 5, 3),
+             "memo_type": "session", "content": "Macro chop unresolved."},
+        ]
+        with patch("v2.dashboard_publish.get_recent_strategy_memos",
+                   return_value=fake_memos), \
+             patch("v2.dashboard_publish.get_cursor"), \
+             patch("v2.dashboard_publish.get_signal_attribution", return_value=[]), \
+             patch("v2.dashboard_publish.get_closed_losers", return_value=[]), \
+             patch("v2.dashboard_publish.get_retired_rules", return_value=[]), \
+             patch("v2.dashboard_publish.get_net_deposits",
+                   return_value=Decimal("0")), \
+             patch("v2.dashboard_publish.fetch_spy_benchmark", return_value=[]):
+            data = gather_dashboard_data(date(2026, 5, 4))
+
+        assert "memos" in data
+        assert len(data["memos"]) == 2
+        assert data["memos"][0]["content"] == "Holding the AI book."
+
+    def test_write_json_files_emits_memos(self, tmp_path):
+        from v2.dashboard_publish import write_json_files
+
+        data = {
+            "memos": [{"id": 1, "session_date": "2026-05-04",
+                       "content": "test"}],
+            "summary": {}, "snapshots": [], "positions": [], "decisions": [],
+            "theses": [], "benchmark": [], "mistakes": {},
+            "attribution": [],
+        }
+        write_json_files(data, str(tmp_path))
+        memos_file = tmp_path / "data" / "memos.json"
+        assert memos_file.exists()
+        with memos_file.open() as f:
+            payload = json.load(f)
+        assert payload[0]["content"] == "test"
 
 
 class TestRenderSparklineSvg:

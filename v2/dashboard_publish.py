@@ -35,6 +35,7 @@ from .dashboard_pages import (
 from .database.connection import get_cursor
 from .database.trading_db import (
     get_closed_losers,
+    get_recent_strategy_memos,
     get_retired_rules,
     get_signal_attribution,
 )
@@ -364,6 +365,21 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         attribution_rows = []
     attribution = [dict(r) for r in attribution_rows]
 
+    try:
+        memo_rows = get_recent_strategy_memos(n=10)
+    except Exception:
+        logger.warning("Failed to gather strategy memos", exc_info=True)
+        memo_rows = []
+    memos = [
+        {
+            "id": m["id"],
+            "session_date": m["session_date"],
+            "memo_type": m.get("memo_type"),
+            "content": m["content"],
+        }
+        for m in memo_rows
+    ]
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
@@ -376,6 +392,7 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         "benchmark": benchmark,
         "mistakes": mistakes,
         "attribution": attribution,
+        "memos": memos,
         "_pages": pages,  # NEW
     }
 
@@ -766,7 +783,7 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     files_written = []
     for key in (
         "summary", "snapshots", "positions", "decisions",
-        "theses", "benchmark", "mistakes", "attribution",
+        "theses", "benchmark", "mistakes", "attribution", "memos",
     ):
         if key not in data:
             continue
