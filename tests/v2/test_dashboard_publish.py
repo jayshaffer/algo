@@ -1379,3 +1379,48 @@ class TestGatherDashboardDataMistakesAttribution:
         assert data["mistakes"]["retired_rules"][0]["rule_text"] == "X"
         assert "attribution" in data
         assert data["attribution"][0]["category"] == "earnings"
+
+
+class TestEmitStaticPages:
+    def test_writes_mistakes_and_attribution_files(self, tmp_path):
+        from decimal import Decimal
+        from v2.dashboard_publish import emit_static_pages
+
+        data = {
+            "mistakes": {
+                "closed_losers": [
+                    {"id": 1, "date": "2026-04-30", "ticker": "TSLA",
+                     "action": "buy", "quantity": 5, "price": 200,
+                     "reasoning": "EV", "outcome_7d": Decimal("-3.0"),
+                     "outcome_30d": Decimal("-12.0")},
+                ],
+                "retired_rules": [],
+            },
+            "attribution": [
+                {"category": "earnings", "sample_size": 30, "sample_size_30d": 24,
+                 "avg_outcome_7d": Decimal("1.2"), "avg_outcome_30d": Decimal("3.4"),
+                 "win_rate_7d": Decimal("0.6"), "win_rate_30d": Decimal("0.5")},
+            ],
+        }
+
+        emit_static_pages(data, str(tmp_path), base_url="https://example.com")
+
+        mistakes_html = (tmp_path / "mistakes" / "index.html").read_text()
+        assert "TSLA" in mistakes_html
+        attribution_html = (tmp_path / "attribution" / "index.html").read_text()
+        assert "earnings" in attribution_html
+
+        mistakes_png = (tmp_path / "og" / "mistakes.png").read_bytes()
+        assert mistakes_png[:8] == b"\x89PNG\r\n\x1a\n"
+        attribution_png = (tmp_path / "og" / "attribution.png").read_bytes()
+        assert attribution_png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_no_op_when_base_url_missing(self, tmp_path):
+        from v2.dashboard_publish import emit_static_pages
+
+        emit_static_pages({"mistakes": {"closed_losers": [], "retired_rules": []},
+                           "attribution": []}, str(tmp_path), base_url="")
+
+        # No files should have been written
+        assert not (tmp_path / "mistakes").exists()
+        assert not (tmp_path / "attribution").exists()
