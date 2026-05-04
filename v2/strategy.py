@@ -13,7 +13,6 @@ from datetime import UTC, date, datetime
 from .attribution import get_attribution_summary
 from .claude_client import get_claude_client, run_agentic_loop
 from .database.trading_db import (
-    clear_current_strategy_state,
     get_current_strategy_state,
     get_recent_decisions,
     insert_strategy_memo,
@@ -182,7 +181,6 @@ def tool_update_strategy_identity(
 
     new_version = (current["version"] + 1) if current else 1
 
-    clear_current_strategy_state()
     state_id = insert_strategy_state(
         identity_text=identity_text,
         risk_posture=risk_posture,

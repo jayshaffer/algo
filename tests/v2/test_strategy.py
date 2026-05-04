@@ -60,9 +60,8 @@ class TestStrategyReflectionResult:
 
 class TestToolUpdateStrategyIdentity:
     @patch("v2.strategy.insert_strategy_state")
-    @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
-    def test_updates_existing_identity(self, mock_get, mock_clear, mock_insert):
+    def test_updates_existing_identity(self, mock_get, mock_insert):
         from datetime import timedelta
 
         from v2.strategy import tool_update_strategy_identity
@@ -78,14 +77,13 @@ class TestToolUpdateStrategyIdentity:
             preferred_signals=["macro"],
             avoided_signals=["legal"],
         )
-        mock_clear.assert_called_once()
+        # clear is now folded into insert_strategy_state; only one call needed
         mock_insert.assert_called_once()
         assert "version 3" in result
 
     @patch("v2.strategy.insert_strategy_state")
-    @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
-    def test_bootstraps_first_identity(self, mock_get, mock_clear, mock_insert):
+    def test_bootstraps_first_identity(self, mock_get, mock_insert):
         from v2.strategy import tool_update_strategy_identity
         mock_get.return_value = None
         mock_insert.return_value = 1
@@ -99,6 +97,43 @@ class TestToolUpdateStrategyIdentity:
         )
         mock_insert.assert_called_once()
         assert "version 1" in result
+
+    def test_insert_failure_does_not_wipe_prior_state(self, mock_db, mock_cursor):
+        """Clear+insert must be atomic. If the INSERT fails, the prior
+        is_current=TRUE row must remain intact (transaction rolls back the
+        UPDATE that cleared it).
+        """
+        from v2.database.trading_db import insert_strategy_state
+
+        # Simulate the INSERT raising mid-cursor; the surrounding get_cursor
+        # context manager rolls back on exception.
+        cur = mock_cursor
+        cur.execute.side_effect = [
+            None,                               # UPDATE clears prior is_current
+            Exception("simulated INSERT crash") # INSERT fails
+        ]
+
+        try:
+            insert_strategy_state(
+                identity_text="new",
+                risk_posture="aggressive",
+                sector_biases={},
+                preferred_signals=[],
+                avoided_signals=[],
+                version=2,
+            )
+            raise AssertionError("expected the simulated INSERT to raise")
+        except Exception as e:
+            assert "simulated INSERT crash" in str(e)
+
+        # Both UPDATE and INSERT executed against the SAME cursor (i.e. the
+        # same connection / transaction). When the get_cursor context exits
+        # via exception, conn.rollback() runs — the UPDATE is undone.
+        # We verify the cursor saw both calls and no separate connection
+        # was opened for the clear.
+        assert cur.execute.call_count == 2, (
+            f"Expected UPDATE+INSERT on one cursor; got {cur.execute.call_count} calls"
+        )
 
 
 class TestToolProposeRule:
@@ -680,9 +715,8 @@ class TestReflectionFormationInjection:
 
 class TestIdentityUpdateGuard:
     @patch("v2.strategy.insert_strategy_state")
-    @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
-    def test_warns_if_recently_updated(self, mock_get, mock_clear, mock_insert):
+    def test_warns_if_recently_updated(self, mock_get, mock_insert):
         """Should return warning if identity was updated within 3 days."""
 
         from v2.strategy import tool_update_strategy_identity
@@ -700,13 +734,12 @@ class TestIdentityUpdateGuard:
         )
 
         assert "Warning" in result
-        mock_clear.assert_not_called()
+        # clear is now folded into insert_strategy_state; guard blocks both
         mock_insert.assert_not_called()
 
     @patch("v2.strategy.insert_strategy_state")
-    @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
-    def test_warning_does_not_promise_retry_will_succeed(self, mock_get, mock_clear, mock_insert):
+    def test_warning_does_not_promise_retry_will_succeed(self, mock_get, mock_insert):
         """P3.42: the prior warning text said 'To proceed anyway, call
         update_strategy_identity again.' — but a retry hits the same guard
         (or finds a now-0-days-old freshly-written state), so the LLM is
@@ -733,9 +766,8 @@ class TestIdentityUpdateGuard:
         assert "call again" not in result.lower()
 
     @patch("v2.strategy.insert_strategy_state")
-    @patch("v2.strategy.clear_current_strategy_state")
     @patch("v2.strategy.get_current_strategy_state")
-    def test_allows_update_if_not_recent(self, mock_get, mock_clear, mock_insert):
+    def test_allows_update_if_not_recent(self, mock_get, mock_insert):
         """Should allow update if identity hasn't been updated in >3 days."""
         from datetime import timedelta
 
@@ -755,5 +787,5 @@ class TestIdentityUpdateGuard:
         )
 
         assert "version 6" in result
-        mock_clear.assert_called_once()
+        # clear is now folded into insert_strategy_state; one call covers both
         mock_insert.assert_called_once()
