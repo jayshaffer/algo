@@ -210,6 +210,21 @@ class TestRunEntertainmentPipeline:
         result = run_entertainment_pipeline()
         assert "Context gathering failed" in result.error
 
+    @patch("v2.entertainment.posted_tweet_exists", return_value=True)
+    @patch("v2.entertainment.get_twitter_client")
+    def test_skips_twitter_if_already_posted_today(self, mock_client, mock_check):
+        """Mirror of the recap-stage rerun guard. If today's entertainment
+        tweet already exists for Twitter, skip generation and posting."""
+        from v2.entertainment import run_entertainment_pipeline
+
+        mock_client.return_value = object()  # truthy, not None
+
+        result = run_entertainment_pipeline()
+        assert result.skipped is True
+        mock_check.assert_called_with(  # date arg first; we don't assert the date value
+            mock_check.call_args[0][0], "entertainment", "twitter",
+        )
+
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_tweet")
     @patch("v2.entertainment.generate_entertainment_tweet")
@@ -307,3 +322,27 @@ class TestEntertainmentBluesky:
         assert result.posted is True
         assert result.bluesky_posted is False
         assert "Bluesky generation failed" in result.bluesky_error
+
+    @patch("v2.entertainment.posted_tweet_exists")
+    @patch("v2.entertainment.get_bluesky_client")
+    @patch("v2.entertainment.post_to_bluesky")
+    @patch("v2.entertainment.generate_bluesky_entertainment_post")
+    def test_skips_bluesky_if_already_posted_today(
+        self, mock_gen, mock_post, mock_bs_client, mock_check
+    ):
+        """Same guard for the Bluesky branch of the entertainment stage."""
+        from v2.entertainment import _post_entertainment_bluesky, EntertainmentResult
+        from datetime import date
+
+        mock_bs_client.return_value = object()
+        # First call: twitter check (not used in this code path); second:
+        # bluesky check returns True. Use side_effect indexed by platform.
+        def _check(_d, _t, platform):
+            return platform == "bluesky"
+        mock_check.side_effect = _check
+
+        result = EntertainmentResult()
+        _post_entertainment_bluesky("ctx", date(2026, 5, 3), "claude-haiku-4-5-20251001", result)
+
+        mock_gen.assert_not_called()
+        mock_post.assert_not_called()
