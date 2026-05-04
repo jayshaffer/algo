@@ -73,16 +73,19 @@ async function fetchJSON(file) {
 }
 
 async function fetchAllData() {
-  var [summary, snapshots, positions, decisions, theses, benchmark] = await Promise.all([
+  var [summary, snapshots, positions, decisions, theses, benchmark, mistakes, attribution] = await Promise.all([
     fetchJSON("summary.json"),
     fetchJSON("snapshots.json"),
     fetchJSON("positions.json"),
     fetchJSON("decisions.json"),
     fetchJSON("theses.json"),
     fetchJSON("benchmark.json"),
+    fetchJSON("mistakes.json"),
+    fetchJSON("attribution.json"),
   ]);
   return { summary: summary, snapshots: snapshots, positions: positions,
-           decisions: decisions, theses: theses, benchmark: benchmark };
+           decisions: decisions, theses: theses, benchmark: benchmark,
+           mistakes: mistakes, attribution: attribution };
 }
 
 // === Renderers ===
@@ -400,6 +403,76 @@ function renderTheses(theses) {
   });
 }
 
+function renderMistakes(data) {
+  var tbody = document.querySelector("#mistakes-losers-table tbody");
+  var empty = document.getElementById("mistakes-empty");
+  var rulesList = document.getElementById("mistakes-rules-list");
+  var hasLosers = data && data.closed_losers && data.closed_losers.length > 0;
+  var hasRules = data && data.retired_rules && data.retired_rules.length > 0;
+
+  if (!hasLosers && !hasRules) {
+    if (empty) empty.style.display = "";
+    return;
+  }
+
+  if (tbody) {
+    var losers = (data.closed_losers || []).slice(0, 3);
+    tbody.innerHTML = losers.map(function (d) {
+      var o30 = d.outcome_30d != null ? formatPct(d.outcome_30d) : "—";
+      return "<tr>" +
+        "<td><a href=\"/trade/" + Number(d.id) + "/\">" + escapeHtml(d.ticker || "") + "</a></td>" +
+        "<td>" + escapeHtml((d.action || "").toUpperCase()) + "</td>" +
+        "<td class=\"num " + pnlClass(d.outcome_30d) + "\">" + o30 + "</td>" +
+      "</tr>";
+    }).join("");
+  }
+
+  if (rulesList) {
+    var rules = (data.retired_rules || []).slice(0, 2);
+    rulesList.innerHTML = rules.map(function (r) {
+      return "<li>" + escapeHtml(r.rule_text || "") + "<br>" +
+        "<span class=\"rule-meta\">retired " + escapeHtml(String(r.retired_at || "")) +
+        " — " + escapeHtml(r.retirement_reason || "") + "</span></li>";
+    }).join("");
+  }
+}
+
+function renderAttribution(data) {
+  var canvas = document.getElementById("attribution-chart");
+  var empty = document.getElementById("attribution-empty");
+
+  if (!data || data.length === 0) {
+    if (empty) empty.style.display = "";
+    if (canvas) canvas.style.display = "none";
+    return;
+  }
+
+  var top = data.slice().sort(function (a, b) {
+    return (Number(b.sample_size) || 0) - (Number(a.sample_size) || 0);
+  }).slice(0, 5);
+
+  new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: top.map(function (r) { return r.category; }),
+      datasets: [{
+        label: "avg 30d outcome",
+        data: top.map(function (r) { return Number(r.avg_outcome_30d || 0); }),
+        backgroundColor: top.map(function (r) {
+          return Number(r.avg_outcome_30d || 0) >= 0
+            ? "rgba(0, 212, 170, 0.7)"
+            : "rgba(220, 80, 80, 0.7)";
+        }),
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+
 // === Init ===
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -410,6 +483,8 @@ document.addEventListener("DOMContentLoaded", function () {
     renderPositions(data.positions);
     renderDecisions(data.decisions);
     renderTheses(data.theses);
+    renderMistakes(data.mistakes);
+    renderAttribution(data.attribution);
   }).catch(function (err) {
     console.error("Failed to load dashboard data:", err);
     document.getElementById("last-updated").textContent = "Failed to load data";

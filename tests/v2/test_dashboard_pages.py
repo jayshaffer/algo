@@ -240,3 +240,118 @@ class TestRenderThesisPage:
             base_url="https://example.com",
         )
         assert "$1,450.25" in html
+
+
+from datetime import date as _date
+
+
+class TestRenderMistakesPage:
+    def _losers(self, n=2):
+        return [
+            {"id": 100 + i, "date": _date(2026, 4, 28 - i), "ticker": f"TKR{i}",
+             "action": "buy", "quantity": 10, "price": Decimal("50.00"),
+             "reasoning": "Reason text", "outcome_7d": Decimal("-5.0"),
+             "outcome_30d": Decimal("-12.0") - Decimal(i)}
+            for i in range(n)
+        ]
+
+    def _retired(self, n=1):
+        return [
+            {"id": 200 + i, "rule_text": f"Rule {i}: cap macro at $500/day",
+             "category": "macro_signal:fed", "direction": "constraint",
+             "confidence": Decimal("0.7"), "retired_at": _date(2026, 4, 20),
+             "retirement_reason": "stale data"}
+            for i in range(n)
+        ]
+
+    def test_renders_section_for_each_loser(self):
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=self._losers(2),
+            retired_rules=self._retired(1),
+            base_url="https://example.com",
+        )
+        assert "TKR0" in html
+        assert "TKR1" in html
+        assert "Rule 0" in html
+
+    def test_includes_og_meta_block(self):
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=self._losers(1),
+            retired_rules=[],
+            base_url="https://example.com",
+        )
+        assert "https://example.com/og/mistakes.png" in html
+        assert '<meta property="og:title"' in html
+        assert "https://example.com/mistakes/" in html
+
+    def test_empty_state_when_no_data(self):
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=[],
+            retired_rules=[],
+            base_url="https://example.com",
+        )
+        # Empty state per spec.
+        assert "No closed losers" in html or "no losers" in html.lower()
+
+    def test_escapes_user_text(self):
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=[],
+            retired_rules=[{"id": 1, "rule_text": "<script>x</script>",
+                            "category": "x", "direction": "x",
+                            "confidence": Decimal("0.5"),
+                            "retired_at": _date(2026, 4, 1),
+                            "retirement_reason": "<b>bad</b>"}],
+            base_url="https://example.com",
+        )
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+
+class TestRenderAttributionPage:
+    def _attribution(self):
+        return [
+            {"category": "earnings", "sample_size": 30, "sample_size_30d": 24,
+             "avg_outcome_7d": Decimal("1.20"), "avg_outcome_30d": Decimal("3.40"),
+             "win_rate_7d": Decimal("0.6"), "win_rate_30d": Decimal("0.55")},
+            {"category": "fed", "sample_size": 12, "sample_size_30d": 10,
+             "avg_outcome_7d": Decimal("-0.50"), "avg_outcome_30d": Decimal("-1.20"),
+             "win_rate_7d": Decimal("0.4"), "win_rate_30d": Decimal("0.42")},
+        ]
+
+    def test_renders_table_with_each_row(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert "earnings" in html
+        assert "fed" in html
+        assert "<table" in html
+
+    def test_includes_og_meta_block(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert "https://example.com/og/attribution.png" in html
+        assert "https://example.com/attribution/" in html
+
+    def test_empty_state_when_no_attribution(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=[],
+            base_url="https://example.com",
+        )
+        assert "Not enough samples" in html or "no attribution" in html.lower()

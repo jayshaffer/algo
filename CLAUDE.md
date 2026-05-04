@@ -96,6 +96,29 @@ The legacy recap path (twitter.py / bluesky.py orchestrators) stays
 intact while the new pipeline is being validated; a follow-up plan will
 delete it after one week of clean prod runs.
 
+### Weekly social posts
+
+Two cron-triggered posts every Friday afternoon, separate from the daily
+session:
+
+- `python -m v2.social_weekly mistakes` — posts "what didn't work" with a
+  link to `/mistakes/` on the public dashboard. Surfaces the worst recent
+  closed loser or a recently retired rule.
+- `python -m v2.social_weekly attribution` — posts the signal-attribution
+  roundup with a link to `/attribution/`. Names 1–2 best/worst signal
+  types.
+
+Both:
+- Self-skip on weekends and NYSE holidays.
+- Idempotent on retries via `posted_tweet_exists(today, type_label, platform)`.
+- Skip with a non-error log when the underlying data is empty (no losers
+  this week / not enough attribution samples yet).
+- Honor `ALGO_TRADE_POST_DRY_RUN=1`.
+
+The dashboard publishes `/mistakes/` and `/attribution/` permalinks on every
+Stage 6 run, so the linked pages are always fresh against the previous daily
+session's data.
+
 ### Key v2 Modules
 
 - **`agent.py`** — Executor LLM integration. Gets structured trading decisions from Claude Haiku.

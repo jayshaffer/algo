@@ -895,3 +895,44 @@ def get_completed_stages(session_id: int) -> set[str]:
             WHERE session_id = %s AND status = 'completed'
         """, (session_id,))
         return {row["stage_name"] for row in cur.fetchall()}
+
+
+def get_closed_losers(reference_date, limit: int = 15) -> list[dict]:
+    """Decisions in the last 30 days with resolved 30-day outcomes < 0.
+
+    Ordered worst first. Used by the dashboard /mistakes/ page and the
+    weekly mistakes social post. `reference_date` is treated as 'today';
+    the window is `reference_date - 30 days .. reference_date`.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, date, ticker, action, quantity, price, reasoning,
+                   outcome_7d, outcome_30d
+            FROM decisions
+            WHERE date > %s::date - INTERVAL '30 days'
+              AND outcome_30d IS NOT NULL
+              AND outcome_30d < 0
+            ORDER BY outcome_30d ASC
+            LIMIT %s
+        """, (reference_date, limit))
+        return cur.fetchall()
+
+
+def get_retired_rules(reference_date, limit: int = 10) -> list[dict]:
+    """Rules retired in the last 90 days, most recent first.
+
+    `reference_date` is treated as 'today'; the window is
+    `reference_date - 90 days .. reference_date`.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, rule_text, category, direction, confidence,
+                   retired_at, retirement_reason
+            FROM strategy_rules
+            WHERE status = 'retired'
+              AND retired_at IS NOT NULL
+              AND retired_at > %s::date - INTERVAL '90 days'
+            ORDER BY retired_at DESC
+            LIMIT %s
+        """, (reference_date, limit))
+        return cur.fetchall()

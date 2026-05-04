@@ -27,5 +27,14 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Stage 6: dashboard publish
 0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
 
+# Weekly mistakes post (2:00 PM MST / 4:00 PM ET, Friday)
+# Posts "what didn't work" with a link to /mistakes/.
+# Self-skips on NYSE holidays. Idempotent on retries.
+0 14 * * 5 /home/jay/dev/algo/run-docker.sh trading python -m v2.social_weekly mistakes
+
+# Weekly attribution post (2:15 PM MST / 4:15 PM ET, Friday)
+# Posts the attribution roundup with a link to /attribution/.
+15 14 * * 5 /home/jay/dev/algo/run-docker.sh trading python -m v2.social_weekly attribution
+
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
 0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60

@@ -18,13 +18,26 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
-from .dashboard_og import render_home_og, render_thesis_og, render_trade_og
+from .dashboard_og import (
+    render_attribution_og,
+    render_home_og,
+    render_mistakes_og,
+    render_thesis_og,
+    render_trade_og,
+)
 from .dashboard_pages import (
+    render_attribution_page,
     render_homepage_meta,
+    render_mistakes_page,
     render_thesis_page,
     render_trade_page,
 )
 from .database.connection import get_cursor
+from .database.trading_db import (
+    get_closed_losers,
+    get_retired_rules,
+    get_signal_attribution,
+)
 from .executor import get_net_deposits
 
 logger = logging.getLogger("dashboard_publish")
@@ -292,6 +305,30 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     with get_cursor() as cur2:
         pages = gather_all_pages_data(cur2)
 
+    # Mistakes log (closed losers + recently retired rules)
+    try:
+        closed_losers = get_closed_losers(reference_date=session_date, limit=15)
+    except Exception:
+        logger.warning("Failed to gather closed losers", exc_info=True)
+        closed_losers = []
+    try:
+        retired_rules = get_retired_rules(reference_date=session_date, limit=10)
+    except Exception:
+        logger.warning("Failed to gather retired rules", exc_info=True)
+        retired_rules = []
+    mistakes = {
+        "closed_losers": [dict(r) for r in closed_losers],
+        "retired_rules": [dict(r) for r in retired_rules],
+    }
+
+    # Signal attribution snapshot
+    try:
+        attribution_rows = get_signal_attribution()
+    except Exception:
+        logger.warning("Failed to gather signal attribution", exc_info=True)
+        attribution_rows = []
+    attribution = [dict(r) for r in attribution_rows]
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
@@ -302,6 +339,8 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         ],
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
+        "mistakes": mistakes,
+        "attribution": attribution,
         "_pages": pages,  # NEW
     }
 
@@ -430,6 +469,64 @@ def emit_home_og_image(summary: dict, deploy_dir: str) -> None:
             f.write(png)
     except Exception:
         logger.warning("Failed to render homepage OG image", exc_info=True)
+
+
+def emit_static_pages(data: dict, deploy_dir: str, base_url: str) -> None:
+    """Write /mistakes/index.html, /attribution/index.html, and the
+    matching OG PNGs into deploy_dir.
+
+    No-op when base_url is empty (local-only build path).
+    """
+    if not base_url:
+        return
+
+    mistakes = data.get("mistakes") or {"closed_losers": [], "retired_rules": []}
+    attribution = data.get("attribution") or []
+
+    # /mistakes/index.html
+    try:
+        html = render_mistakes_page(
+            closed_losers=mistakes.get("closed_losers", []),
+            retired_rules=mistakes.get("retired_rules", []),
+            base_url=base_url,
+        )
+        page_dir = os.path.join(deploy_dir, "mistakes")
+        os.makedirs(page_dir, exist_ok=True)
+        with open(os.path.join(page_dir, "index.html"), "w") as f:
+            f.write(html)
+    except Exception:
+        logger.warning("Failed to render /mistakes/", exc_info=True)
+
+    # /attribution/index.html
+    try:
+        html = render_attribution_page(
+            attribution=attribution,
+            base_url=base_url,
+        )
+        page_dir = os.path.join(deploy_dir, "attribution")
+        os.makedirs(page_dir, exist_ok=True)
+        with open(os.path.join(page_dir, "index.html"), "w") as f:
+            f.write(html)
+    except Exception:
+        logger.warning("Failed to render /attribution/", exc_info=True)
+
+    # OG images
+    og_dir = os.path.join(deploy_dir, "og")
+    os.makedirs(og_dir, exist_ok=True)
+    losers = mistakes.get("closed_losers", [])
+    top_loser = losers[0] if losers else None
+    try:
+        png = render_mistakes_og(top_loser=top_loser)
+        with open(os.path.join(og_dir, "mistakes.png"), "wb") as f:
+            f.write(png)
+    except Exception:
+        logger.warning("Failed to render mistakes OG", exc_info=True)
+    try:
+        png = render_attribution_og(attribution=attribution)
+        with open(os.path.join(og_dir, "attribution.png"), "wb") as f:
+            f.write(png)
+    except Exception:
+        logger.warning("Failed to render attribution OG", exc_info=True)
 
 
 def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
@@ -632,7 +729,10 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     os.makedirs(data_dir, exist_ok=True)
 
     files_written = []
-    for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
+    for key in (
+        "summary", "snapshots", "positions", "decisions",
+        "theses", "benchmark", "mistakes", "attribution",
+    ):
         if key not in data:
             continue
         file_path = os.path.join(data_dir, f"{key}.json")
@@ -673,6 +773,7 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
         logger.warning("Failed to inject homepage OG meta", exc_info=True)
 
     emit_home_og_image(data.get("summary", {}), deploy_dir)
+    emit_static_pages(data, deploy_dir, base_url=base_url)
 
     # Per-trade / per-thesis pages + OG images
     pages = data.get("_pages")

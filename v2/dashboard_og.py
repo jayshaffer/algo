@@ -140,6 +140,99 @@ def render_home_og(summary: dict) -> bytes:
     return _to_png_bytes(img)
 
 
+def render_mistakes_og(top_loser: dict | None) -> bytes:
+    """Return PNG bytes (1200x630) for the /mistakes/ OG card."""
+    img, draw = _canvas()
+
+    draw.text((48, 90), "WHAT DIDN'T WORK", fill=_ACCENT, font=_load_font(56))
+
+    if top_loser:
+        ticker = str(top_loser.get("ticker", "?"))
+        outcome = top_loser.get("outcome_30d")
+        if outcome is not None:
+            try:
+                outcome_str = f"{Decimal(str(outcome)):+.2f}% (30d)"
+            except Exception:
+                outcome_str = ""
+        else:
+            outcome_str = ""
+        draw.text((48, 200), ticker, fill=_FG, font=_load_font(220))
+        if outcome_str:
+            draw.text((48, 460), outcome_str, fill=_MUTED, font=_load_font(48))
+    else:
+        draw.text(
+            (48, 240),
+            "No closed losers in window.",
+            fill=_FG,
+            font=_load_font(56),
+        )
+
+    return _to_png_bytes(img)
+
+
+def render_attribution_og(attribution: list[dict]) -> bytes:
+    """Return PNG bytes (1200x630) showing the top-5 signal-attribution bars.
+
+    Layout: title at top, baseline at y=400. Bars are 80px wide, 50px gap,
+    starting at x=180. Positive bars (avg_outcome_30d > 0) draw upward in
+    accent color; negative bars draw downward in muted color. Categories
+    are labelled below the baseline.
+    """
+    img, draw = _canvas()
+
+    draw.text((48, 50), "WHAT'S ACTUALLY WORKING", fill=_ACCENT, font=_load_font(48))
+    draw.text((48, 110), "signal attribution (avg 30d outcome)", fill=_MUTED, font=_load_font(28))
+
+    if not attribution:
+        draw.text((48, 280), "Not enough samples yet.", fill=_FG, font=_load_font(56))
+        return _to_png_bytes(img)
+
+    BASELINE = 400
+    BAR_W = 80
+    GAP = 50
+    X0 = 180
+    MAX_BAR_PX = 200
+
+    # Top-5 by sample_size (largest sample first), or fall back to whatever's
+    # there if fewer rows.
+    top = sorted(
+        attribution,
+        key=lambda r: int(r.get("sample_size") or 0),
+        reverse=True,
+    )[:5]
+
+    # Find scale across the displayed slice
+    scores = [
+        float(r.get("avg_outcome_30d") or 0)
+        for r in top
+    ]
+    max_abs = max((abs(s) for s in scores), default=1.0) or 1.0
+
+    # Baseline line
+    draw.line([(48, BASELINE), (1200 - 48, BASELINE)], fill=_MUTED, width=2)
+
+    label_font = _load_font(24)
+    for i, row in enumerate(top):
+        x = X0 + i * (BAR_W + GAP)
+        score = float(row.get("avg_outcome_30d") or 0)
+        height_px = int(round((abs(score) / max_abs) * MAX_BAR_PX))
+        if score >= 0:
+            top_y = BASELINE - height_px
+            color = _ACCENT
+            draw.rectangle([(x, top_y), (x + BAR_W, BASELINE)], fill=color)
+        else:
+            color = _MUTED
+            draw.rectangle([(x, BASELINE), (x + BAR_W, BASELINE + height_px)], fill=color)
+
+        # Category label
+        category = str(row.get("category") or "")
+        if len(category) > 10:
+            category = category[:9] + "…"
+        draw.text((x, BASELINE + MAX_BAR_PX + 20), category, fill=_FG, font=label_font)
+
+    return _to_png_bytes(img)
+
+
 def render_thesis_og(thesis: dict) -> bytes:
     """Return PNG bytes (1200x630) for the OG card of one thesis."""
     img, draw = _canvas()

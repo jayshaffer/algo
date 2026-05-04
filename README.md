@@ -236,6 +236,32 @@ docker compose exec trading python -m v2.premarket
 docker compose exec -e ALGO_TRADE_POST_DRY_RUN=1 trading python -m v2.premarket
 ```
 
+### Weekly Mistakes & Attribution Posts
+
+Two posts that run every Friday afternoon, independent of the daily session:
+
+```bash
+# Friday 14:00 MST — "what didn't work" + link to /mistakes/
+task weekly:mistakes
+# or directly:
+docker compose exec trading python -m v2.social_weekly mistakes
+
+# Friday 14:15 MST — attribution roundup + link to /attribution/
+task weekly:attribution
+docker compose exec trading python -m v2.social_weekly attribution
+```
+
+Both self-skip on weekends and NYSE holidays. Both honor
+`ALGO_TRADE_POST_DRY_RUN=1` for log-only runs that don't post or write to the
+DB. Both skip with a non-error log when the underlying data is empty.
+
+The cron entries live in the repo `crontab` file. After editing the file in
+the repo, install it on the host with:
+
+```bash
+crontab /home/jay/dev/algo/crontab
+```
+
 ### Dashboard
 
 Access at http://localhost:3000
