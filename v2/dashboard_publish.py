@@ -26,9 +26,14 @@ from .dashboard_og import (
     render_trade_og,
 )
 from .dashboard_pages import (
+    render_activity_page,
     render_attribution_page,
+    render_homepage,
     render_homepage_meta,
+    render_how_it_works_hub,
+    render_learning_hub,
     render_mistakes_page,
+    render_performance_page,
     render_thesis_page,
     render_trade_page,
 )
@@ -568,19 +573,6 @@ def gather_all_pages_data(cur) -> dict:
     return {"decision_ids": decision_ids, "thesis_ids": thesis_ids}
 
 
-def inject_homepage_og_meta(deploy_dir: str, summary: dict, base_url: str) -> None:
-    """Replace the <!-- OG_META --> placeholder in deploy_dir/index.html."""
-    index_path = os.path.join(deploy_dir, "index.html")
-    with open(index_path) as f:
-        html = f.read()
-    if "<!-- OG_META -->" not in html:
-        return
-    block = render_homepage_meta(summary, base_url=base_url)
-    html = html.replace("<!-- OG_META -->", block)
-    with open(index_path, "w") as f:
-        f.write(html)
-
-
 def emit_home_og_image(summary: dict, deploy_dir: str) -> None:
     """Render the homepage OG card to deploy_dir/og/home.png."""
     try:
@@ -868,7 +860,123 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
 
 
 # Static asset filenames to copy from public_dashboard/
-_STATIC_ASSETS = ("index.html", "styles.css", "app.js")
+_STATIC_ASSETS = ("styles.css", "app.js")
+
+
+def _detect_how_it_works_state(deploy_dir: str) -> dict:
+    """Return readiness flags for /about/, /internals/, /trace/ at publish time."""
+    return {
+        "about": os.path.exists(os.path.join(deploy_dir, "about", "index.html")),
+        "internals": os.path.exists(os.path.join(deploy_dir, "internals", "index.html")),
+        "trace": os.path.exists(os.path.join(deploy_dir, "trace", "index.html")),
+    }
+
+
+def _select_today_move(decisions: list[dict],
+                       portfolio_value) -> dict | None:
+    """Most-recent significant non-hold decision (notional ≥ $100)."""
+    if not decisions:
+        return None
+    pv = float(portfolio_value or 0)
+    for d in decisions:
+        action = (d.get("action") or "").lower()
+        if action == "hold":
+            continue
+        qty = float(d.get("quantity") or 0)
+        price = float(d.get("price") or 0)
+        notional = qty * price
+        if notional < 100:
+            continue
+        return {
+            "id": d["id"],
+            "ticker": d.get("ticker"),
+            "action": action,
+            "notional": notional,
+            "pct_of_portfolio": (notional / pv * 100.0) if pv > 0 else 0.0,
+            "reasoning": d.get("reasoning"),
+        }
+    return None
+
+
+def _select_attribution_top(attribution: list[dict], min_samples: int = 5) -> dict | None:
+    if not attribution:
+        return None
+    eligible = [a for a in attribution
+                if (a.get("sample_size") or 0) >= min_samples]
+    return eligible[0] if eligible else None
+
+
+def _select_worst_loser(mistakes: dict) -> dict | None:
+    losers = (mistakes or {}).get("closed_losers") or []
+    return losers[0] if losers else None
+
+
+def _select_latest_memo(memos: list[dict]) -> dict | None:
+    return memos[0] if memos else None
+
+
+def emit_homepage(data: dict, deploy_dir: str, base_url: str) -> None:
+    """Render and write index.html — replaces the old static index.html copy."""
+    summary = data.get("summary") or {}
+    snapshots = data.get("snapshots") or []
+    sparkline_input = [
+        {"value": s.get("twr_value", s.get("portfolio_value", s.get("value")))}
+        for s in snapshots
+    ]
+    sparkline = render_sparkline_svg(sparkline_input)
+    today_move = _select_today_move(
+        data.get("decisions") or [],
+        portfolio_value=summary.get("portfolio_value"),
+    )
+    attribution_top = _select_attribution_top(data.get("attribution") or [])
+    worst_loser = _select_worst_loser(data.get("mistakes") or {})
+    memo = _select_latest_memo(data.get("memos") or [])
+    how_it_works = _detect_how_it_works_state(deploy_dir)
+    theses = [t for t in (data.get("theses") or [])
+              if (t.get("status") or "active") == "active"]
+
+    html = render_homepage(
+        summary=summary,
+        theses=theses,
+        sparkline_svg=sparkline,
+        today_move=today_move,
+        attribution_top=attribution_top,
+        worst_loser=worst_loser,
+        memo=memo,
+        how_it_works_state=how_it_works,
+        base_url=base_url,
+    )
+    with open(os.path.join(deploy_dir, "index.html"), "w") as f:
+        f.write(html)
+
+
+def emit_new_pages(data: dict, deploy_dir: str, base_url: str) -> None:
+    """Render performance, activity, learning, how-it-works pages."""
+    summary = data.get("summary") or {}
+    performance = data.get("performance") or {}
+    memos = data.get("memos") or []
+    attribution = data.get("attribution") or []
+    mistakes = data.get("mistakes") or {}
+
+    pages = (
+        ("performance", render_performance_page(
+            summary=summary, performance=performance, base_url=base_url)),
+        ("activity", render_activity_page(
+            base_url=base_url, memos=memos)),
+        ("learning", render_learning_hub(
+            attribution_top3=attribution[:3],
+            losers_top3=(mistakes.get("closed_losers") or [])[:3],
+            retired_rules_count=len(mistakes.get("retired_rules") or []),
+            base_url=base_url)),
+        ("how-it-works", render_how_it_works_hub(
+            child_state=_detect_how_it_works_state(deploy_dir),
+            base_url=base_url)),
+    )
+    for slug, html in pages:
+        page_dir = os.path.join(deploy_dir, slug)
+        os.makedirs(page_dir, exist_ok=True)
+        with open(os.path.join(page_dir, "index.html"), "w") as f:
+            f.write(html)
 
 
 def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
@@ -888,12 +996,6 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
         shutil.copy2(src, dst)
 
     write_json_files(data, deploy_dir)
-
-    # Inject homepage OG meta (no-op if placeholder absent)
-    try:
-        inject_homepage_og_meta(deploy_dir, data.get("summary", {}), base_url=base_url)
-    except Exception:
-        logger.warning("Failed to inject homepage OG meta", exc_info=True)
 
     emit_home_og_image(data.get("summary", {}), deploy_dir)
     emit_static_pages(data, deploy_dir, base_url=base_url)
@@ -916,6 +1018,12 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
                 deploy_dir=deploy_dir,
             )
         logger.info("Detail pages: %s; OG images: %s", page_stats, og_stats)
+
+    # Render homepage + the 4 new pages last so they can detect which
+    # /about/, /internals/, /trace/ children have already been written.
+    if base_url:
+        emit_homepage(data, deploy_dir, base_url=base_url)
+        emit_new_pages(data, deploy_dir, base_url=base_url)
 
     return deploy_dir
 

@@ -898,11 +898,9 @@ class TestAssembleDeployDir:
         }
 
     def test_copies_static_assets(self, tmp_path):
-        """index.html, styles.css, app.js are copied to deploy dir."""
-        # Create fake static assets
+        """styles.css and app.js are copied to deploy dir."""
         assets_dir = tmp_path / "public_dashboard"
         assets_dir.mkdir()
-        (assets_dir / "index.html").write_text("<html>test</html>")
         (assets_dir / "styles.css").write_text("body { color: red; }")
         (assets_dir / "app.js").write_text("console.log('hi');")
         (assets_dir / "README.md").write_text("Docs")  # Should NOT be copied
@@ -910,16 +908,16 @@ class TestAssembleDeployDir:
         deploy_dir = tmp_path / "deploy"
         assemble_deploy_dir(self._sample_data(), str(deploy_dir), str(assets_dir))
 
-        assert (deploy_dir / "index.html").exists()
         assert (deploy_dir / "styles.css").exists()
         assert (deploy_dir / "app.js").exists()
         assert not (deploy_dir / "README.md").exists()
+        # index.html is now produced by emit_homepage, only when base_url is set
+        assert not (deploy_dir / "index.html").exists()
 
     def test_writes_json_data_files(self, tmp_path):
         """data/*.json files are written correctly."""
         assets_dir = tmp_path / "public_dashboard"
         assets_dir.mkdir()
-        (assets_dir / "index.html").write_text("<html>")
         (assets_dir / "styles.css").write_text("")
         (assets_dir / "app.js").write_text("")
 
@@ -937,7 +935,6 @@ class TestAssembleDeployDir:
         """Deploy directory is created automatically."""
         assets_dir = tmp_path / "public_dashboard"
         assets_dir.mkdir()
-        (assets_dir / "index.html").write_text("<html>")
         (assets_dir / "styles.css").write_text("")
         (assets_dir / "app.js").write_text("")
 
@@ -974,7 +971,6 @@ class TestAssembleDeployDirEndToEnd:
         # Set up a fake assets dir with the static files assemble_deploy_dir copies.
         assets = tmp_path / "assets"
         assets.mkdir()
-        (assets / "index.html").write_text("<html><head><!-- OG_META --></head></html>")
         (assets / "styles.css").write_text("body{}")
         (assets / "app.js").write_text("// app")
 
@@ -1008,8 +1004,7 @@ class TestAssembleDeployDirEndToEnd:
         # OG images
         assert (deploy / "og" / "trade" / "1.png").is_file()
         assert (deploy / "og" / "thesis" / "7.png").is_file()
-        # Homepage OG meta injected
-        assert "<!-- OG_META -->" not in (deploy / "index.html").read_text()
+        # Homepage now rendered by emit_homepage with full meta block
         assert '<meta property="og:title"' in (deploy / "index.html").read_text()
         # Homepage OG image is emitted unconditionally
         assert (deploy / "og" / "home.png").is_file()
@@ -1136,42 +1131,6 @@ class TestFetchSpyBenchmark:
 
 import os
 import tempfile
-
-
-class TestInjectHomepageOgMeta:
-    def test_replaces_placeholder_with_meta_block(self, tmp_path):
-        from v2.dashboard_publish import inject_homepage_og_meta
-
-        # Create a fake index.html with the placeholder
-        index = tmp_path / "index.html"
-        index.write_text(
-            "<html><head>\n"
-            "<title>x</title>\n"
-            "<!-- OG_META -->\n"
-            "</head><body></body></html>\n"
-        )
-
-        summary = {"portfolio_value": 12345, "daily_pnl": 100,
-                   "daily_pnl_pct": 1, "last_updated": "2026-05-03"}
-        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
-
-        rendered = index.read_text()
-        assert "<!-- OG_META -->" not in rendered
-        assert '<meta property="og:title"' in rendered
-        assert "https://example.com/og/home.png" in rendered
-
-    def test_no_op_when_placeholder_missing(self, tmp_path):
-        from v2.dashboard_publish import inject_homepage_og_meta
-
-        index = tmp_path / "index.html"
-        index.write_text("<html><head></head><body></body></html>")
-
-        # Must not raise; just leaves the file alone.
-        summary = {"portfolio_value": 0, "daily_pnl": 0,
-                   "daily_pnl_pct": 0, "last_updated": "2026-05-03"}
-        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
-
-        assert "OG_META" not in index.read_text()
 
 
 class TestGatherAllPagesData:
@@ -1383,6 +1342,67 @@ class TestGatherDashboardDataMistakesAttribution:
         assert data["mistakes"]["retired_rules"][0]["rule_text"] == "X"
         assert "attribution" in data
         assert data["attribution"][0]["category"] == "earnings"
+
+
+class TestAssembleDeployDirNewPages:
+    def _minimal_data(self):
+        return {
+            "summary": {"portfolio_value": Decimal("100"), "daily_pnl": Decimal("0"),
+                        "daily_pnl_pct": Decimal("0"), "total_return_pct": Decimal("0"),
+                        "vs_spy_pct": Decimal("0"), "day_number": 1,
+                        "last_updated": "2026-05-04"},
+            "snapshots": [], "positions": [], "decisions": [], "theses": [],
+            "benchmark": [],
+            "mistakes": {"closed_losers": [], "retired_rules": []},
+            "memos": [], "attribution": [],
+            "performance": {"max_drawdown_pct": 0, "win_rate_pct": 0,
+                            "avg_days_held": 0, "best_day_pct": 0,
+                            "worst_day_pct": 0},
+        }
+
+    def _assets(self, tmp_path):
+        assets = tmp_path / "assets"
+        assets.mkdir()
+        (assets / "styles.css").write_text("/* */")
+        (assets / "app.js").write_text("// ")
+        return assets
+
+    def test_homepage_emitted(self, tmp_path):
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        assets = self._assets(tmp_path)
+        deploy = tmp_path / "deploy"
+        assemble_deploy_dir(self._minimal_data(), str(deploy), str(assets),
+                            base_url="https://example.com")
+
+        index = deploy / "index.html"
+        assert index.exists()
+        html = index.read_text()
+        assert 'data-page="home"' in html
+
+    def test_new_pages_emitted(self, tmp_path):
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        assets = self._assets(tmp_path)
+        deploy = tmp_path / "deploy"
+        assemble_deploy_dir(self._minimal_data(), str(deploy), str(assets),
+                            base_url="https://example.com")
+
+        for path in ("performance/index.html", "activity/index.html",
+                     "learning/index.html", "how-it-works/index.html"):
+            assert (deploy / path).exists(), f"missing: {path}"
+
+    def test_how_it_works_marks_unready_children(self, tmp_path):
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        assets = self._assets(tmp_path)
+        deploy = tmp_path / "deploy"
+        assemble_deploy_dir(self._minimal_data(), str(deploy), str(assets),
+                            base_url="https://example.com")
+
+        html = (deploy / "how-it-works" / "index.html").read_text()
+        # None of /about/, /internals/, /trace/ exist in this fixture deploy.
+        assert html.count('class="card disabled"') == 3
 
 
 class TestEmitStaticPages:
