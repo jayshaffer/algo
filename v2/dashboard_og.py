@@ -4,8 +4,14 @@ Pure Pillow — no headless browser, no external service. Output is 1200x630
 PNG bytes ready to write to the deploy directory.
 """
 
+from __future__ import annotations
+
 from decimal import Decimal
 from io import BytesIO
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL import ImageFont as _ImageFontModule
 
 OG_WIDTH = 1200
 OG_HEIGHT = 630
@@ -14,7 +20,7 @@ _FG = (220, 240, 230)    # warm off-white
 _ACCENT = (0, 212, 170)  # bikini-bottom green
 _MUTED = (140, 160, 150)
 
-_FONT_CACHE: dict[int, "ImageFont.FreeTypeFont"] = {}
+_FONT_CACHE: dict[int, _ImageFontModule.FreeTypeFont] = {}
 
 
 def _load_font(size: int):

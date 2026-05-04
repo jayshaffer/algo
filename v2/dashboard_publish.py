@@ -311,12 +311,18 @@ def gather_trade_detail(cur, decision_id: int) -> dict | None:
 
     Caller passes a cursor so this can run in any open transaction.
     Returns None if the decision_id doesn't exist.
+
+    thesis_id is resolved via decisions.playbook_action_id -> playbook_actions.thesis_id
+    since the decisions table does not carry thesis_id directly.
     """
     cur.execute(
         """
-        SELECT id, date, ticker, action, quantity, price, reasoning,
-               outcome_7d, outcome_30d, thesis_id, order_id
-        FROM decisions WHERE id = %s
+        SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price, d.reasoning,
+               d.outcome_7d, d.outcome_30d, d.order_id,
+               pa.thesis_id
+        FROM decisions d
+        LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+        WHERE d.id = %s
         """,
         (decision_id,),
     )
@@ -366,11 +372,12 @@ def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
 
     cur.execute(
         """
-        SELECT id, date, ticker, action, quantity, price,
-               outcome_7d, outcome_30d
-        FROM decisions
-        WHERE thesis_id = %s
-        ORDER BY date DESC, id DESC
+        SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
+               d.outcome_7d, d.outcome_30d
+        FROM decisions d
+        JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+        WHERE pa.thesis_id = %s
+        ORDER BY d.date DESC, d.id DESC
         """,
         (thesis_id,),
     )
