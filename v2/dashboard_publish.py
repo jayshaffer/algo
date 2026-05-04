@@ -25,6 +25,11 @@ from .dashboard_pages import (
     render_trade_page,
 )
 from .database.connection import get_cursor
+from .database.trading_db import (
+    get_closed_losers,
+    get_retired_rules,
+    get_signal_attribution,
+)
 from .executor import get_net_deposits
 
 logger = logging.getLogger("dashboard_publish")
@@ -292,6 +297,30 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     with get_cursor() as cur2:
         pages = gather_all_pages_data(cur2)
 
+    # Mistakes log (closed losers + recently retired rules)
+    try:
+        closed_losers = get_closed_losers(reference_date=session_date, limit=15)
+    except Exception:
+        logger.warning("Failed to gather closed losers", exc_info=True)
+        closed_losers = []
+    try:
+        retired_rules = get_retired_rules(reference_date=session_date, limit=10)
+    except Exception:
+        logger.warning("Failed to gather retired rules", exc_info=True)
+        retired_rules = []
+    mistakes = {
+        "closed_losers": [dict(r) for r in closed_losers],
+        "retired_rules": [dict(r) for r in retired_rules],
+    }
+
+    # Signal attribution snapshot
+    try:
+        attribution_rows = get_signal_attribution()
+    except Exception:
+        logger.warning("Failed to gather signal attribution", exc_info=True)
+        attribution_rows = []
+    attribution = [dict(r) for r in attribution_rows]
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
@@ -302,6 +331,8 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         ],
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
+        "mistakes": mistakes,
+        "attribution": attribution,
         "_pages": pages,  # NEW
     }
 
@@ -632,7 +663,10 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
     os.makedirs(data_dir, exist_ok=True)
 
     files_written = []
-    for key in ("summary", "snapshots", "positions", "decisions", "theses", "benchmark"):
+    for key in (
+        "summary", "snapshots", "positions", "decisions",
+        "theses", "benchmark", "mistakes", "attribution",
+    ):
         if key not in data:
             continue
         file_path = os.path.join(data_dir, f"{key}.json")

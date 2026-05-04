@@ -101,6 +101,12 @@ class TestGatherDashboardData:
             [],
             # all-thesis-ids (gather_all_pages_data)
             [],
+            # get_closed_losers
+            [],
+            # get_retired_rules
+            [],
+            # get_signal_attribution
+            [],
         ]
 
         # Set up fetchone side_effect for sequential calls:
@@ -118,7 +124,10 @@ class TestGatherDashboardData:
         result = gather_dashboard_data(session_date)
 
         # Verify all top-level keys present
-        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark", "_pages"}
+        assert set(result.keys()) == {
+            "summary", "snapshots", "positions", "decisions", "theses",
+            "benchmark", "mistakes", "attribution", "_pages",
+        }
 
         # Verify snapshots
         assert len(result["snapshots"]) == 2
@@ -283,15 +292,22 @@ class TestGatherDashboardData:
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
     def test_query_count(self, mock_benchmark, mock_db):
-        """Verifies exactly 9 queries are executed (4 fetchall + 3 fetchone + 2 pages)."""
+        """Verifies exactly 12 queries are executed.
+
+        Breakdown: 4 fetchall (snapshots/positions/decisions/theses)
+        + 3 fetchone (latest/first/previous snapshots)
+        + 2 pages (all-decision-ids/all-thesis-ids)
+        + 3 new helpers (get_closed_losers/get_retired_rules/get_signal_attribution)
+        = 12 total
+        """
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], [], [], [], []]
         mock_db.fetchone.side_effect = [None, None, None]
 
         gather_dashboard_data(session_date)
 
-        assert mock_db.execute.call_count == 9
+        assert mock_db.execute.call_count == 12
 
     @patch("v2.dashboard_publish.get_deposit_history")
     def test_daily_pnl_excludes_same_day_deposit_end_to_end(self, mock_history, mock_benchmark, mock_db):
@@ -1333,3 +1349,33 @@ class TestEmitDetailPages:
         assert stats["trades_written"] == 2
         assert stats["theses_written"] == 1
         assert stats["failed"] == 1
+
+
+class TestGatherDashboardDataMistakesAttribution:
+    def test_includes_mistakes_and_attribution_keys(self, mock_db, mock_cursor):
+        from datetime import date
+        from v2.dashboard_publish import gather_dashboard_data
+
+        # gather_dashboard_data executes many cursor calls in sequence.
+        # We stub the new helpers via patch since they live in trading_db
+        # and are imported into dashboard_publish.
+        from unittest.mock import patch
+        with patch("v2.dashboard_publish.get_closed_losers", return_value=[
+                    {"id": 1, "ticker": "TSLA", "outcome_30d": -12.0}]), \
+             patch("v2.dashboard_publish.get_retired_rules", return_value=[
+                    {"id": 1, "rule_text": "X"}]), \
+             patch("v2.dashboard_publish.get_signal_attribution", return_value=[
+                    {"category": "earnings", "sample_size": 20,
+                     "avg_outcome_30d": 1.2}]), \
+             patch("v2.dashboard_publish.fetch_spy_benchmark", return_value=[]):
+
+            mock_cursor.fetchall.return_value = []
+            mock_cursor.fetchone.return_value = None
+
+            data = gather_dashboard_data(date(2026, 5, 4))
+
+        assert "mistakes" in data
+        assert data["mistakes"]["closed_losers"][0]["ticker"] == "TSLA"
+        assert data["mistakes"]["retired_rules"][0]["rule_text"] == "X"
+        assert "attribution" in data
+        assert data["attribution"][0]["category"] == "earnings"
