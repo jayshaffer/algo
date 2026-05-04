@@ -186,6 +186,41 @@ def _enrich_snapshots_with_twr_value(snapshots: list[dict]) -> None:
             curr["twr_value"] = prev["twr_value"]
 
 
+def render_sparkline_svg(snapshots: list[dict]) -> str:
+    """Render the last 90 days of equity as an inline SVG polyline.
+
+    Returns "" when fewer than 7 snapshots are supplied — the homepage
+    template hides the sparkline in that case.
+    """
+    if not snapshots or len(snapshots) < 7:
+        return ""
+
+    series = [float(s["value"]) for s in snapshots[-90:]]
+    n = len(series)
+    lo, hi = min(series), max(series)
+    span = hi - lo if hi > lo else 1.0
+    flat = (hi == lo)
+
+    width, height, pad_y = 400.0, 60.0, 5.0
+    plot_h = height - 2 * pad_y
+
+    points = []
+    for i, v in enumerate(series):
+        x = (i / (n - 1)) * width if n > 1 else width / 2
+        if flat:
+            y = height / 2
+        else:
+            y = pad_y + (1.0 - (v - lo) / span) * plot_h
+        points.append(f"{x:.1f},{y:.1f}")
+
+    return (
+        f'<svg class="sparkline" viewBox="0 0 400 60" '
+        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
+        f'<polyline points="{" ".join(points)}" />'
+        f'</svg>'
+    )
+
+
 def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = None) -> dict:
     """Gather all dashboard data in a single DB connection.
 
