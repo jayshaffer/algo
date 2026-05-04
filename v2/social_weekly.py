@@ -141,3 +141,74 @@ def generate_mistakes_post(
         dashboard_base_url=dashboard_base_url,
         model=model,
     )
+
+
+# ---------------------------------------------------------------------------
+# Attribution — context, prompt, generator
+# ---------------------------------------------------------------------------
+
+ATTRIBUTION_SYSTEM_PROMPT = """You run an algorithmic trading operation called Bikini Bottom Capital.
+You post weekly about which signal types are actually predictive.
+
+Your voice:
+- Curious about the data.
+- Comfortable saying "this one didn't work" without spinning it.
+- A little nerdy. Slightly overshare-y about methodology.
+
+Generate ONE post about this week's signal attribution scores.
+
+Respond with JSON: {"text": "post text here"}
+
+Rules:
+- 180 chars max (URL appended after).
+- Name 1–2 signal types and their scores. Not all of them.
+- One non-obvious observation, if there is one. Otherwise just the data.
+- Don't claim "alpha". Use "predictive" / "useful" / "noise"."""
+
+
+def gather_attribution_context() -> str:
+    """Plain-text summary of best + worst signal types by avg_outcome_30d."""
+    rows = get_signal_attribution()
+    if not rows:
+        return ""
+
+    sortable = [r for r in rows if r.get("avg_outcome_30d") is not None]
+    if not sortable:
+        return ""
+    sortable.sort(key=lambda r: float(r.get("avg_outcome_30d") or 0), reverse=True)
+
+    top = sortable[:3]
+    bottom = sortable[-3:][::-1]
+
+    def _fmt(rs):
+        out = []
+        for r in rs:
+            try:
+                pct = f"{float(r.get('avg_outcome_30d') or 0):+.2f}%"
+            except Exception:
+                pct = ""
+            out.append(
+                f"  {r.get('category','?')}: {pct} (n={r.get('sample_size', 0)})"
+            )
+        return "\n".join(out)
+
+    parts = ["BEST PREDICTORS:", _fmt(top)]
+    if bottom and bottom[-1] is not top[-1]:
+        parts.extend(["", "WORST PREDICTORS:", _fmt(bottom)])
+    return "\n".join(parts)
+
+
+def generate_attribution_post(
+    context: str,
+    dashboard_base_url: str,
+    model: str = "claude-haiku-4-5-20251001",
+) -> dict | None:
+    """Generate one attribution-post body."""
+    return _generate_post(
+        system_prompt=ATTRIBUTION_SYSTEM_PROMPT,
+        context=context,
+        type_label="weekly_attribution",
+        permalink="/attribution/",
+        dashboard_base_url=dashboard_base_url,
+        model=model,
+    )

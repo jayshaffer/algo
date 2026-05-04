@@ -63,3 +63,45 @@ class TestGenerateMistakesPost:
 
         mock_get_client.return_value = MagicMock()
         assert generate_mistakes_post("ctx", dashboard_base_url="") is None
+
+
+class TestGatherAttributionContext:
+    def test_summarizes_top_and_bottom(self, mock_db, mock_cursor):
+        from v2.social_weekly import gather_attribution_context
+
+        with patch("v2.social_weekly.get_signal_attribution", return_value=[
+                    {"category": "earnings", "sample_size": 30,
+                     "avg_outcome_30d": Decimal("3.4")},
+                    {"category": "fed", "sample_size": 12,
+                     "avg_outcome_30d": Decimal("-1.2")},
+                    {"category": "macro", "sample_size": 9,
+                     "avg_outcome_30d": Decimal("0.8")},
+                ]):
+            ctx = gather_attribution_context()
+
+        assert "earnings" in ctx
+        assert "fed" in ctx
+
+    def test_handles_no_attribution(self, mock_db, mock_cursor):
+        from v2.social_weekly import gather_attribution_context
+
+        with patch("v2.social_weekly.get_signal_attribution", return_value=[]):
+            ctx = gather_attribution_context()
+        assert ctx == ""
+
+
+class TestGenerateAttributionPost:
+    @patch("v2.social_weekly._call_with_retry")
+    @patch("v2.social_weekly.get_claude_client")
+    def test_generates_text(self, mock_get_client, mock_retry):
+        from v2.social_weekly import generate_attribution_post
+
+        mock_get_client.return_value = MagicMock()
+        mock_retry.return_value = _make_claude_response(
+            {"text": "Earnings signals predicted (+3.4%, n=30); fed news was noise."}
+        )
+        post = generate_attribution_post("ctx", dashboard_base_url="https://example.com")
+        assert post is not None
+        assert "Earnings" in post["text"]
+        assert "https://example.com/attribution/" in post["text"]
+        assert post["type"] == "weekly_attribution"
