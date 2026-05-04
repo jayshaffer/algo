@@ -401,3 +401,87 @@ def render_mistakes_page(closed_losers: list[dict], retired_rules: list[dict],
         losers_section=losers_section,
         rules_section=rules_section,
     )
+
+
+_ATTRIBUTION_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>What's actually working — Bikini Bottom Capital</title>
+$meta_block
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
+<main class="container">
+<section class="panel">
+<h2>What's actually working</h2>
+<p class="subtitle">Signal-attribution scores from the last 90 days of decisions.</p>
+$body
+</section>
+</main>
+<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
+</body>
+</html>
+""")
+
+
+def _render_attribution_table(attribution: list[dict]) -> str:
+    rows: list[str] = []
+    for r in attribution:
+        category = _esc(str(r.get("category") or ""))
+        sample_7d = _esc(str(r.get("sample_size") or 0))
+        sample_30d = _esc(str(r.get("sample_size_30d") or 0))
+        out_7d = _fmt_outcome(r.get("avg_outcome_7d"))
+        out_30d = _fmt_outcome(r.get("avg_outcome_30d"))
+        rows.append(
+            "<tr>"
+            f"<td>{category}</td>"
+            f'<td class="num">{sample_7d}</td>'
+            f'<td class="num">{sample_30d}</td>'
+            f'<td class="num">{out_7d}</td>'
+            f'<td class="num">{out_30d}</td>'
+            "</tr>"
+        )
+    body = "".join(rows)
+    return (
+        '<table class="attribution-table">'
+        "<thead><tr>"
+        "<th>Signal type</th>"
+        '<th class="num">N (7d)</th>'
+        '<th class="num">N (30d)</th>'
+        '<th class="num">Avg 7d</th>'
+        '<th class="num">Avg 30d</th>'
+        "</tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
+    )
+
+
+def render_attribution_page(attribution: list[dict], base_url: str) -> str:
+    """Return the full HTML for /attribution/index.html."""
+    base = base_url.rstrip("/")
+
+    if attribution:
+        body = _render_attribution_table(attribution)
+    else:
+        body = (
+            '<p class="empty-state">'
+            "Not enough samples yet. Attribution scores require at least "
+            "5 closed decisions per signal type."
+            "</p>"
+        )
+
+    meta_block = _render_meta_block(
+        title="What's actually working — Bikini Bottom Capital",
+        description="Signal-attribution scores. Which inputs predicted, which were noise.",
+        og_image=f"{base}/og/attribution.png",
+        page_url=f"{base}/attribution/",
+        og_type="article",
+    )
+
+    return _ATTRIBUTION_PAGE_TEMPLATE.substitute(
+        meta_block=meta_block,
+        body=body,
+    )

@@ -313,3 +313,45 @@ class TestRenderMistakesPage:
         )
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
+
+
+class TestRenderAttributionPage:
+    def _attribution(self):
+        return [
+            {"category": "earnings", "sample_size": 30, "sample_size_30d": 24,
+             "avg_outcome_7d": Decimal("1.20"), "avg_outcome_30d": Decimal("3.40"),
+             "win_rate_7d": Decimal("0.6"), "win_rate_30d": Decimal("0.55")},
+            {"category": "fed", "sample_size": 12, "sample_size_30d": 10,
+             "avg_outcome_7d": Decimal("-0.50"), "avg_outcome_30d": Decimal("-1.20"),
+             "win_rate_7d": Decimal("0.4"), "win_rate_30d": Decimal("0.42")},
+        ]
+
+    def test_renders_table_with_each_row(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert "earnings" in html
+        assert "fed" in html
+        assert "<table" in html
+
+    def test_includes_og_meta_block(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert "https://example.com/og/attribution.png" in html
+        assert "https://example.com/attribution/" in html
+
+    def test_empty_state_when_no_attribution(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=[],
+            base_url="https://example.com",
+        )
+        assert "Not enough samples" in html or "no attribution" in html.lower()
