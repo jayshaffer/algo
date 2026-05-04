@@ -178,6 +178,64 @@ docker compose exec trading python -m v2.entertainment --news-hours 12 --news-li
 
 This pulls current market headlines and movers, then generates tweets in the Bikini Bottom Capital voice — referencing real tickers, real moves, and SpongeBob universe characters. Tweets are posted automatically and logged to the DB with `tweet_type="entertainment"`.
 
+### Live-Trade Social Pipeline
+
+Replaces the single bare daily recap with one tweet per significant decision, each linking to its `/trade/<id>/` page on the public dashboard. Gated behind a feature flag — opt in by setting `ALGO_ENABLE_TRADE_POSTS=1` in `.env`. When the flag is off, the original recap path runs unchanged.
+
+**What it does:**
+
+- Iterates today's non-hold decisions with notional value ≥ $100, capped at 5 posts per session
+- Generates one Haiku-authored tweet per decision (Bikini Bottom Capital voice, casual + direct)
+- Posts to Twitter and Bluesky with deterministic `/trade/<id>/` and `/thesis/<id>/` URL appends — the LLM never builds URLs, eliminating broken-link risk
+- Per-decision rerun guard: a cron retry won't double-post the same decision
+- Per-decision error isolation: one bad LLM response doesn't drop the rest of the burst
+- Quiet-day fallback: on trading days with no postable decisions, posts the existing Mr. Krabs-style recap so the account doesn't go dark. Weekends and NYSE holidays produce no post
+
+**Enable in prod:**
+
+```bash
+# Add to .env
+ALGO_ENABLE_TRADE_POSTS=1
+
+# Restart trading service so the flag is picked up
+docker compose up -d trading
+
+# Next session run uses the new pipeline
+docker compose exec trading python -m v2.session
+```
+
+**Dry-run mode (no real posts):**
+
+```bash
+# Logs generated post bodies and skips both platform posts and the DB audit row
+docker compose exec -e ALGO_TRADE_POST_DRY_RUN=1 -e ALGO_ENABLE_TRADE_POSTS=1 \
+    trading python -m v2.session --skip-dashboard
+```
+
+`ALGO_TRADE_POST_DRY_RUN=1` honors are also respected by `python -m v2.premarket` below.
+
+**Smoke-test in paper first:**
+
+```bash
+docker compose exec -e ALGO_ENABLE_TRADE_POSTS=1 -e ALGO_TRADE_POST_DRY_RUN=1 \
+    trading-paper python -m v2.session --skip-dashboard
+```
+
+### Pre-Market Post
+
+A separate, cron-triggered post that runs **before** the daily session (typically ~07:30 ET on weekdays). Forward-looking voice referencing 1–2 names from active theses + the latest strategy memo. Skipped on weekends and NYSE holidays. Idempotent on cron retries via `posted_tweet_exists(today, "premarket", platform)`.
+
+```bash
+# Run once (Taskfile)
+task premarket
+
+# Or directly
+docker compose exec trading python -m v2.premarket
+
+# Dry run
+docker compose exec -e ALGO_TRADE_POST_DRY_RUN=1 trading python -m v2.premarket
+```
+
 ### Dashboard
 
 Access at http://localhost:3000
@@ -256,6 +314,15 @@ TWITTER_ACCESS_TOKEN_SECRET=your_token_secret
 # Public Dashboard (optional — publish to GitHub Pages)
 DASHBOARD_REPO_PATH=/path/to/your-org.github.io
 DASHBOARD_URL=https://your-org.github.io
+
+# Live-trade social pipeline (optional)
+# When set to "1", Stage 5 of the daily session posts one tweet per
+# significant decision instead of the legacy single recap. Off by default.
+ALGO_ENABLE_TRADE_POSTS=0
+# When set to "1", any social-post stage (live-trade, premarket, quiet-day
+# recap fallback) logs generated bodies and skips both the platform post
+# and the DB audit row. Useful for end-to-end smoke tests.
+ALGO_TRADE_POST_DRY_RUN=0
 ```
 
 ### Model Options
@@ -284,16 +351,26 @@ DASHBOARD_URL=https://your-org.github.io
 
 Example crontab (`crontab -e` or `crontab /path/to/algo/crontab`):
 
-```cron
-# Backfill outcomes (6 AM ET, Mon-Fri)
-0 8 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.backfill
+The repo ships a working crontab at [`crontab`](./crontab) — install with:
 
-# Consolidated daily session (3 PM ET, Mon-Fri)
-0 19 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.session
-
-# Weekly learning loop (7 AM ET Sunday)
-0 7 * * 0 /path/to/algo/run-docker.sh trading python -m trading.learn --days 60
+```bash
+crontab /home/jay/dev/algo/crontab
 ```
+
+Times are **MST** (America/Denver, UTC-7). Adjust the hour fields if your server runs in a different timezone. The defaults:
+
+```cron
+# Pre-market social post (5:30 AM MST / 7:30 AM ET, Mon-Fri)
+30 5 * * 1-5 cd /home/jay/dev/algo && (task premarket ; task docker:stop:session)
+
+# Daily session (1 PM MST / 3 PM ET, Mon-Fri) — runs all 7 stages
+0 13 * * 1-5 cd /home/jay/dev/algo && (task session ; task docker:stop:session)
+
+# Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
+0 5 * * 0 cd /home/jay/dev/algo && (task learn -- --days 60 ; task docker:stop:session)
+```
+
+The pre-market entry self-skips on weekends and NYSE holidays, so a fixed weekday cron is correct. Stage 5 of the daily session honors `ALGO_ENABLE_TRADE_POSTS` from `.env` — flip it to `1` to switch from the legacy recap to the live-trade pipeline.
 
 ## Project Structure
 
