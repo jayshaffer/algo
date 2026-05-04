@@ -36,6 +36,88 @@ def _render_meta_block(*, title: str, description: str, og_image: str,
     )
 
 
+_NAV_ITEMS = (
+    ("home", "/", "Home"),
+    ("performance", "/performance/", "Performance"),
+    ("activity", "/activity/", "Activity"),
+    ("learning", "/learning/", "Learning"),
+    ("how-it-works", "/how-it-works/", "How it works"),
+)
+
+
+def _render_nav(active_nav: str) -> str:
+    parts = ['<nav class="site-nav"><div class="container">']
+    parts.append('<span class="logo">⌬ Bikini Bottom Capital</span>')
+    parts.append('<button class="hamburger" aria-label="Menu">☰</button>')
+    parts.append('<div class="links">')
+    for key, href, label in _NAV_ITEMS:
+        cls = ' class="active"' if key == active_nav else ''
+        parts.append(f'<a{cls} href="{href}">{label}</a>')
+    parts.append('</div></div></nav>')
+    return "".join(parts)
+
+
+_FOOTER_HTML = (
+    '<footer><div class="container">'
+    '<p>Is mayonnaise a financial instrument?</p>'
+    '<p class="attribution">Data from '
+    '<a href="https://alpaca.markets" target="_blank" rel="noopener">Alpaca</a></p>'
+    '</div></footer>'
+)
+
+
+_PAGE_SHELL_TEMPLATE = Template("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>$title — Bikini Bottom Capital</title>
+$meta_block
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>" />
+<link rel="stylesheet" href="/styles.css" />
+$head_extra
+</head>
+<body data-page="$active_nav">
+$nav
+<main class="container">
+$content
+</main>
+$footer
+<script src="/app.js"></script>
+</body>
+</html>
+""")
+
+
+def _render_page_shell(*, title: str, description: str, active_nav: str,
+                       content: str, og_image: str, page_url: str,
+                       og_type: str = "website",
+                       head_extra: str = "",
+                       data_page: str | None = None) -> str:
+    """Wrap page content in the shared <html> + nav + footer scaffolding.
+
+    `data_page` overrides what's emitted as `<body data-page="…">`. Defaults
+    to `active_nav`. Use it on permalink pages where the nav highlight (e.g.
+    "learning") differs from the app.js dispatch key (e.g. "mistakes").
+    """
+    meta_block = _render_meta_block(
+        title=_esc(title),
+        description=_esc(description),
+        og_image=og_image,
+        page_url=page_url,
+        og_type=og_type,
+    )
+    return _PAGE_SHELL_TEMPLATE.substitute(
+        title=_esc(title),
+        meta_block=meta_block,
+        head_extra=head_extra,
+        active_nav=_esc(data_page or active_nav),
+        nav=_render_nav(active_nav),
+        content=content,
+        footer=_FOOTER_HTML,
+    )
+
+
 def _fmt_money(value: Decimal | int | float | None) -> str:
     if value is None:
         return "$0.00"

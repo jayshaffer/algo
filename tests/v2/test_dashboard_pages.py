@@ -355,3 +355,78 @@ class TestRenderAttributionPage:
             base_url="https://example.com",
         )
         assert "Not enough samples" in html or "no attribution" in html.lower()
+
+
+from v2.dashboard_pages import _render_page_shell
+
+
+class TestRenderPageShell:
+    def _shell(self, **overrides):
+        defaults = dict(
+            title="Test Title",
+            description="Test description",
+            active_nav="home",
+            content="<p>body</p>",
+            og_image="https://example.com/og/test.png",
+            page_url="https://example.com/test/",
+        )
+        defaults.update(overrides)
+        return _render_page_shell(**defaults)
+
+    def test_emits_doctype_and_title(self):
+        html = self._shell()
+        assert html.startswith("<!DOCTYPE html>")
+        assert "<title>Test Title — Bikini Bottom Capital</title>" in html
+
+    def test_includes_og_meta(self):
+        html = self._shell()
+        assert '<meta property="og:title" content="Test Title"' in html
+        assert "https://example.com/og/test.png" in html
+        assert '<meta name="twitter:card" content="summary_large_image"' in html
+
+    def test_links_stylesheet(self):
+        html = self._shell()
+        assert '<link rel="stylesheet" href="/styles.css"' in html
+
+    def test_renders_full_nav(self):
+        html = self._shell()
+        for label, href in [
+            ("Home", "/"),
+            ("Performance", "/performance/"),
+            ("Activity", "/activity/"),
+            ("Learning", "/learning/"),
+            ("How it works", "/how-it-works/"),
+        ]:
+            assert f'href="{href}"' in html
+            assert f">{label}<" in html
+
+    def test_marks_active_nav_item(self):
+        html = self._shell(active_nav="performance")
+        assert 'class="active" href="/performance/"' in html
+        assert 'class="active" href="/"' not in html
+
+    def test_unknown_active_nav_marks_nothing(self):
+        html = self._shell(active_nav="unknown")
+        assert 'class="active"' not in html
+
+    def test_includes_footer(self):
+        html = self._shell()
+        assert "Is mayonnaise a financial instrument?" in html
+        assert "alpaca.markets" in html
+
+    def test_content_rendered_in_main(self):
+        html = self._shell(content="<p>my body</p>")
+        assert "<p>my body</p>" in html
+
+    def test_attaches_data_page_attribute(self):
+        html = self._shell(active_nav="activity")
+        assert 'data-page="activity"' in html
+
+    def test_data_page_overrides_active_nav(self):
+        html = self._shell(active_nav="learning", data_page="mistakes")
+        assert 'data-page="mistakes"' in html
+        assert 'class="active" href="/learning/"' in html
+
+    def test_loads_app_js(self):
+        html = self._shell()
+        assert '<script src="/app.js"></script>' in html
