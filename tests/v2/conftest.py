@@ -97,6 +97,7 @@ def mock_db(mock_cursor):
          patch("v2.bluesky.get_cursor", _get_cursor), \
          patch("v2.dashboard_publish.get_cursor", _get_cursor), \
          patch("v2.premarket.get_cursor", _get_cursor), \
+         patch("v2.social_weekly.get_cursor", _get_cursor), \
          patch("alpaca.data.historical.StockHistoricalDataClient"), \
          patch("v2.database.connection.get_connection") as mock_conn:
         mock_conn.return_value = MagicMock()
