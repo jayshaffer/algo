@@ -17,6 +17,7 @@ from v2.dashboard_publish import (
     assemble_deploy_dir,
     deploy_to_cloudflare,
     fetch_spy_benchmark,
+    gather_all_pages_data,
     gather_dashboard_data,
     gather_thesis_detail,
     gather_trade_detail,
@@ -1033,3 +1034,32 @@ class TestFetchSpyBenchmark:
         result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
 
         assert result == []
+
+
+class TestGatherAllPagesData:
+    def test_returns_all_decision_and_thesis_ids(self, mock_db):
+        # Even decisions outside the homepage 30-day window must be returned —
+        # link permanence is a hard requirement (Cloudflare full-bundle replace).
+        mock_db.fetchall.side_effect = [
+            [{"id": 1}, {"id": 42}, {"id": 99}],   # decisions
+            [{"id": 7}, {"id": 8}],                 # theses
+        ]
+
+        result = gather_all_pages_data(mock_db)
+
+        assert result["decision_ids"] == [1, 42, 99]
+        assert result["thesis_ids"] == [7, 8]
+
+    def test_includes_closed_theses_not_just_active(self, mock_db):
+        mock_db.fetchall.side_effect = [
+            [{"id": 1}],
+            # All statuses returned — caller doesn't filter by status.
+            [{"id": 7}, {"id": 8}, {"id": 9}],
+        ]
+        result = gather_all_pages_data(mock_db)
+        assert result["thesis_ids"] == [7, 8, 9]
+
+    def test_empty_db_returns_empty_lists(self, mock_db):
+        mock_db.fetchall.side_effect = [[], []]
+        result = gather_all_pages_data(mock_db)
+        assert result == {"decision_ids": [], "thesis_ids": []}

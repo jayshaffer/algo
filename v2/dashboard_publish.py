@@ -375,6 +375,20 @@ def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
     return {"thesis": thesis, "decisions": decisions, "position": position}
 
 
+def gather_all_pages_data(cur) -> dict:
+    """Return ID lists for every decision and thesis we need to emit pages for.
+
+    No date filter — Cloudflare Pages does full-bundle replacement on each
+    deploy, so any URL not in this deploy will 404. Link permanence is a hard
+    requirement of the audience-growth strategy.
+    """
+    cur.execute("SELECT id FROM decisions ORDER BY id")
+    decision_ids = [r["id"] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM theses ORDER BY id")
+    thesis_ids = [r["id"] for r in cur.fetchall()]
+    return {"decision_ids": decision_ids, "thesis_ids": thesis_ids}
+
+
 def _build_summary(latest, first, previous, positions_count, session_date,
                    net_deposits=None, daily_deposit=Decimal("0")):
     """Build summary dict from query results.
