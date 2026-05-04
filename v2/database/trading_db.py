@@ -201,6 +201,47 @@ def get_recent_decisions(days=30) -> list:
         return cur.fetchall()
 
 
+def select_postable_decisions_for_date(
+    session_date,
+    min_notional: float,
+    limit: int,
+) -> list[dict]:
+    """Return today's non-hold decisions worth posting about.
+
+    Joined with their underlying thesis via playbook_actions; off-playbook
+    decisions return rows with NULL thesis fields. Ordered by absolute
+    notional value descending so the top `limit` are the highest-impact
+    trades for the day. Filtered to ABS(quantity*price) >= min_notional
+    so micro-trades don't spam the social feed.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                d.id,
+                d.date,
+                d.ticker,
+                d.action,
+                d.quantity,
+                d.price,
+                d.reasoning,
+                d.is_off_playbook,
+                pa.thesis_id AS thesis_id,
+                t.thesis     AS thesis_text,
+                t.direction  AS thesis_direction
+            FROM decisions d
+            LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+            LEFT JOIN theses t            ON t.id  = pa.thesis_id
+            WHERE d.date = %s
+              AND d.action != 'hold'
+              AND d.price IS NOT NULL
+              AND d.quantity IS NOT NULL
+              AND ABS(d.quantity * d.price) >= %s
+            ORDER BY ABS(d.quantity * d.price) DESC
+            LIMIT %s
+        """, (session_date, min_notional, limit))
+        return cur.fetchall()
+
+
 def get_decisions_needing_backfill_7d() -> list:
     """Get decisions needing 7-day outcome backfill."""
     with get_cursor() as cur:

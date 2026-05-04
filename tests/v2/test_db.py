@@ -1059,3 +1059,76 @@ class TestNewsSignalDedup:
         insert_macro_signals_batch(signals)
         sql_template = mock_ev.call_args[0][1]
         assert "ON CONFLICT" in sql_template.upper()
+
+
+class TestSelectPostableDecisionsForDate:
+    """Live-trade pipeline selector: today's significant non-hold decisions."""
+
+    def test_filters_holds_and_micro_trades_orders_by_notional(self, mock_db, mock_cursor):
+        """Sanity-check the SQL: WHERE filters action and notional, ORDER BY
+        is abs(quantity*price) DESC, LIMIT applied."""
+        from datetime import date
+        from v2.database.trading_db import select_postable_decisions_for_date
+
+        mock_cursor.fetchall.return_value = [
+            {"id": 1, "ticker": "NVDA", "action": "buy", "quantity": 10,
+             "price": 500.0, "reasoning": "AI tailwind", "thesis_id": 7,
+             "thesis_text": "AI demand", "thesis_direction": "long",
+             "is_off_playbook": False},
+        ]
+
+        result = select_postable_decisions_for_date(
+            session_date=date(2026, 5, 4),
+            min_notional=100.0,
+            limit=5,
+        )
+
+        sql, params = mock_cursor.execute.call_args[0]
+        sql_lower = sql.lower()
+        assert "where" in sql_lower
+        assert "d.action" in sql_lower or "action" in sql_lower
+        assert "hold" in sql_lower, "must filter out holds"
+        assert "abs(d.quantity * d.price)" in sql_lower or "abs(quantity * price)" in sql_lower, (
+            "must filter on absolute notional"
+        )
+        assert "playbook_actions" in sql_lower
+        assert "theses" in sql_lower
+        assert "order by" in sql_lower
+        assert "desc" in sql_lower
+        assert "limit" in sql_lower
+        assert date(2026, 5, 4) in params
+        assert 100.0 in params
+        assert 5 in params
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
+        assert result[0]["thesis_id"] == 7
+
+    def test_returns_empty_when_no_decisions(self, mock_db, mock_cursor):
+        from datetime import date
+        from v2.database.trading_db import select_postable_decisions_for_date
+
+        mock_cursor.fetchall.return_value = []
+
+        result = select_postable_decisions_for_date(
+            session_date=date(2026, 5, 4), min_notional=100.0, limit=5,
+        )
+        assert result == []
+
+    def test_off_playbook_decision_returns_with_null_thesis(self, mock_db, mock_cursor):
+        """Off-playbook decisions are postable but carry no thesis link."""
+        from datetime import date
+        from v2.database.trading_db import select_postable_decisions_for_date
+
+        mock_cursor.fetchall.return_value = [
+            {"id": 2, "ticker": "TSLA", "action": "sell", "quantity": 5,
+             "price": 250.0, "reasoning": "stop hit", "thesis_id": None,
+             "thesis_text": None, "thesis_direction": None,
+             "is_off_playbook": True},
+        ]
+
+        result = select_postable_decisions_for_date(
+            session_date=date(2026, 5, 4), min_notional=100.0, limit=5,
+        )
+        assert result[0]["thesis_id"] is None
+        assert result[0]["is_off_playbook"] is True
