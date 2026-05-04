@@ -18,6 +18,7 @@ from v2.dashboard_publish import (
     deploy_to_cloudflare,
     fetch_spy_benchmark,
     gather_dashboard_data,
+    gather_thesis_detail,
     gather_trade_detail,
     run_dashboard_stage,
     write_json_files,
@@ -955,6 +956,33 @@ class TestGatherTradeDetail:
         ]
         result = gather_trade_detail(mock_db, decision_id=42)
         assert result["thesis"] is None
+
+
+class TestGatherThesisDetail:
+    def test_returns_thesis_with_decisions_and_position(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            {"id": 7, "ticker": "NVDA", "direction": "long", "thesis": "AI",
+             "entry_trigger": "<$440", "exit_trigger": "$520", "invalidation": "no",
+             "confidence": "high", "status": "active"},
+            {"ticker": "NVDA", "shares": Decimal("12"), "avg_cost": Decimal("450")},
+        ]
+        mock_db.fetchall.side_effect = [
+            [
+                {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+                 "quantity": Decimal("12"), "price": Decimal("450.25"),
+                 "outcome_7d": None, "outcome_30d": None},
+            ],
+        ]
+
+        result = gather_thesis_detail(mock_db, thesis_id=7)
+        assert result["thesis"]["id"] == 7
+        assert len(result["decisions"]) == 1
+        assert result["position"]["ticker"] == "NVDA"
+
+    def test_returns_none_when_missing(self, mock_db):
+        mock_db.fetchone.side_effect = [None]
+        result = gather_thesis_detail(mock_db, thesis_id=999)
+        assert result is None
 
 
 class TestFetchSpyBenchmark:

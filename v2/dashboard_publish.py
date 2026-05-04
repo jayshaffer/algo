@@ -338,6 +338,43 @@ def gather_trade_detail(cur, decision_id: int) -> dict | None:
     return {"decision": decision, "thesis": thesis, "position": position}
 
 
+def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
+    """Return full detail for one thesis page: thesis + decisions + position."""
+    cur.execute(
+        """
+        SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+               invalidation, confidence, status
+        FROM theses WHERE id = %s
+        """,
+        (thesis_id,),
+    )
+    thesis = cur.fetchone()
+    if thesis is None:
+        return None
+    thesis = dict(thesis)
+
+    cur.execute(
+        """
+        SELECT id, date, ticker, action, quantity, price,
+               outcome_7d, outcome_30d
+        FROM decisions
+        WHERE thesis_id = %s
+        ORDER BY date DESC, id DESC
+        """,
+        (thesis_id,),
+    )
+    decisions = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT ticker, shares, avg_cost FROM positions WHERE ticker = %s",
+        (thesis["ticker"],),
+    )
+    pos_row = cur.fetchone()
+    position = dict(pos_row) if pos_row else None
+
+    return {"thesis": thesis, "decisions": decisions, "position": position}
+
+
 def _build_summary(latest, first, previous, positions_count, session_date,
                    net_deposits=None, daily_deposit=Decimal("0")):
     """Build summary dict from query results.
