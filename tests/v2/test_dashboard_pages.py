@@ -149,6 +149,16 @@ class TestRenderTradePage:
         assert "Thesis #99" in html
         assert 'href="/thesis/99/"' in html
 
+    def test_uses_page_shell_with_activity_active(self):
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+        )
+        assert 'data-page="activity"' in html
+        assert 'class="active" href="/activity/"' in html
+
 
 class TestRenderThesisPage:
     def _thesis(self, **overrides):
@@ -241,6 +251,16 @@ class TestRenderThesisPage:
         )
         assert "$1,450.25" in html
 
+    def test_uses_page_shell_with_activity_active(self):
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=[],
+            position=None,
+            base_url="https://example.com",
+        )
+        assert 'data-page="activity"' in html
+        assert 'class="active" href="/activity/"' in html
+
 
 from datetime import date as _date
 
@@ -314,6 +334,17 @@ class TestRenderMistakesPage:
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
+    def test_uses_page_shell_with_learning_active(self):
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=self._losers(1),
+            retired_rules=[],
+            base_url="https://example.com",
+        )
+        assert 'data-page="mistakes"' in html
+        assert 'class="active" href="/learning/"' in html
+
 
 class TestRenderAttributionPage:
     def _attribution(self):
@@ -355,6 +386,16 @@ class TestRenderAttributionPage:
             base_url="https://example.com",
         )
         assert "Not enough samples" in html or "no attribution" in html.lower()
+
+    def test_uses_page_shell_with_learning_active(self):
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert 'data-page="attribution"' in html
+        assert 'class="active" href="/learning/"' in html
 
 
 from v2.dashboard_pages import _render_page_shell

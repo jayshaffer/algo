@@ -163,32 +163,6 @@ def render_homepage_meta(summary: dict, base_url: str) -> str:
     )
 
 
-_TRADE_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>$title — Bikini Bottom Capital</title>
-$meta_block
-<link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
-<main class="container">
-<section class="panel">
-<h2>$action_caps $ticker</h2>
-<p class="trade-summary">$qty_display shares at $price_display on $trade_date</p>
-<h3>Reasoning</h3>
-<p>$reasoning</p>
-$thesis_section
-$outcome_section
-</section>
-</main>
-<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
-</body>
-</html>
-""")
-
 _THESIS_LINK_TEMPLATE = Template(
     '<h3>Thesis</h3>'
     '<p><a href="/thesis/$tid/">$thesis_text</a> '
@@ -210,38 +184,25 @@ def render_trade_page(decision: dict, thesis: dict | None,
                       position: dict | None, base_url: str) -> str:
     """Return the full HTML page for one trade."""
     base = base_url.rstrip("/")
-
-    # Safely coerce IDs to int
     decision_id = int(decision["id"])
 
-    # Raw (unescaped) values for composition
     raw_ticker = str(decision["ticker"])
     raw_qty = decision.get("quantity") or 0
     raw_price = decision.get("price") or 0
     action_upper = str(decision.get("action", "")).lower().upper()
 
-    # Escaped values for direct HTML/attribute output
     ticker_esc = _esc(raw_ticker)
     action_caps = _esc(action_upper)
-
-    # title uses escaped values
-    title = f"{action_caps} {ticker_esc}"
-
-    # og:description — build from raw, escape once
-    description_raw = f"{action_upper} {raw_qty} {raw_ticker} @ {_fmt_money(raw_price)}"
-    description = _esc(description_raw)
-
-    # Display values for body
     qty_display = _esc(str(raw_qty))
-    price_display = _fmt_money(raw_price)  # e.g. "$450.25"
+    price_display = _fmt_money(raw_price)
 
-    # trade_date — isoformat() output is always safe ASCII; escape fallback path
     trade_date = (
         decision["date"].isoformat()
         if hasattr(decision["date"], "isoformat")
         else _esc(str(decision["date"]))
     )
 
+    thesis_section = ""
     if thesis:
         tid = int(thesis["id"])
         raw_thesis_text = str(thesis.get("thesis", ""))
@@ -252,64 +213,36 @@ def render_trade_page(decision: dict, thesis: dict | None,
             direction=_esc(str(thesis.get("direction", ""))),
             confidence=_esc(str(thesis.get("confidence", ""))),
         )
-    else:
-        thesis_section = ""
 
+    outcome_section = ""
     if decision.get("outcome_7d") is not None or decision.get("outcome_30d") is not None:
         outcome_section = _OUTCOME_TEMPLATE.substitute(
             o7=_fmt_outcome(decision.get("outcome_7d")),
             o30=_fmt_outcome(decision.get("outcome_30d")),
         )
-    else:
-        outcome_section = ""
 
-    meta_block = _render_meta_block(
-        title=title,
-        description=description,
+    title_raw = f"{action_upper} {raw_ticker}"
+    description_raw = f"{action_upper} {raw_qty} {raw_ticker} @ {_fmt_money(raw_price)}"
+
+    content = (
+        f'<section class="section">'
+        f'<h2>{action_caps} {ticker_esc}</h2>'
+        f'<p class="trade-summary">{qty_display} shares at {price_display} on {trade_date}</p>'
+        f'<h3>Reasoning</h3>'
+        f'<p>{_esc(str(decision.get("reasoning") or ""))}</p>'
+        f'{thesis_section}{outcome_section}'
+        f'</section>'
+    )
+
+    return _render_page_shell(
+        title=title_raw,
+        description=description_raw,
+        active_nav="activity",
+        content=content,
         og_image=f"{base}/og/trade/{decision_id}.png",
         page_url=f"{base}/trade/{decision_id}/",
         og_type="article",
     )
-
-    return _TRADE_PAGE_TEMPLATE.substitute(
-        title=title,
-        action_caps=action_caps,
-        ticker=ticker_esc,
-        qty_display=qty_display,
-        price_display=price_display,
-        trade_date=trade_date,
-        reasoning=_esc(str(decision.get("reasoning") or "")),
-        thesis_section=thesis_section,
-        outcome_section=outcome_section,
-        meta_block=meta_block,
-    )
-
-
-_THESIS_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>$title — Bikini Bottom Capital</title>
-$meta_block
-<link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
-<main class="container">
-<section class="panel">
-<h2>$ticker — $direction thesis</h2>
-<p class="thesis-meta">Confidence: $confidence · Status: $status</p>
-<h3>Thesis</h3>
-<p>$thesis_text</p>
-$triggers_section
-$decisions_section
-</section>
-</main>
-<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
-</body>
-</html>
-""")
 
 
 def _render_triggers_section(thesis: dict) -> str:
@@ -350,72 +283,40 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
                        position: dict | None, base_url: str) -> str:
     """Return the full HTML page for one thesis."""
     base = base_url.rstrip("/")
-
-    # Coerce ID to int for URL construction
     thesis_id = int(thesis["id"])
 
-    # Raw values for composition
     raw_ticker = str(thesis["ticker"])
     raw_direction = str(thesis.get("direction", ""))
 
-    # Escaped values for direct HTML output
     ticker_esc = _esc(raw_ticker)
     direction_esc = _esc(raw_direction)
     confidence_esc = _esc(str(thesis.get("confidence", "")))
     status_esc = _esc(str(thesis.get("status", "")))
     thesis_text_esc = _esc(str(thesis.get("thesis", "")))
 
-    # title built from escaped pieces
-    title = f"{ticker_esc} — {direction_esc} thesis"
-
-    # og:description — build from raw, escape once
+    title_raw = f"{raw_ticker} — {raw_direction} thesis"
     description_raw = str(thesis.get("thesis", ""))[:160].replace("\n", " ").rstrip()
-    description = _esc(description_raw)
 
-    meta_block = _render_meta_block(
-        title=title,
-        description=description,
+    content = (
+        f'<section class="section">'
+        f'<h2>{ticker_esc} — {direction_esc} thesis</h2>'
+        f'<p class="thesis-meta">Confidence: {confidence_esc} · Status: {status_esc}</p>'
+        f'<h3>Thesis</h3><p>{thesis_text_esc}</p>'
+        f'{_render_triggers_section(thesis)}'
+        f'{_render_decisions_section(decisions)}'
+        f'</section>'
+    )
+
+    return _render_page_shell(
+        title=title_raw,
+        description=description_raw,
+        active_nav="activity",
+        content=content,
         og_image=f"{base}/og/thesis/{thesis_id}.png",
         page_url=f"{base}/thesis/{thesis_id}/",
         og_type="article",
     )
 
-    return _THESIS_PAGE_TEMPLATE.substitute(
-        title=title,
-        ticker=ticker_esc,
-        direction=direction_esc,
-        confidence=confidence_esc,
-        status=status_esc,
-        thesis_text=thesis_text_esc,
-        triggers_section=_render_triggers_section(thesis),
-        decisions_section=_render_decisions_section(decisions),
-        meta_block=meta_block,
-    )
-
-
-_MISTAKES_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>What didn't work — Bikini Bottom Capital</title>
-$meta_block
-<link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
-<main class="container">
-<section class="panel">
-<h2>What didn't work</h2>
-<p class="subtitle">Closed losers (last 30 days) and retired rules (last 90 days). No spin.</p>
-$losers_section
-$rules_section
-</section>
-</main>
-<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
-</body>
-</html>
-""")
 
 
 def _render_loser_row(d: dict) -> str:
@@ -464,62 +365,39 @@ def render_mistakes_page(closed_losers: list[dict], retired_rules: list[dict],
     if closed_losers:
         rows = "".join(_render_loser_row(d) for d in closed_losers)
         losers_section = (
-            "<h3>Closed losers</h3>"
-            f'<ul class="loser-list">{rows}</ul>'
+            '<section class="section"><div class="head">'
+            '<h2>Closed losers</h2></div>'
+            f'<ul class="loser-list">{rows}</ul></section>'
         )
     else:
         losers_section = (
-            '<h3>Closed losers</h3>'
+            '<section class="section"><div class="head">'
+            '<h2>Closed losers</h2></div>'
             '<p class="empty-state">No closed losers in window. '
-            'Either we got lucky or we didn\'t trade enough.</p>'
+            'Either we got lucky or we didn\'t trade enough.</p></section>'
         )
 
     if retired_rules:
         rows = "".join(_render_rule_row(r) for r in retired_rules)
         rules_section = (
-            "<h3>Retired rules</h3>"
-            f'<ul class="rule-list">{rows}</ul>'
+            '<section class="section"><div class="head">'
+            '<h2>Retired rules</h2></div>'
+            f'<ul class="rule-list">{rows}</ul></section>'
         )
     else:
         rules_section = ""
 
-    meta_block = _render_meta_block(
-        title="What didn't work — Bikini Bottom Capital",
+    return _render_page_shell(
+        title="What didn't work",
         description="Closed losers and retired rules. The receipts most accounts hide.",
+        active_nav="learning",
+        data_page="mistakes",
+        content=losers_section + rules_section,
         og_image=f"{base}/og/mistakes.png",
         page_url=f"{base}/mistakes/",
         og_type="article",
     )
 
-    return _MISTAKES_PAGE_TEMPLATE.substitute(
-        meta_block=meta_block,
-        losers_section=losers_section,
-        rules_section=rules_section,
-    )
-
-
-_ATTRIBUTION_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>What's actually working — Bikini Bottom Capital</title>
-$meta_block
-<link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
-<main class="container">
-<section class="panel">
-<h2>What's actually working</h2>
-<p class="subtitle">Signal-attribution scores from the last 90 days of decisions.</p>
-$body
-</section>
-</main>
-<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
-</body>
-</html>
-""")
 
 
 def _render_attribution_table(attribution: list[dict]) -> str:
@@ -564,21 +442,26 @@ def render_attribution_page(attribution: list[dict], base_url: str) -> str:
         body = (
             '<p class="empty-state">'
             "Not enough samples yet. Attribution scores require at least "
-            "5 closed decisions per signal type."
-            "</p>"
+            "5 closed decisions per signal type.</p>"
         )
 
-    meta_block = _render_meta_block(
-        title="What's actually working — Bikini Bottom Capital",
+    content = (
+        '<section class="section">'
+        '<div class="head"><h2>What\'s actually working</h2></div>'
+        '<p class="subtitle">'
+        'Signal-attribution scores from the last 90 days of decisions.</p>'
+        + body + '</section>'
+    )
+
+    return _render_page_shell(
+        title="What's actually working",
         description="Signal-attribution scores. Which inputs predicted, which were noise.",
+        active_nav="learning",
+        data_page="attribution",
+        content=content,
         og_image=f"{base}/og/attribution.png",
         page_url=f"{base}/attribution/",
         og_type="article",
-    )
-
-    return _ATTRIBUTION_PAGE_TEMPLATE.substitute(
-        meta_block=meta_block,
-        body=body,
     )
 
 
