@@ -1132,3 +1132,41 @@ class TestSelectPostableDecisionsForDate:
         )
         assert result[0]["thesis_id"] is None
         assert result[0]["is_off_playbook"] is True
+
+
+class TestGetClosedLosers:
+    def test_returns_only_negative_outcomes_within_window(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_closed_losers
+
+        mock_cursor.fetchall.return_value = [
+            {"id": 11, "date": date(2026, 4, 30), "ticker": "TSLA", "action": "buy",
+             "quantity": 5, "price": 200, "reasoning": "EV cycle",
+             "outcome_7d": -3.2, "outcome_30d": -8.7},
+        ]
+        rows = get_closed_losers(reference_date=date(2026, 5, 4), limit=15)
+        assert rows == mock_cursor.fetchall.return_value
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "outcome_30d IS NOT NULL" in sql
+        assert "outcome_30d < 0" in sql
+        assert "ORDER BY outcome_30d ASC" in sql
+        # window arg is (reference_date,) followed by (limit,)
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == (date(2026, 5, 4), 15)
+
+
+class TestGetRetiredRules:
+    def test_returns_retired_only_within_window(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_retired_rules
+
+        mock_cursor.fetchall.return_value = [
+            {"id": 27, "rule_text": "Cap macro positions at $500/day",
+             "retired_at": "2026-04-22", "retirement_reason": "stale"},
+        ]
+        rows = get_retired_rules(reference_date=date(2026, 5, 4), limit=10)
+        assert rows == mock_cursor.fetchall.return_value
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "status = 'retired'" in sql
+        assert "retired_at" in sql
+        assert "ORDER BY retired_at DESC" in sql
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == (date(2026, 5, 4), 10)
