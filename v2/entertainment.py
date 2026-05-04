@@ -129,7 +129,12 @@ def _post_entertainment_bluesky(
     model: str,
     result: EntertainmentResult,
 ) -> None:
-    bluesky_client = get_bluesky_client()
+    try:
+        bluesky_client = get_bluesky_client()
+    except Exception as e:
+        result.bluesky_error = f"Bluesky auth failed: {e}"
+        logger.error("Entertainment Bluesky skipped — auth failed: %s", e)
+        return
     if bluesky_client is None:
         return
 
