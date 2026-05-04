@@ -4,7 +4,7 @@ Static site deployed to Cloudflare Pages that displays portfolio performance, ho
 
 ## How It Works
 
-The static assets (`index.html`, `styles.css`, `app.js`) and `data/*.json` files are assembled into a deploy directory and published to Cloudflare Pages via `wrangler` after each trading session. No git operations involved — just an HTTP API call.
+The static assets (`styles.css`, `app.js`), the server-rendered HTML pages (homepage + per-page templates), and `data/*.json` files are assembled into a deploy directory and published to Cloudflare Pages via `wrangler` after each trading session. No git operations involved — just an HTTP API call.
 
 ## Deployment
 
@@ -66,3 +66,5 @@ All regenerated automatically by `v2/dashboard_publish.py`:
 | `positions.json` | Current holdings with share counts and cost basis |
 | `decisions.json` | Last 30 days of trades with reasoning and Alpaca order IDs |
 | `theses.json` | Active trade theses with entry/exit triggers |
+| `memos.json` | Last 10 strategy memos for the Activity page |
+| `performance.json` | Derived stats (max drawdown, win rate, best/worst day) |
