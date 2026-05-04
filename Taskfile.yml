@@ -100,6 +100,18 @@ tasks:
     cmds:
       - docker compose exec trading python -m v2.premarket {{.CLI_ARGS}}
 
+  weekly:mistakes:
+    desc: Run the weekly mistakes social post (Friday only; self-skips otherwise)
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.social_weekly mistakes {{.CLI_ARGS}}
+
+  weekly:attribution:
+    desc: Run the weekly attribution social post (Friday only; self-skips otherwise)
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.social_weekly attribution {{.CLI_ARGS}}
+
   # ---------------------------------------------------------------------------
   # Paper trading
   # ---------------------------------------------------------------------------
