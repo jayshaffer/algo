@@ -105,3 +105,97 @@ class TestGenerateAttributionPost:
         assert "Earnings" in post["text"]
         assert "https://example.com/attribution/" in post["text"]
         assert post["type"] == "weekly_attribution"
+
+
+class TestRunMistakesPost:
+    @patch("v2.social_weekly.is_trading_day", return_value=False)
+    def test_skipped_on_weekend(self, mock_is_td):
+        from v2.social_weekly import run_mistakes_post
+
+        result = run_mistakes_post(today=date(2026, 5, 9))  # Saturday
+        assert result.skipped is True
+
+    @patch("v2.social_weekly.is_trading_day", return_value=True)
+    @patch("v2.social_weekly.gather_mistakes_context", return_value="")
+    @patch("v2.social_weekly.get_twitter_client")
+    @patch("v2.social_weekly.get_bluesky_client")
+    def test_skipped_when_no_data(
+        self, mock_bs_client, mock_tw_client, mock_ctx, mock_is_td,
+    ):
+        from v2.social_weekly import run_mistakes_post
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+
+        result = run_mistakes_post(today=date(2026, 5, 8))
+        assert result.skipped is True
+        assert "no data" in (result.skip_reason or "").lower()
+
+    @patch("v2.social_weekly.is_trading_day", return_value=True)
+    @patch("v2.social_weekly.posted_tweet_exists", return_value=True)
+    @patch("v2.social_weekly.gather_mistakes_context", return_value="ctx")
+    @patch("v2.social_weekly.get_twitter_client")
+    @patch("v2.social_weekly.get_bluesky_client")
+    def test_skipped_when_already_posted(
+        self, mock_bs_client, mock_tw_client, mock_ctx, mock_dedup, mock_is_td,
+    ):
+        from v2.social_weekly import run_mistakes_post
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        result = run_mistakes_post(today=date(2026, 5, 8))
+        assert result.skipped is True
+
+    @patch("v2.social_weekly.is_trading_day", return_value=True)
+    @patch("v2.social_weekly.insert_tweet", return_value=1)
+    @patch("v2.social_weekly.posted_tweet_exists", return_value=False)
+    @patch("v2.social_weekly.post_to_bluesky")
+    @patch("v2.social_weekly.post_tweet")
+    @patch("v2.social_weekly.generate_mistakes_post")
+    @patch("v2.social_weekly.gather_mistakes_context", return_value="ctx")
+    @patch("v2.social_weekly.get_twitter_client")
+    @patch("v2.social_weekly.get_bluesky_client")
+    def test_posts_to_both_platforms(
+        self, mock_bs_client, mock_tw_client, mock_ctx, mock_gen,
+        mock_post_tw, mock_post_bs, mock_dedup, mock_insert, mock_is_td,
+    ):
+        from v2.social_weekly import run_mistakes_post
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_gen.return_value = {"text": "x", "type": "weekly_mistakes"}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "weekly_mistakes",
+                                     "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "weekly_mistakes",
+                                     "error": None}
+
+        result = run_mistakes_post(today=date(2026, 5, 8))
+        assert result.skipped is False
+        assert result.twitter_posted is True
+        assert result.bluesky_posted is True
+        assert mock_insert.call_count == 2
+
+
+class TestRunAttributionPost:
+    @patch("v2.social_weekly.is_trading_day", return_value=False)
+    def test_skipped_on_weekend(self, mock_is_td):
+        from v2.social_weekly import run_attribution_post
+
+        result = run_attribution_post(today=date(2026, 5, 9))
+        assert result.skipped is True
+
+    @patch("v2.social_weekly.is_trading_day", return_value=True)
+    @patch("v2.social_weekly.gather_attribution_context", return_value="")
+    @patch("v2.social_weekly.get_twitter_client")
+    @patch("v2.social_weekly.get_bluesky_client")
+    def test_skipped_when_no_data(
+        self, mock_bs, mock_tw, mock_ctx, mock_is_td,
+    ):
+        from v2.social_weekly import run_attribution_post
+
+        mock_tw.return_value = object()
+        mock_bs.return_value = object()
+        result = run_attribution_post(today=date(2026, 5, 8))
+        assert result.skipped is True

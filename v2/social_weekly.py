@@ -212,3 +212,163 @@ def generate_attribution_post(
         dashboard_base_url=dashboard_base_url,
         model=model,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage runners
+# ---------------------------------------------------------------------------
+
+# Imported late so the pure helpers above stay testable without dragging in
+# the full social-platform stack.
+from .twitter import get_twitter_client, post_tweet           # noqa: E402
+from .bluesky import get_bluesky_client, post_to_bluesky      # noqa: E402
+
+
+@dataclass
+class WeeklyPostResult:
+    skipped: bool = False
+    skip_reason: str | None = None
+    twitter_posted: bool = False
+    bluesky_posted: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+def _is_dry_run() -> bool:
+    return os.environ.get("ALGO_TRADE_POST_DRY_RUN") == "1"
+
+
+def _post_one(
+    *,
+    platform: str,
+    client,
+    poster,
+    post_body: dict,
+    today: date,
+    type_label: str,
+    result: WeeklyPostResult,
+) -> None:
+    if _is_dry_run():
+        logger.info("[DRY-RUN] %s %s post:\n%s",
+                    type_label, platform, post_body["text"])
+        if platform == "twitter":
+            result.twitter_posted = True
+        else:
+            result.bluesky_posted = True
+        return
+
+    try:
+        post_result = poster(post_body, client=client)
+        insert_tweet(
+            session_date=today,
+            tweet_type=type_label,
+            tweet_text=post_result["text"],
+            tweet_id=post_result.get("tweet_id") or post_result.get("post_id"),
+            posted=post_result["posted"],
+            error=post_result.get("error"),
+            platform=platform,
+        )
+        if post_result["posted"]:
+            if platform == "twitter":
+                result.twitter_posted = True
+            else:
+                result.bluesky_posted = True
+    except Exception as e:
+        result.errors.append(f"{platform} {type_label} post/log failed: {e}")
+        logger.error("%s %s post/log failed: %s", platform, type_label, e)
+
+
+def _run_weekly(
+    *,
+    today: date | None,
+    type_label: str,
+    gather,
+    generate,
+) -> WeeklyPostResult:
+    if today is None:
+        today = date.today()
+
+    result = WeeklyPostResult()
+
+    if not is_trading_day(today):
+        result.skipped = True
+        result.skip_reason = f"{today} is not a trading day"
+        logger.info("Weekly %s skipped — %s", type_label, result.skip_reason)
+        return result
+
+    twitter_client = get_twitter_client()
+    bluesky_client = get_bluesky_client()
+    if twitter_client is None and bluesky_client is None:
+        result.skipped = True
+        result.skip_reason = "no platform credentials"
+        logger.info("Weekly %s skipped — no platform credentials", type_label)
+        return result
+
+    try:
+        context = gather(today=today) if type_label == "weekly_mistakes" else gather()
+    except Exception as e:
+        result.errors.append(f"Context gather failed: {e}")
+        logger.error("%s context gather failed: %s", type_label, e)
+        return result
+
+    if not context:
+        result.skipped = True
+        result.skip_reason = "no data this window"
+        logger.info("Weekly %s skipped — no data", type_label)
+        return result
+
+    # Idempotency check — both platforms
+    tw_already = False
+    bs_already = False
+    try:
+        if twitter_client is not None:
+            tw_already = posted_tweet_exists(today, type_label, "twitter")
+        if bluesky_client is not None:
+            bs_already = posted_tweet_exists(today, type_label, "bluesky")
+    except Exception as e:
+        logger.warning("Weekly %s dedup check failed: %s; proceeding",
+                       type_label, e)
+
+    if (twitter_client is None or tw_already) and (bluesky_client is None or bs_already):
+        result.skipped = True
+        result.skip_reason = "already posted on all configured platforms"
+        logger.info("Weekly %s skipped — already posted today", type_label)
+        return result
+
+    dashboard_base_url = os.environ.get("DASHBOARD_URL", "")
+    post_body = generate(context, dashboard_base_url=dashboard_base_url)
+    if post_body is None:
+        result.errors.append("LLM generation returned None")
+        return result
+
+    if twitter_client is not None and not tw_already:
+        _post_one(
+            platform="twitter", client=twitter_client, poster=post_tweet,
+            post_body=post_body, today=today, type_label=type_label, result=result,
+        )
+    if bluesky_client is not None and not bs_already:
+        _post_one(
+            platform="bluesky", client=bluesky_client, poster=post_to_bluesky,
+            post_body=post_body, today=today, type_label=type_label, result=result,
+        )
+
+    logger.info("Weekly %s complete: twitter=%s, bluesky=%s",
+                type_label, result.twitter_posted, result.bluesky_posted)
+    return result
+
+
+def run_mistakes_post(today: date | None = None) -> WeeklyPostResult:
+    return _run_weekly(
+        today=today,
+        type_label="weekly_mistakes",
+        gather=gather_mistakes_context,
+        generate=generate_mistakes_post,
+    )
+
+
+def run_attribution_post(today: date | None = None) -> WeeklyPostResult:
+    return _run_weekly(
+        today=today,
+        type_label="weekly_attribution",
+        gather=gather_attribution_context,
+        generate=generate_attribution_post,
+    )
