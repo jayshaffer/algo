@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from v2.database.trading_db import get_tweets_for_date, insert_tweet, posted_tweet_exists
+from v2.database.trading_db import get_tweets_for_date, insert_tweet, posted_tweet_exists, posted_tweet_for_decision_exists
 from v2.twitter import (
     TwitterStageResult,
     gather_tweet_context,
@@ -34,7 +34,7 @@ class TestInsertTweet:
         assert "INSERT INTO tweets" in sql
         assert "RETURNING id" in sql
         params = mock_db.execute.call_args[0][1]
-        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None, "twitter")
+        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None, "twitter", None)
 
     def test_insert_tweet_with_all_fields(self, mock_db):
         mock_db.fetchone.return_value = {"id": 1}
@@ -74,6 +74,29 @@ class TestInsertTweet:
         params = mock_db.execute.call_args[0][1]
         assert "bluesky" in params
 
+    def test_insert_tweet_persists_decision_id(self, mock_db, mock_cursor):
+        """When a decision_id is supplied, it must land on the row."""
+        mock_cursor.fetchone.return_value = {"id": 99}
+
+        inserted_id = insert_tweet(
+            session_date=date(2026, 5, 4),
+            tweet_type="trade",
+            tweet_text="Bought 12 $NVDA",
+            tweet_id="tw_abc",
+            posted=True,
+            platform="twitter",
+            decision_id=42,
+        )
+
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "decision_id" in sql.lower(), (
+            f"INSERT must reference decision_id column; got SQL: {sql}"
+        )
+        assert 42 in params, (
+            f"decision_id=42 must be passed in execute params; got: {params}"
+        )
+        assert inserted_id == 99
+
 
 class TestGetTweetsForDate:
     """Verify get_tweets_for_date issues correct SQL."""
@@ -109,6 +132,36 @@ class TestPostedTweetExists:
     def test_returns_false_when_no_row(self, mock_db):
         mock_db.fetchone.return_value = None
         assert posted_tweet_exists(date(2026, 2, 15), "recap", "twitter") is False
+
+
+class TestPostedTweetForDecisionExists:
+    """The trade-post rerun guard keys on (decision_id, platform), not date."""
+
+    def test_returns_true_when_row_exists(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 7}
+
+        assert posted_tweet_for_decision_exists(decision_id=42, platform="twitter") is True
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "decision_id" in sql.lower()
+        assert "platform" in sql.lower()
+        assert params == (42, "twitter")
+
+    def test_returns_false_when_no_row(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = None
+
+        assert posted_tweet_for_decision_exists(decision_id=42, platform="bluesky") is False
+
+    def test_returns_false_when_only_unposted_row(self, mock_db, mock_cursor):
+        """A row where posted=FALSE shouldn't block re-posting."""
+        # SQL filters posted=TRUE, so simulate no match
+        mock_cursor.fetchone.return_value = None
+
+        assert posted_tweet_for_decision_exists(decision_id=42, platform="twitter") is False
+        sql, _params = mock_cursor.execute.call_args[0]
+        # Confirm the SQL filters posted=TRUE
+        assert "posted" in sql.lower(), (
+            f"Lookup must filter on posted=TRUE; got SQL: {sql}"
+        )
 
 
 class TestGatherTweetContext:

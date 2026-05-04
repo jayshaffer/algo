@@ -741,15 +741,49 @@ def get_recent_strategy_memos(n=5) -> list:
 
 # --- Tweets ---
 
-def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=False, error=None, platform="twitter") -> int:
-    """Insert a tweet record and return its id."""
+def insert_tweet(
+    session_date,
+    tweet_type: str,
+    tweet_text: str,
+    tweet_id: str | None = None,
+    posted: bool = False,
+    error: str | None = None,
+    platform: str = "twitter",
+    decision_id: int | None = None,
+) -> int:
+    """Log a tweet/post to the audit table.
+
+    decision_id (new) ties a per-trade post back to its source decision,
+    enabling the (decision_id, platform) rerun guard used by the live-
+    trade pipeline. Recap and entertainment posts leave it NULL.
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO tweets (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO tweets (
+                session_date, tweet_type, tweet_text, tweet_id,
+                posted, error, platform, decision_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform))
+        """, (session_date, tweet_type, tweet_text, tweet_id,
+              posted, error, platform, decision_id))
         return cur.fetchone()["id"]
+
+
+def posted_tweet_for_decision_exists(decision_id: int, platform: str) -> bool:
+    """True if a successful (posted=TRUE) tweet already exists for this
+    decision on this platform. Used by run_trade_posts_stage to skip
+    decisions that were posted on a prior session run."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT 1
+            FROM tweets
+            WHERE decision_id = %s
+              AND platform = %s
+              AND posted = TRUE
+            LIMIT 1
+        """, (decision_id, platform))
+        return cur.fetchone() is not None
 
 
 def posted_tweet_exists(session_date, tweet_type: str, platform: str) -> bool:
