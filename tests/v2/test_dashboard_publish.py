@@ -17,7 +17,10 @@ from v2.dashboard_publish import (
     assemble_deploy_dir,
     deploy_to_cloudflare,
     fetch_spy_benchmark,
+    gather_all_pages_data,
     gather_dashboard_data,
+    gather_thesis_detail,
+    gather_trade_detail,
     run_dashboard_stage,
     write_json_files,
 )
@@ -66,7 +69,8 @@ class TestGatherDashboardData:
         session_date = date(2025, 6, 15)
 
         # Set up fetchall side_effect for sequential calls:
-        # 1. snapshots, 2. positions, 3. decisions, 4. theses
+        # 1. snapshots, 2. positions, 3. decisions, 4. theses,
+        # 5. all-decision-ids, 6. all-thesis-ids
         mock_db.fetchall.side_effect = [
             # snapshots (last 90 days)
             [
@@ -93,6 +97,10 @@ class TestGatherDashboardData:
                  "thesis": "Growth story", "entry_trigger": "Above 150",
                  "exit_trigger": "Above 180", "created_at": datetime(2025, 6, 10)},
             ],
+            # all-decision-ids (gather_all_pages_data)
+            [],
+            # all-thesis-ids (gather_all_pages_data)
+            [],
         ]
 
         # Set up fetchone side_effect for sequential calls:
@@ -110,7 +118,7 @@ class TestGatherDashboardData:
         result = gather_dashboard_data(session_date)
 
         # Verify all top-level keys present
-        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark"}
+        assert set(result.keys()) == {"summary", "snapshots", "positions", "decisions", "theses", "benchmark", "_pages"}
 
         # Verify snapshots
         assert len(result["snapshots"]) == 2
@@ -152,7 +160,7 @@ class TestGatherDashboardData:
         """When net_deposits provided, total return = portfolio_value - net_deposits."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
              "long_market_value": Decimal("55000")},
@@ -172,7 +180,7 @@ class TestGatherDashboardData:
         """Without net_deposits, falls back to first snapshot comparison."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
              "long_market_value": Decimal("55000")},
@@ -191,7 +199,7 @@ class TestGatherDashboardData:
         session_date = date(2025, 6, 15)
 
         # All fetchall calls return empty
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
 
         # All fetchone calls return None
         mock_db.fetchone.side_effect = [None, None, None]
@@ -226,6 +234,8 @@ class TestGatherDashboardData:
             [],  # no positions
             [],  # no decisions
             [],  # no theses
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("100000"),
@@ -254,6 +264,8 @@ class TestGatherDashboardData:
               "avg_cost": Decimal("150.00"), "updated_at": datetime(2025, 6, 15)}],
             [],
             [],
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
@@ -271,15 +283,15 @@ class TestGatherDashboardData:
         assert parsed["positions"][0]["ticker"] == "AAPL"
 
     def test_query_count(self, mock_benchmark, mock_db):
-        """Verifies exactly 7 queries are executed (4 fetchall + 3 fetchone)."""
+        """Verifies exactly 9 queries are executed (4 fetchall + 3 fetchone + 2 pages)."""
         session_date = date(2025, 6, 15)
 
-        mock_db.fetchall.side_effect = [[], [], [], []]
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
         mock_db.fetchone.side_effect = [None, None, None]
 
         gather_dashboard_data(session_date)
 
-        assert mock_db.execute.call_count == 7
+        assert mock_db.execute.call_count == 9
 
     @patch("v2.dashboard_publish.get_deposit_history")
     def test_daily_pnl_excludes_same_day_deposit_end_to_end(self, mock_history, mock_benchmark, mock_db):
@@ -301,7 +313,7 @@ class TestGatherDashboardData:
                 {"date": date(2026, 4, 24), "portfolio_value": Decimal("7964.33"),
                  "cash": Decimal("6810.20"), "buying_power": Decimal("6810.20")},
             ],
-            [], [], [],
+            [], [], [], [], [],
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("7964.33"), "cash": Decimal("6810.20"),
@@ -336,6 +348,8 @@ class TestGatherDashboardData:
               "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
               "order_id": full_uuid}],
             [],  # theses
+            [],  # all-decision-ids
+            [],  # all-thesis-ids
         ]
         mock_db.fetchone.side_effect = [None, None, None]
 
@@ -355,7 +369,7 @@ class TestGatherDashboardData:
               "cash": Decimal("49000"), "buying_power": Decimal("49000")},
              {"date": date(2025, 6, 15), "portfolio_value": Decimal("100000"),
               "cash": Decimal("50000"), "buying_power": Decimal("50000")}],
-            [], [], [],
+            [], [], [], [], [],
         ]
         mock_db.fetchone.side_effect = [
             {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"),
@@ -915,6 +929,141 @@ class TestAssembleDeployDir:
         assert deploy_dir.exists()
 
 
+class TestAssembleDeployDirEndToEnd:
+    def _stub_trade_detail(self, decision_id):
+        return {"decision": {
+            "id": decision_id, "date": date(2026, 5, 3), "ticker": "NVDA",
+            "action": "buy", "quantity": Decimal("1"), "price": Decimal("100"),
+            "reasoning": "x",
+            "outcome_7d": None, "outcome_30d": None, "thesis_id": None,
+            "order_id": None,
+        }, "thesis": None, "position": None}
+
+    def _stub_thesis_detail(self, thesis_id):
+        return {"thesis": {
+            "id": thesis_id, "ticker": "NVDA", "direction": "long",
+            "confidence": "high", "thesis": "x",
+            "entry_trigger": None, "exit_trigger": None, "invalidation": None,
+            "status": "active",
+        }, "decisions": [], "position": None}
+
+    def test_emits_static_assets_json_pages_and_og(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        # Set up a fake assets dir with the static files assemble_deploy_dir copies.
+        assets = tmp_path / "assets"
+        assets.mkdir()
+        (assets / "index.html").write_text("<html><head><!-- OG_META --></head></html>")
+        (assets / "styles.css").write_text("body{}")
+        (assets / "app.js").write_text("// app")
+
+        deploy = tmp_path / "deploy"
+
+        data = {
+            "summary": {"portfolio_value": 100, "daily_pnl": 0,
+                        "daily_pnl_pct": 0, "last_updated": "2026-05-03"},
+            "snapshots": [], "positions": [], "decisions": [], "theses": [],
+            "benchmark": [],
+            "_pages": {"decision_ids": [1], "thesis_ids": [7]},
+        }
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=lambda cur, did: self._stub_trade_detail(did)), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            assemble_deploy_dir(
+                data, deploy_dir=str(deploy), assets_dir=str(assets),
+                base_url="https://example.com",
+            )
+
+        # Static assets present
+        assert (deploy / "index.html").is_file()
+        assert (deploy / "styles.css").is_file()
+        # JSON files
+        assert (deploy / "data" / "summary.json").is_file()
+        # Per-trade and per-thesis HTML
+        assert (deploy / "trade" / "1" / "index.html").is_file()
+        assert (deploy / "thesis" / "7" / "index.html").is_file()
+        # OG images
+        assert (deploy / "og" / "trade" / "1.png").is_file()
+        assert (deploy / "og" / "thesis" / "7.png").is_file()
+        # Homepage OG meta injected
+        assert "<!-- OG_META -->" not in (deploy / "index.html").read_text()
+        assert '<meta property="og:title"' in (deploy / "index.html").read_text()
+        # Homepage OG image is emitted unconditionally
+        assert (deploy / "og" / "home.png").is_file()
+        assert (deploy / "og" / "home.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestGatherTradeDetail:
+    def test_returns_decision_thesis_position(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            # decision row
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+             "quantity": Decimal("12"), "price": Decimal("450.25"),
+             "reasoning": "AI capex", "outcome_7d": None, "outcome_30d": None,
+             "thesis_id": 7, "order_id": "abc12345-...-uuid"},
+            # thesis row
+            {"id": 7, "ticker": "NVDA", "direction": "long", "thesis": "AI capex",
+             "entry_trigger": "<$440", "exit_trigger": "$520", "invalidation": "no",
+             "confidence": "high", "status": "active"},
+            # position row (may be None if closed)
+            {"ticker": "NVDA", "shares": Decimal("12"), "avg_cost": Decimal("450.25")},
+        ]
+
+        result = gather_trade_detail(mock_db, decision_id=42)
+
+        assert result["decision"]["id"] == 42
+        assert result["thesis"]["id"] == 7
+        assert result["position"]["ticker"] == "NVDA"
+        # Order ID truncated even on detail page
+        assert "..." in result["decision"]["order_id"]
+
+    def test_returns_none_when_decision_missing(self, mock_db):
+        mock_db.fetchone.side_effect = [None]
+        result = gather_trade_detail(mock_db, decision_id=999)
+        assert result is None
+
+    def test_no_thesis_when_thesis_id_null(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+             "quantity": Decimal("12"), "price": Decimal("450.25"),
+             "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
+             "thesis_id": None, "order_id": None},
+            None,  # position lookup
+        ]
+        result = gather_trade_detail(mock_db, decision_id=42)
+        assert result["thesis"] is None
+
+
+class TestGatherThesisDetail:
+    def test_returns_thesis_with_decisions_and_position(self, mock_db):
+        mock_db.fetchone.side_effect = [
+            {"id": 7, "ticker": "NVDA", "direction": "long", "thesis": "AI",
+             "entry_trigger": "<$440", "exit_trigger": "$520", "invalidation": "no",
+             "confidence": "high", "status": "active"},
+            {"ticker": "NVDA", "shares": Decimal("12"), "avg_cost": Decimal("450")},
+        ]
+        mock_db.fetchall.side_effect = [
+            [
+                {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+                 "quantity": Decimal("12"), "price": Decimal("450.25"),
+                 "outcome_7d": None, "outcome_30d": None},
+            ],
+        ]
+
+        result = gather_thesis_detail(mock_db, thesis_id=7)
+        assert result["thesis"]["id"] == 7
+        assert len(result["decisions"]) == 1
+        assert result["position"]["ticker"] == "NVDA"
+
+    def test_returns_none_when_missing(self, mock_db):
+        mock_db.fetchone.side_effect = [None]
+        result = gather_thesis_detail(mock_db, thesis_id=999)
+        assert result is None
+
+
 class TestFetchSpyBenchmark:
     @patch("v2.dashboard_publish.StockHistoricalDataClient")
     def test_returns_spy_bars_for_date_range(self, mock_client_cls):
@@ -963,3 +1112,224 @@ class TestFetchSpyBenchmark:
         result = fetch_spy_benchmark(date(2025, 6, 14), date(2025, 6, 15))
 
         assert result == []
+
+
+import os
+import tempfile
+
+
+class TestInjectHomepageOgMeta:
+    def test_replaces_placeholder_with_meta_block(self, tmp_path):
+        from v2.dashboard_publish import inject_homepage_og_meta
+
+        # Create a fake index.html with the placeholder
+        index = tmp_path / "index.html"
+        index.write_text(
+            "<html><head>\n"
+            "<title>x</title>\n"
+            "<!-- OG_META -->\n"
+            "</head><body></body></html>\n"
+        )
+
+        summary = {"portfolio_value": 12345, "daily_pnl": 100,
+                   "daily_pnl_pct": 1, "last_updated": "2026-05-03"}
+        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
+
+        rendered = index.read_text()
+        assert "<!-- OG_META -->" not in rendered
+        assert '<meta property="og:title"' in rendered
+        assert "https://example.com/og/home.png" in rendered
+
+    def test_no_op_when_placeholder_missing(self, tmp_path):
+        from v2.dashboard_publish import inject_homepage_og_meta
+
+        index = tmp_path / "index.html"
+        index.write_text("<html><head></head><body></body></html>")
+
+        # Must not raise; just leaves the file alone.
+        summary = {"portfolio_value": 0, "daily_pnl": 0,
+                   "daily_pnl_pct": 0, "last_updated": "2026-05-03"}
+        inject_homepage_og_meta(str(tmp_path), summary, base_url="https://example.com")
+
+        assert "OG_META" not in index.read_text()
+
+
+class TestGatherAllPagesData:
+    def test_returns_all_decision_and_thesis_ids(self, mock_db):
+        # Even decisions outside the homepage 30-day window must be returned —
+        # link permanence is a hard requirement (Cloudflare full-bundle replace).
+        mock_db.fetchall.side_effect = [
+            [{"id": 1}, {"id": 42}, {"id": 99}],   # decisions
+            [{"id": 7}, {"id": 8}],                 # theses
+        ]
+
+        result = gather_all_pages_data(mock_db)
+
+        assert result["decision_ids"] == [1, 42, 99]
+        assert result["thesis_ids"] == [7, 8]
+
+    def test_includes_closed_theses_not_just_active(self, mock_db):
+        mock_db.fetchall.side_effect = [
+            [{"id": 1}],
+            # All statuses returned — caller doesn't filter by status.
+            [{"id": 7}, {"id": 8}, {"id": 9}],
+        ]
+        result = gather_all_pages_data(mock_db)
+        assert result["thesis_ids"] == [7, 8, 9]
+
+    def test_empty_db_returns_empty_lists(self, mock_db):
+        mock_db.fetchall.side_effect = [[], []]
+        result = gather_all_pages_data(mock_db)
+        assert result == {"decision_ids": [], "thesis_ids": []}
+
+
+class TestEmitOgImages:
+    def test_writes_png_files(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_og_images
+
+        def _stub_trade(cur, did):
+            return {"decision": {
+                "id": did, "ticker": "NVDA", "action": "buy",
+                "quantity": Decimal("12"), "price": Decimal("450"),
+                "date": date(2026, 5, 3),
+            }, "thesis": None, "position": None}
+
+        def _stub_thesis(cur, tid):
+            return {"thesis": {
+                "id": tid, "ticker": "NVDA", "direction": "long",
+                "confidence": "high", "thesis": "x",
+            }, "decisions": [], "position": None}
+
+        with _patch("v2.dashboard_publish.gather_trade_detail", side_effect=_stub_trade), \
+             _patch("v2.dashboard_publish.gather_thesis_detail", side_effect=_stub_thesis):
+            stats = emit_og_images(
+                mock_db,
+                decision_ids=[1],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+            )
+
+        trade_png = tmp_path / "og" / "trade" / "1.png"
+        thesis_png = tmp_path / "og" / "thesis" / "7.png"
+        assert trade_png.is_file()
+        assert thesis_png.is_file()
+        assert trade_png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        assert stats["trades_written"] == 1
+        assert stats["theses_written"] == 1
+
+    def test_isolates_per_image_failures(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_og_images
+
+        def trade_side(cur, did):
+            if did == 2:
+                raise RuntimeError("boom")
+            return {"decision": {
+                "id": did, "ticker": "NVDA", "action": "buy",
+                "quantity": Decimal("12"), "price": Decimal("450"),
+                "date": date(2026, 5, 3),
+            }, "thesis": None, "position": None}
+
+        def thesis_side(cur, tid):
+            return {"thesis": {
+                "id": tid, "ticker": "NVDA", "direction": "long",
+                "confidence": "high", "thesis": "x",
+            }, "decisions": [], "position": None}
+
+        with _patch("v2.dashboard_publish.gather_trade_detail", side_effect=trade_side), \
+             _patch("v2.dashboard_publish.gather_thesis_detail", side_effect=thesis_side):
+            stats = emit_og_images(
+                mock_db,
+                decision_ids=[1, 2, 3],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+            )
+
+        assert (tmp_path / "og" / "trade" / "1.png").is_file()
+        assert not (tmp_path / "og" / "trade" / "2.png").exists()
+        assert (tmp_path / "og" / "trade" / "3.png").is_file()
+        assert (tmp_path / "og" / "thesis" / "7.png").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 1
+
+
+class TestEmitDetailPages:
+    def _stub_trade_detail(self, decision_id):
+        return {
+            "decision": {
+                "id": decision_id, "date": date(2026, 5, 3), "ticker": "NVDA",
+                "action": "buy", "quantity": Decimal("12"),
+                "price": Decimal("450"), "reasoning": "x",
+                "outcome_7d": None, "outcome_30d": None, "thesis_id": None,
+                "order_id": None,
+            },
+            "thesis": None,
+            "position": None,
+        }
+
+    def _stub_thesis_detail(self, thesis_id):
+        return {
+            "thesis": {
+                "id": thesis_id, "ticker": "NVDA", "direction": "long",
+                "thesis": "AI capex", "entry_trigger": None,
+                "exit_trigger": None, "invalidation": None,
+                "confidence": "high", "status": "active",
+            },
+            "decisions": [],
+            "position": None,
+        }
+
+    def test_emits_one_html_per_trade_and_thesis(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_detail_pages
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=lambda cur, did: self._stub_trade_detail(did)), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            stats = emit_detail_pages(
+                mock_db,
+                decision_ids=[1, 2],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+                base_url="https://example.com",
+            )
+
+        assert (tmp_path / "trade" / "1" / "index.html").is_file()
+        assert (tmp_path / "trade" / "2" / "index.html").is_file()
+        assert (tmp_path / "thesis" / "7" / "index.html").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 0
+
+    def test_isolates_per_page_failures(self, mock_db, tmp_path):
+        from unittest.mock import patch as _patch
+        from v2.dashboard_publish import emit_detail_pages
+
+        def trade_side_effect(cur, did):
+            if did == 2:
+                raise RuntimeError("simulated render failure")
+            return self._stub_trade_detail(did)
+
+        with _patch("v2.dashboard_publish.gather_trade_detail",
+                    side_effect=trade_side_effect), \
+             _patch("v2.dashboard_publish.gather_thesis_detail",
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+            stats = emit_detail_pages(
+                mock_db,
+                decision_ids=[1, 2, 3],
+                thesis_ids=[7],
+                deploy_dir=str(tmp_path),
+                base_url="https://example.com",
+            )
+
+        # 1 and 3 succeed; 2 fails but doesn't abort the run.
+        assert (tmp_path / "trade" / "1" / "index.html").is_file()
+        assert not (tmp_path / "trade" / "2" / "index.html").exists()
+        assert (tmp_path / "trade" / "3" / "index.html").is_file()
+        assert (tmp_path / "thesis" / "7" / "index.html").is_file()
+        assert stats["trades_written"] == 2
+        assert stats["theses_written"] == 1
+        assert stats["failed"] == 1

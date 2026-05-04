@@ -18,6 +18,12 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
+from .dashboard_og import render_home_og, render_thesis_og, render_trade_og
+from .dashboard_pages import (
+    render_homepage_meta,
+    render_thesis_page,
+    render_trade_page,
+)
 from .database.connection import get_cursor
 from .executor import get_net_deposits
 
@@ -282,6 +288,10 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     summary = _build_summary(latest, first, previous, len(positions), session_date,
                              net_deposits, daily_deposit=daily_deposit)
 
+    # NEW: gather full ID lists for page emission (link permanence)
+    with get_cursor() as cur2:
+        pages = gather_all_pages_data(cur2)
+
     return {
         "summary": summary,
         "snapshots": snapshot_dicts,
@@ -292,7 +302,225 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         ],
         "theses": [dict(r) for r in theses],
         "benchmark": benchmark,
+        "_pages": pages,  # NEW
     }
+
+
+def gather_trade_detail(cur, decision_id: int) -> dict | None:
+    """Return full detail for one decision page: decision + thesis + position.
+
+    Caller passes a cursor so this can run in any open transaction.
+    Returns None if the decision_id doesn't exist.
+
+    thesis_id is resolved via decisions.playbook_action_id -> playbook_actions.thesis_id
+    since the decisions table does not carry thesis_id directly.
+    """
+    cur.execute(
+        """
+        SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price, d.reasoning,
+               d.outcome_7d, d.outcome_30d, d.order_id,
+               pa.thesis_id
+        FROM decisions d
+        LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+        WHERE d.id = %s
+        """,
+        (decision_id,),
+    )
+    decision = cur.fetchone()
+    if decision is None:
+        return None
+    decision = dict(decision)
+    decision["order_id"] = _redact_order_id(decision.get("order_id"))
+
+    thesis = None
+    if decision.get("thesis_id"):
+        cur.execute(
+            """
+            SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+                   invalidation, confidence, status
+            FROM theses WHERE id = %s
+            """,
+            (decision["thesis_id"],),
+        )
+        row = cur.fetchone()
+        thesis = dict(row) if row else None
+
+    cur.execute(
+        "SELECT ticker, shares, avg_cost FROM positions WHERE ticker = %s",
+        (decision["ticker"],),
+    )
+    pos_row = cur.fetchone()
+    position = dict(pos_row) if pos_row else None
+
+    return {"decision": decision, "thesis": thesis, "position": position}
+
+
+def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
+    """Return full detail for one thesis page: thesis + decisions + position."""
+    cur.execute(
+        """
+        SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+               invalidation, confidence, status
+        FROM theses WHERE id = %s
+        """,
+        (thesis_id,),
+    )
+    thesis = cur.fetchone()
+    if thesis is None:
+        return None
+    thesis = dict(thesis)
+
+    cur.execute(
+        """
+        SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
+               d.outcome_7d, d.outcome_30d
+        FROM decisions d
+        JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+        WHERE pa.thesis_id = %s
+        ORDER BY d.date DESC, d.id DESC
+        """,
+        (thesis_id,),
+    )
+    decisions = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT ticker, shares, avg_cost FROM positions WHERE ticker = %s",
+        (thesis["ticker"],),
+    )
+    pos_row = cur.fetchone()
+    position = dict(pos_row) if pos_row else None
+
+    return {"thesis": thesis, "decisions": decisions, "position": position}
+
+
+def gather_all_pages_data(cur) -> dict:
+    """Return ID lists for every decision and thesis we need to emit pages for.
+
+    No date filter — Cloudflare Pages does full-bundle replacement on each
+    deploy, so any URL not in this deploy will 404. Link permanence is a hard
+    requirement of the audience-growth strategy.
+    """
+    cur.execute("SELECT id FROM decisions ORDER BY id")
+    decision_ids = [r["id"] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM theses ORDER BY id")
+    thesis_ids = [r["id"] for r in cur.fetchall()]
+    return {"decision_ids": decision_ids, "thesis_ids": thesis_ids}
+
+
+def inject_homepage_og_meta(deploy_dir: str, summary: dict, base_url: str) -> None:
+    """Replace the <!-- OG_META --> placeholder in deploy_dir/index.html."""
+    index_path = os.path.join(deploy_dir, "index.html")
+    with open(index_path) as f:
+        html = f.read()
+    if "<!-- OG_META -->" not in html:
+        return
+    block = render_homepage_meta(summary, base_url=base_url)
+    html = html.replace("<!-- OG_META -->", block)
+    with open(index_path, "w") as f:
+        f.write(html)
+
+
+def emit_home_og_image(summary: dict, deploy_dir: str) -> None:
+    """Render the homepage OG card to deploy_dir/og/home.png."""
+    try:
+        png = render_home_og(summary)
+        og_dir = os.path.join(deploy_dir, "og")
+        os.makedirs(og_dir, exist_ok=True)
+        with open(os.path.join(og_dir, "home.png"), "wb") as f:
+            f.write(png)
+    except Exception:
+        logger.warning("Failed to render homepage OG image", exc_info=True)
+
+
+def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
+                      deploy_dir: str, base_url: str) -> dict:
+    """Render per-trade and per-thesis HTML pages into deploy_dir.
+
+    Returns a stats dict: {trades_written, theses_written, failed}.
+    Per-page failures are isolated: one bad render doesn't abort the run.
+    """
+    stats = {"trades_written": 0, "theses_written": 0, "failed": 0}
+
+    for did in decision_ids:
+        try:
+            detail = gather_trade_detail(cur, did)
+            if detail is None:
+                continue
+            html = render_trade_page(
+                decision=detail["decision"],
+                thesis=detail["thesis"],
+                position=detail["position"],
+                base_url=base_url,
+            )
+            page_dir = os.path.join(deploy_dir, "trade", str(did))
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+            stats["trades_written"] += 1
+        except Exception:
+            logger.warning("Failed to render trade page %s", did, exc_info=True)
+            stats["failed"] += 1
+
+    for tid in thesis_ids:
+        try:
+            detail = gather_thesis_detail(cur, tid)
+            if detail is None:
+                continue
+            html = render_thesis_page(
+                thesis=detail["thesis"],
+                decisions=detail["decisions"],
+                position=detail["position"],
+                base_url=base_url,
+            )
+            page_dir = os.path.join(deploy_dir, "thesis", str(tid))
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+            stats["theses_written"] += 1
+        except Exception:
+            logger.warning("Failed to render thesis page %s", tid, exc_info=True)
+            stats["failed"] += 1
+
+    return stats
+
+
+def emit_og_images(cur, decision_ids: list[int], thesis_ids: list[int],
+                   deploy_dir: str) -> dict:
+    """Render OG PNGs for each decision and thesis into deploy_dir/og/."""
+    stats = {"trades_written": 0, "theses_written": 0, "failed": 0}
+
+    trade_dir = os.path.join(deploy_dir, "og", "trade")
+    thesis_dir = os.path.join(deploy_dir, "og", "thesis")
+    os.makedirs(trade_dir, exist_ok=True)
+    os.makedirs(thesis_dir, exist_ok=True)
+
+    for did in decision_ids:
+        try:
+            detail = gather_trade_detail(cur, did)
+            if detail is None:
+                continue
+            png = render_trade_og(detail["decision"])
+            with open(os.path.join(trade_dir, f"{did}.png"), "wb") as f:
+                f.write(png)
+            stats["trades_written"] += 1
+        except Exception:
+            logger.warning("Failed to render trade OG %s", did, exc_info=True)
+            stats["failed"] += 1
+
+    for tid in thesis_ids:
+        try:
+            detail = gather_thesis_detail(cur, tid)
+            if detail is None:
+                continue
+            png = render_thesis_og(detail["thesis"])
+            with open(os.path.join(thesis_dir, f"{tid}.png"), "wb") as f:
+                f.write(png)
+            stats["theses_written"] += 1
+        except Exception:
+            logger.warning("Failed to render thesis OG %s", tid, exc_info=True)
+            stats["failed"] += 1
+
+    return stats
 
 
 def _build_summary(latest, first, previous, positions_count, session_date,
@@ -420,26 +648,50 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
 
-def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str) -> str:
-    """Assemble a complete deploy directory with static assets and JSON data.
+def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
+                        base_url: str = "") -> str:
+    """Assemble the full deploy directory: static assets, JSON, detail pages, OG images.
 
-    Args:
-        data: Dashboard data dict (from gather_dashboard_data).
-        deploy_dir: Path to create/populate the deploy directory.
-        assets_dir: Path to public_dashboard/ directory containing static assets.
-
-    Returns the deploy_dir path.
+    `data` must include a `_pages` key with `decision_ids` and `thesis_ids`
+    (added by the extended `gather_dashboard_data` flow). When `_pages` is
+    missing, only the static + JSON path runs (legacy behavior).
     """
     os.makedirs(deploy_dir, exist_ok=True)
 
-    # Copy static assets
+    # Static assets
     for filename in _STATIC_ASSETS:
         src = os.path.join(assets_dir, filename)
         dst = os.path.join(deploy_dir, filename)
         shutil.copy2(src, dst)
 
-    # Write JSON data files
     write_json_files(data, deploy_dir)
+
+    # Inject homepage OG meta (no-op if placeholder absent)
+    try:
+        inject_homepage_og_meta(deploy_dir, data.get("summary", {}), base_url=base_url)
+    except Exception:
+        logger.warning("Failed to inject homepage OG meta", exc_info=True)
+
+    emit_home_og_image(data.get("summary", {}), deploy_dir)
+
+    # Per-trade / per-thesis pages + OG images
+    pages = data.get("_pages")
+    if pages and base_url:
+        with get_cursor() as cur:
+            page_stats = emit_detail_pages(
+                cur,
+                decision_ids=pages.get("decision_ids", []),
+                thesis_ids=pages.get("thesis_ids", []),
+                deploy_dir=deploy_dir,
+                base_url=base_url,
+            )
+            og_stats = emit_og_images(
+                cur,
+                decision_ids=pages.get("decision_ids", []),
+                thesis_ids=pages.get("thesis_ids", []),
+                deploy_dir=deploy_dir,
+            )
+        logger.info("Detail pages: %s; OG images: %s", page_stats, og_stats)
 
     return deploy_dir
 
@@ -514,9 +766,10 @@ def run_dashboard_stage(session_date: date | None = None) -> DashboardStageResul
         return result
 
     # Assemble deploy directory
+    base_url = os.environ.get("DASHBOARD_URL", "").rstrip("/")
     deploy_dir = tempfile.mkdtemp(prefix="dashboard_deploy_")
     try:
-        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR)
+        assemble_deploy_dir(data, deploy_dir, _ASSETS_DIR, base_url=base_url)
     except Exception as e:
         result.errors.append(f"Deploy assembly failed: {e}")
         logger.error("Failed to assemble deploy directory: %s", e)

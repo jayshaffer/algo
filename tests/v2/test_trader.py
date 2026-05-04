@@ -1441,6 +1441,7 @@ class TestOrderFailure:
                 "execute_market_order": MagicMock(return_value=MagicMock(
                     success=False, order_id=None, error="rejected",
                     filled_qty=None, filled_avg_price=None,
+                    duplicate_client_order_id=False,
                 )),
             })
             result = run_trading_session(dry_run=False)
@@ -1455,6 +1456,7 @@ class TestOrderFailure:
                 "execute_market_order": MagicMock(return_value=MagicMock(
                     success=False, order_id=None, error="rejected",
                     filled_qty=None, filled_avg_price=None,
+                    duplicate_client_order_id=False,
                 )),
                 "update_playbook_action_status": MagicMock(
                     side_effect=RuntimeError("db down"),
@@ -1473,6 +1475,7 @@ class TestOrderFailure:
                 "execute_market_order": MagicMock(return_value=MagicMock(
                     success=False, order_id=None, error="rejected",
                     filled_qty=None, filled_avg_price=None,
+                    duplicate_client_order_id=False,
                 )),
             })
             result = run_trading_session(dry_run=False)
