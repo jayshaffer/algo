@@ -16,6 +16,7 @@ subsequent stages from running.
 
 import argparse
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
 from .trader import TradingSessionResult, run_trading_session
+from .social_trades import TradePostsStageResult, run_trade_posts_stage
 from .twitter import TwitterStageResult, run_twitter_stage
 
 logger = logging.getLogger("session")
@@ -51,7 +53,8 @@ logger = logging.getLogger("session")
 
 _ERROR_FIELDS = (
     "learning_error", "pipeline_error", "strategist_error", "trading_error",
-    "strategy_error", "twitter_error", "bluesky_error", "dashboard_error",
+    "strategy_error", "twitter_error", "bluesky_error", "trade_posts_error",
+    "dashboard_error",
 )
 
 
@@ -63,6 +66,7 @@ class SessionResult:
     strategy_result: StrategyReflectionResult | None = None
     twitter_result: TwitterStageResult | None = None
     bluesky_result: BlueskyStageResult | None = None
+    trade_posts_result: TradePostsStageResult | None = None
     dashboard_result: DashboardStageResult | None = None
 
     learning_error: str | None = None     # V3: Stage 0
@@ -72,6 +76,7 @@ class SessionResult:
     strategy_error: str | None = None
     twitter_error: str | None = None
     bluesky_error: str | None = None
+    trade_posts_error: str | None = None
     dashboard_error: str | None = None
 
     # T2.1: distinct from errors — set when the session was already completed
@@ -378,6 +383,27 @@ def _run_bluesky_stage_wrapper(
         logger.error("Bluesky stage failed: %s", e)
 
 
+def _run_trade_posts_stage_wrapper(
+    result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
+) -> None:
+    """New live-trade pipeline stage; runs in place of the legacy twitter+bluesky
+    stages when ALGO_ENABLE_TRADE_POSTS=1. Idempotency, error trapping, and
+    session_stages completion follow the same shape as the legacy wrappers."""
+    if skip or "trade_posts" in completed_stages:
+        logger.info("[Stage 5] Trade-posts — SKIPPED%s",
+                    " (completed in prior run)" if "trade_posts" in completed_stages else "")
+        return
+    logger.info("[Stage 5] Running trade-posts stage")
+    _start_stage(session_id, "trade_posts")
+    try:
+        result.trade_posts_result = run_trade_posts_stage()
+        _complete_stage(session_id, "trade_posts")
+    except Exception as e:
+        result.trade_posts_error = str(e)
+        _fail_stage(session_id, "trade_posts", str(e))
+        logger.error("Trade-posts stage crashed: %s", e)
+
+
 def _run_dashboard_stage_wrapper(
     result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
 ) -> None:
@@ -478,8 +504,17 @@ def run_session(
     )
     _run_executor_stage(result, session_id, completed_stages, skip_executor, dry_run, executor_model, today)
     _run_strategy_stage(result, session_id, completed_stages, skip_strategy)
-    _run_twitter_stage_wrapper(result, session_id, completed_stages, skip_twitter)
-    _run_bluesky_stage_wrapper(result, session_id, completed_stages, skip_bluesky)
+    if os.environ.get("ALGO_ENABLE_TRADE_POSTS") == "1":
+        # New live-trade pipeline. --skip-twitter / --skip-bluesky still apply
+        # but propagate inside run_trade_posts_stage (which decides per-platform
+        # based on the available client). Treat skip_twitter+skip_bluesky as
+        # an OR-skip of the whole stage for simplicity until we add a dedicated
+        # --skip-trade-posts flag.
+        skip_combined = skip_twitter and skip_bluesky
+        _run_trade_posts_stage_wrapper(result, session_id, completed_stages, skip_combined)
+    else:
+        _run_twitter_stage_wrapper(result, session_id, completed_stages, skip_twitter)
+        _run_bluesky_stage_wrapper(result, session_id, completed_stages, skip_bluesky)
     _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard)
 
     result.duration_seconds = time.monotonic() - start

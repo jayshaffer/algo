@@ -68,8 +68,33 @@ The session orchestrator runs stages sequentially. Each stage is independent —
 | 2 | `ideation_claude.py` | Strategist: thesis management + playbook generation (agentic loop with tools) |
 | 3 | `trader.py` | Executor: decisions from playbook + order execution |
 | 4 | `strategy.py` | Reflection: update strategy identity, rules, and write session memo |
-| 5 | `twitter.py`, `bluesky.py` | Social posting |
+| 5 | `twitter.py` / `bluesky.py` (legacy) or `social_trades.py` (new, gated by `ALGO_ENABLE_TRADE_POSTS=1`) | Social posting |
 | 6 | `dashboard_publish.py` | Public dashboard publish |
+
+### Pre-market post stage
+
+Independent of the daily session. Triggered by cron via `task premarket`
+(or `python -m v2.premarket` directly). Skipped on weekends and NYSE
+holidays. Posts a forward-looking take referencing 1–2 names from
+active theses + the latest session memo.
+
+### Live-trade pipeline feature flag
+
+When `ALGO_ENABLE_TRADE_POSTS=1`, Stage 5 runs `run_trade_posts_stage`
+instead of the legacy `run_twitter_stage` + `run_bluesky_stage`:
+
+- Iterates today's significant non-hold decisions (notional ≥ `$100`).
+- Posts one tweet per decision to Twitter + Bluesky, each linking to
+  `/trade/<id>/` and (if present) `/thesis/<id>/` on the public dashboard.
+- Caps at 5 posts per session.
+- Quiet-day fallback: if no postable decisions, posts a mini-recap on
+  trading days only.
+- `ALGO_TRADE_POST_DRY_RUN=1` logs generated post bodies and skips both
+  platform posts and the DB audit row.
+
+The legacy recap path (twitter.py / bluesky.py orchestrators) stays
+intact while the new pipeline is being validated; a follow-up plan will
+delete it after one week of clean prod runs.
 
 ### Key v2 Modules
 

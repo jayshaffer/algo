@@ -201,6 +201,47 @@ def get_recent_decisions(days=30) -> list:
         return cur.fetchall()
 
 
+def select_postable_decisions_for_date(
+    session_date,
+    min_notional: float,
+    limit: int,
+) -> list[dict]:
+    """Return today's non-hold decisions worth posting about.
+
+    Joined with their underlying thesis via playbook_actions; off-playbook
+    decisions return rows with NULL thesis fields. Ordered by absolute
+    notional value descending so the top `limit` are the highest-impact
+    trades for the day. Filtered to ABS(quantity*price) >= min_notional
+    so micro-trades don't spam the social feed.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                d.id,
+                d.date,
+                d.ticker,
+                d.action,
+                d.quantity,
+                d.price,
+                d.reasoning,
+                d.is_off_playbook,
+                pa.thesis_id AS thesis_id,
+                t.thesis     AS thesis_text,
+                t.direction  AS thesis_direction
+            FROM decisions d
+            LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+            LEFT JOIN theses t            ON t.id  = pa.thesis_id
+            WHERE d.date = %s
+              AND d.action != 'hold'
+              AND d.price IS NOT NULL
+              AND d.quantity IS NOT NULL
+              AND ABS(d.quantity * d.price) >= %s
+            ORDER BY ABS(d.quantity * d.price) DESC
+            LIMIT %s
+        """, (session_date, min_notional, limit))
+        return cur.fetchall()
+
+
 def get_decisions_needing_backfill_7d() -> list:
     """Get decisions needing 7-day outcome backfill."""
     with get_cursor() as cur:
@@ -741,15 +782,49 @@ def get_recent_strategy_memos(n=5) -> list:
 
 # --- Tweets ---
 
-def insert_tweet(session_date, tweet_type, tweet_text, tweet_id=None, posted=False, error=None, platform="twitter") -> int:
-    """Insert a tweet record and return its id."""
+def insert_tweet(
+    session_date,
+    tweet_type: str,
+    tweet_text: str,
+    tweet_id: str | None = None,
+    posted: bool = False,
+    error: str | None = None,
+    platform: str = "twitter",
+    decision_id: int | None = None,
+) -> int:
+    """Log a tweet/post to the audit table.
+
+    decision_id (new) ties a per-trade post back to its source decision,
+    enabling the (decision_id, platform) rerun guard used by the live-
+    trade pipeline. Recap and entertainment posts leave it NULL.
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO tweets (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO tweets (
+                session_date, tweet_type, tweet_text, tweet_id,
+                posted, error, platform, decision_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (session_date, tweet_type, tweet_text, tweet_id, posted, error, platform))
+        """, (session_date, tweet_type, tweet_text, tweet_id,
+              posted, error, platform, decision_id))
         return cur.fetchone()["id"]
+
+
+def posted_tweet_for_decision_exists(decision_id: int, platform: str) -> bool:
+    """True if a successful (posted=TRUE) tweet already exists for this
+    decision on this platform. Used by run_trade_posts_stage to skip
+    decisions that were posted on a prior session run."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT 1
+            FROM tweets
+            WHERE decision_id = %s
+              AND platform = %s
+              AND posted = TRUE
+            LIMIT 1
+        """, (decision_id, platform))
+        return cur.fetchone() is not None
 
 
 def posted_tweet_exists(session_date, tweet_type: str, platform: str) -> bool:

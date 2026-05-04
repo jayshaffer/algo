@@ -1436,3 +1436,60 @@ class TestCliMain:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1
+
+
+class TestAlgoEnableTradePostsFlag:
+    """Feature-flag branching: ALGO_ENABLE_TRADE_POSTS=1 routes to new stage,
+    absence of the flag preserves legacy twitter+bluesky path."""
+
+    def test_trade_posts_flag_routes_to_new_stage_and_skips_old(self, monkeypatch):
+        """When ALGO_ENABLE_TRADE_POSTS=1, run_trade_posts_stage runs and
+        the legacy run_twitter_stage / run_bluesky_stage are NOT called."""
+        from v2.social_trades import TradePostsStageResult
+
+        monkeypatch.setenv("ALGO_ENABLE_TRADE_POSTS", "1")
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.run_trade_posts_stage",
+                   return_value=TradePostsStageResult()) as mock_new, \
+             patch("v2.session.run_twitter_stage") as mock_old_tw, \
+             patch("v2.session.run_bluesky_stage") as mock_old_bs:
+            run_session(
+                dry_run=False, skip_dashboard=True,
+            )
+
+        mock_new.assert_called_once()
+        mock_old_tw.assert_not_called()
+        mock_old_bs.assert_not_called()
+
+    def test_trade_posts_flag_off_runs_legacy_stages(self, monkeypatch):
+        """Default behavior: ALGO_ENABLE_TRADE_POSTS unset → legacy path runs."""
+        monkeypatch.delenv("ALGO_ENABLE_TRADE_POSTS", raising=False)
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.run_trade_posts_stage") as mock_new, \
+             patch("v2.session.run_twitter_stage",
+                   return_value=TwitterStageResult()) as mock_old_tw, \
+             patch("v2.session.run_bluesky_stage",
+                   return_value=BlueskyStageResult()) as mock_old_bs:
+            run_session(
+                dry_run=False, skip_dashboard=True,
+            )
+
+        mock_new.assert_not_called()
+        mock_old_tw.assert_called_once()
+        mock_old_bs.assert_called_once()

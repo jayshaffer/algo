@@ -94,6 +94,12 @@ tasks:
     cmds:
       - docker compose exec trading python -m v2.entertainment {{.CLI_ARGS}}
 
+  premarket:
+    desc: Run the pre-market social post stage (skips on weekends/holidays)
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.premarket {{.CLI_ARGS}}
+
   # ---------------------------------------------------------------------------
   # Paper trading
   # ---------------------------------------------------------------------------
