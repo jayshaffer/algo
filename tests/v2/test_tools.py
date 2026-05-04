@@ -65,8 +65,8 @@ class TestWritePlaybook:
         result = tool_write_playbook(
             market_outlook="Bullish",
             priority_actions=[
-                {"ticker": "AAPL", "action": "buy", "reasoning": "Entry hit", "confidence": "high"},
-                {"ticker": "MSFT", "action": "buy", "reasoning": "Breakout", "confidence": "medium"},
+                {"ticker": "AAPL", "action": "buy", "reasoning": "Entry hit", "confidence": "high", "thesis_id": 1},
+                {"ticker": "MSFT", "action": "buy", "reasoning": "Breakout", "confidence": "medium", "thesis_id": 2},
             ],
             watch_list=[],
             risk_notes="",
@@ -91,8 +91,8 @@ class TestWritePlaybook:
         result = tool_write_playbook(
             market_outlook="Bullish",
             priority_actions=[
-                {"ticker": "AAPL", "action": "buy", "reasoning": "Entry hit", "confidence": "high"},
-                {"ticker": "MSFT", "action": "sell", "reasoning": "Take profit", "confidence": "medium"},
+                {"ticker": "AAPL", "action": "buy", "reasoning": "Entry hit", "confidence": "high", "thesis_id": 1},
+                {"ticker": "MSFT", "action": "sell", "reasoning": "Take profit", "confidence": "medium", "thesis_id": 2},
             ],
             watch_list=[],
             risk_notes="",
@@ -186,6 +186,56 @@ class TestWritePlaybook:
         # Check second action has priority=2
         second_args = insert_calls[1][0][1]
         assert second_args[-1] == 2
+
+    def test_buy_action_without_thesis_id_rejected(self):
+        """Playbook buy/sell actions must cite a thesis. The strategist's
+        job is producing thesis-backed actions; allowing NULL thesis_id
+        creates orphans in playbook_actions that break attribution joins.
+        """
+        result = tool_write_playbook(
+            market_outlook="neutral",
+            priority_actions=[
+                {"ticker": "AAPL", "action": "buy", "intent_type": "open_pct",
+                 "intent_magnitude": 0.05, "reasoning": "no thesis here"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result
+        assert "thesis_id" in result.lower() or "thesis" in result.lower()
+
+    def test_sell_action_without_thesis_id_rejected(self):
+        result = tool_write_playbook(
+            market_outlook="neutral",
+            priority_actions=[
+                {"ticker": "AAPL", "action": "sell", "intent_type": "exit_full",
+                 "intent_magnitude": None, "reasoning": "no thesis here"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result
+        assert "thesis" in result.lower()
+
+    def test_buy_action_with_thesis_id_accepted(self, mock_db, mock_cursor):
+        """Sanity: when thesis_id is provided, the write proceeds."""
+        from unittest.mock import patch
+        from v2.tools import tool_write_playbook
+
+        with patch("v2.tools.replace_playbook_actions_atomic",
+                   return_value=(99, 1)) as mock_write:
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "AAPL", "action": "buy", "thesis_id": 42,
+                     "intent_type": "open_pct", "intent_magnitude": 0.05,
+                     "reasoning": "thesis-backed"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" not in result
+        mock_write.assert_called_once()
 
 
 # --- Market snapshot tests ---

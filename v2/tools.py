@@ -414,6 +414,21 @@ def tool_write_playbook(
         seen_pairs.add(pair)
         actions_by_ticker[ticker] = act
 
+    # Playbook buy/sell actions must cite a thesis. The strategist's job
+    # is producing thesis-backed actions; allowing NULL thesis_id creates
+    # orphans in playbook_actions that break the attribution joins
+    # (decision_signals → theses) and re-opens the same shape that was
+    # fixed for news_signal:unknown.
+    for action in priority_actions:
+        act = action.get("action")
+        ticker = action.get("ticker")
+        if act in ("buy", "sell") and action.get("thesis_id") is None:
+            return (
+                f"Error: Playbook {act} for {ticker} is missing thesis_id. "
+                f"Every buy/sell action in the playbook must cite a thesis. "
+                f"Create or adopt a thesis first, then reference its id."
+            )
+
     try:
         playbook_date = date.today()
         # P2.22: single transaction for upsert + delete + N inserts. The
