@@ -52,6 +52,36 @@ class TestStrategistAttributionConstraints:
         assert "WEAK" in system_prompt
         assert "CONSTRAINT" in system_prompt
 
+    def test_orphan_positions_fetched_only_once(self):
+        """T2.14: `get_orphan_positions` is a real DB query and was being
+        invoked twice on every strategist setup — once for the formation
+        context block, once for the adopt-step list. Sharing the result
+        cuts that to one fetch.
+        """
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 1
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 500
+        mock_result.output_tokens = 100
+        mock_result.cache_creation_input_tokens = 0
+        mock_result.cache_read_input_tokens = 0
+
+        with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
+             patch("v2.ideation_claude.reset_session"), \
+             patch("v2.ideation_claude.run_agentic_loop", return_value=mock_result), \
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.get_orphan_positions") as mock_orphans:
+            # Simulate one orphan so both code paths actually consume it.
+            mock_orphans.return_value = [
+                {"ticker": "AAPL", "shares": 5, "avg_cost": 150.0},
+            ]
+            run_strategist_loop(model="claude-opus-4-6", max_turns=1)
+
+        assert mock_orphans.call_count == 1, (
+            f"Expected one orphan fetch per strategist run, got {mock_orphans.call_count}"
+        )
+
     def test_runs_without_constraints(self):
         """Should work fine with empty attribution_constraints."""
         mock_result = MagicMock()
@@ -143,26 +173,43 @@ class TestCountActions:
         messages = [
             {"role": "user", "content": [{"type": "tool_result", "content": "Created thesis ID 1 for AAPL"}]},
         ]
-        created, updated, closed = count_actions(messages)
+        created, updated, closed, adopted = count_actions(messages)
         assert created == 1
+        assert adopted == 0
 
     def test_counts_updated(self):
         messages = [
             {"role": "user", "content": [{"type": "tool_result", "content": "Updated thesis ID 1"}]},
         ]
-        created, updated, closed = count_actions(messages)
+        created, updated, closed, adopted = count_actions(messages)
         assert updated == 1
 
     def test_counts_closed(self):
         messages = [
             {"role": "user", "content": [{"type": "tool_result", "content": "Closed thesis ID 1 with status 'invalidated'"}]},
         ]
-        created, updated, closed = count_actions(messages)
+        created, updated, closed, adopted = count_actions(messages)
         assert closed == 1
 
+    def test_counts_adopted_distinct_from_created(self):
+        """T2.12: 'Adopted thesis ID' must increment `adopted`, not
+        `created`, so the two flows can be reported separately downstream.
+        """
+        messages = [
+            {"role": "user", "content": [
+                {"type": "tool_result", "content": "Adopted thesis ID 7 for AAPL (adopted existing position, long, high confidence)."}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "content": "Created thesis ID 8 for MSFT (long, high confidence)."}
+            ]},
+        ]
+        created, updated, closed, adopted = count_actions(messages)
+        assert created == 1
+        assert adopted == 1
+
     def test_empty_messages(self):
-        created, updated, closed = count_actions([])
-        assert created == 0 and updated == 0 and closed == 0
+        created, updated, closed, adopted = count_actions([])
+        assert (created, updated, closed, adopted) == (0, 0, 0, 0)
 
 
 class TestSystemPrompts:

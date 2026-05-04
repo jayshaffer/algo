@@ -74,6 +74,11 @@ class SessionResult:
     bluesky_error: str | None = None
     dashboard_error: str | None = None
 
+    # T2.1: distinct from errors — set when the session was already completed
+    # for the day and force=False. The caller exits 0 with a clear log line
+    # rather than treating "nothing to do" as a failure.
+    idempotent_skip: str | None = None
+
     skipped_pipeline: bool = False
     skipped_ideation: bool = False
     skipped_executor: bool = False
@@ -143,17 +148,35 @@ def _check_and_record_session(force: bool, session_date) -> tuple[int | None, se
     return session_id, completed_stages, None
 
 
-def _run_learning_refresh(result: SessionResult) -> str:
-    """Stage 0 — returns attribution_constraints (possibly empty)."""
+def _run_learning_refresh(
+    result: SessionResult,
+    session_id: int | None,
+    completed_stages: set,
+) -> str:
+    """Stage 0 — returns attribution_constraints (possibly empty).
+
+    T2.2: tracked as a session_stages row so resumes skip a completed
+    learning refresh and the dashboard can see learning success/failure
+    alongside other stages.
+    """
+    if "learning" in completed_stages:
+        logger.info("[Stage 0] Learning refresh — SKIPPED (completed in prior run)")
+        # Recompute constraints from the existing attribution table; it's
+        # cheap and gives the strategist the same context it would have
+        # had on the original run.
+        return build_attribution_constraints()
     logger.info("[Stage 0] Refreshing learning data")
+    _start_stage(session_id, "learning")
     try:
         run_backfill()
         compute_signal_attribution()
         constraints = build_attribution_constraints()
+        _complete_stage(session_id, "learning")
         logger.info("Learning refresh complete")
         return constraints
     except Exception as e:
         result.learning_error = str(e)
+        _fail_stage(session_id, "learning", str(e))
         logger.warning("Learning refresh failed: %s — continuing with stale data", e)
         return ""
 
@@ -441,11 +464,13 @@ def run_session(
 
     session_id, completed_stages, early_error = _check_and_record_session(force, today)
     if early_error:
-        result.learning_error = early_error
+        # T2.1: idempotent skip is not a failure. main() reads this field
+        # and exits 0 with a "nothing to do" log line.
+        result.idempotent_skip = early_error
         result.duration_seconds = time.monotonic() - start
         return result
 
-    attribution_constraints = _run_learning_refresh(result)
+    attribution_constraints = _run_learning_refresh(result, session_id, completed_stages)
     _run_pipeline_stage(result, session_id, completed_stages, skip_pipeline, pipeline_hours, pipeline_limit)
     _run_strategist_stage(
         result, session_id, completed_stages, skip_ideation,
@@ -492,6 +517,11 @@ def main():
         pipeline_hours=args.pipeline_hours,
         force=args.force,
     )
+    if result.idempotent_skip:
+        # T2.1: nothing to do, not a failure. Exit 0 so cron/Taskfile
+        # callers don't alert on a re-run.
+        logger.info("Session is a no-op: %s", result.idempotent_skip)
+        sys.exit(0)
     if result.has_errors:
         sys.exit(1)
 

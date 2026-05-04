@@ -395,6 +395,48 @@ class TestRunTradingSession:
         mock_close.assert_called_once_with(thesis_id=5, status="invalidated", reason="Conditions changed")
 
 
+class TestSessionDateConsistency:
+    """T2.10: session_date must be captured once at the top of
+    `run_trading_session` and threaded through every callsite that
+    needed today's date — client_order_id signing, dedup checks, and
+    decision-row inserts. A session running across midnight ET would
+    otherwise produce decision rows tagged with multiple dates.
+    """
+
+    def test_session_date_threaded_to_log_decisions(self, mock_db, mock_cursor):
+        from datetime import date as date_cls
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action="buy",
+            intent_type="invest_dollar", intent_magnitude=1500.0,
+            quantity=Decimal("10"),
+            reasoning="t", confidence="high", is_off_playbook=False,
+            signal_refs=[],
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            # Anchor the session-date wall clock to a fixed ET datetime.
+            stack.enter_context(patch(
+                "v2.trader.datetime",
+                MagicMock(
+                    now=MagicMock(return_value=__import__(
+                        "datetime"
+                    ).datetime(2026, 5, 3, 23, 30)),
+                ),
+            ))
+            run_trading_session(dry_run=True)
+        # Verify insert_decision was called with the captured session_date.
+        # In dry_run, execute_market_order returns DRY_RUN order id; the
+        # dedup check / log_decisions still receive the date arg.
+        called_dates = {
+            (c.kwargs.get("decision_date") or c.args[0])
+            for c in mocks["insert_decision"].call_args_list
+        }
+        # At minimum: the session_date is a date instance and there is
+        # exactly one distinct value across all logged rows.
+        assert all(isinstance(d, date_cls) for d in called_dates)
+        assert len(called_dates) == 1
+
+
 class TestMarketHoursGate:
     def test_skips_trading_when_market_closed(self, mock_db, mock_cursor):
         """When market is closed and not dry_run, should return early after sync."""
@@ -1617,7 +1659,14 @@ class TestInsertDecisionRetryAndOrphanFallback:
         monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
 
         decision = _make_decision(ticker="AAPL", action="buy")
-        order_result = MagicMock(success=True, filled_qty=Decimal("0"), filled_avg_price=None)
+        # T2.8: explicitly set unknown_partial_fill=False so this test
+        # exercises the genuine zero-fill path. Without the explicit
+        # assignment a MagicMock attribute is truthy and would mis-route
+        # this case through the unknown-fill orphan branch.
+        order_result = MagicMock(
+            success=True, filled_qty=Decimal("0"), filled_avg_price=None,
+            unknown_partial_fill=False,
+        )
         with patch("v2.trader.insert_decision", side_effect=RuntimeError("db down")):
             _insert_decision_with_retry(
                 decision=decision, order_id="ord-1", order_result=order_result,
@@ -1628,6 +1677,37 @@ class TestInsertDecisionRetryAndOrphanFallback:
                          "playbook_action_id": 1, "is_off_playbook": False, "order_id": "ord-1"},
             )
         assert not orphan_log.exists()
+
+    def test_unknown_partial_fill_produces_orphan(
+        self, mock_db, mock_cursor, tmp_path, monkeypatch,
+    ):
+        """T2.8: when post-cancel re-fetch failed, the order_result carries
+        `unknown_partial_fill=True`. The trader can't tell whether anything
+        filled, so an orphan reconciliation log is the safe choice — better
+        a redundant entry than a silently missed fill.
+        """
+        from v2.trader import _insert_decision_with_retry
+        orphan_log = tmp_path / "orphans.jsonl"
+        monkeypatch.setattr("v2.trader._ORPHAN_DECISIONS_LOG", orphan_log)
+        monkeypatch.setattr("v2.trader.time.sleep", lambda s: None)
+
+        decision = _make_decision(ticker="AAPL", action="buy")
+        order_result = MagicMock(
+            success=False, filled_qty=None, filled_avg_price=None,
+            unknown_partial_fill=True,
+        )
+        with patch("v2.trader.insert_decision", side_effect=RuntimeError("db down")):
+            _insert_decision_with_retry(
+                decision=decision, order_id="ord-7", order_result=order_result,
+                payload={"ticker": "AAPL", "action": "buy", "quantity": Decimal("1"),
+                         "decision_date": date(2026, 5, 3), "price": Decimal("150"),
+                         "reasoning": "r", "signals_used": {},
+                         "account_equity": Decimal("100000"), "buying_power": Decimal("50000"),
+                         "playbook_action_id": 1, "is_off_playbook": False, "order_id": "ord-7"},
+            )
+        assert orphan_log.exists()
+        contents = orphan_log.read_text()
+        assert "ord-7" in contents
 
 
 class TestSignalRefValidation:

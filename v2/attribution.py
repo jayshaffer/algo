@@ -155,15 +155,15 @@ def _format_attribution_summary() -> str:
     if outperforming:
         lines.append("Outperforming signals (positive alpha vs SPY):")
         for r in outperforming:
-            avg = float(r.get("avg_outcome_7d") or 0)
-            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
+            avg = float(r["avg_outcome_7d"]) if r.get("avg_outcome_7d") is not None else 0.0
+            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") is not None else 0.0
             lines.append(f"  - {r['category']}: {avg:+.2f}% avg 7d alpha, {wr:.0f}% beat-market rate (n={r['sample_size']})")
 
     if underperforming:
         lines.append("Underperforming signals (negative alpha vs SPY):")
         for r in underperforming:
-            avg = float(r.get("avg_outcome_7d") or 0)
-            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
+            avg = float(r["avg_outcome_7d"]) if r.get("avg_outcome_7d") is not None else 0.0
+            wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") is not None else 0.0
             lines.append(f"  - {r['category']}: {avg:+.2f}% avg 7d alpha, {wr:.0f}% beat-market rate (n={r['sample_size']})")
 
     if insufficient:
@@ -192,8 +192,8 @@ def build_attribution_constraints(min_samples: int = 5) -> str:
     for r in rows:
         cat = r["category"]
         n = r["sample_size"]
-        avg = float(r["avg_outcome_7d"]) if r.get("avg_outcome_7d") else 0
-        wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") else 0
+        avg = float(r["avg_outcome_7d"]) if r.get("avg_outcome_7d") is not None else 0.0
+        wr = float(r["win_rate_7d"]) * 100 if r.get("win_rate_7d") is not None else 0.0
 
         if n < min_samples:
             insufficient.append(f"{cat} (n={n})")

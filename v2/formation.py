@@ -48,14 +48,19 @@ def get_orphan_positions() -> list[dict]:
     return [p for p in positions if p["ticker"] not in covered_tickers]
 
 
-def build_formation_context() -> str:
+def build_formation_context(orphans: list[dict] | None = None) -> str:
     """Build context injection for strategist/reflection prompts.
 
     Returns a string to append to the system prompt. Empty string
     if neither formation mode nor orphan positions apply.
+
+    T2.14: callers may pre-fetch orphans and pass them in to avoid
+    a redundant DB roundtrip when both this function and the
+    strategist's orphan-block builder need the same data.
     """
     in_formation = is_formation_mode()
-    orphans = get_orphan_positions()
+    if orphans is None:
+        orphans = get_orphan_positions()
 
     if not in_formation and not orphans:
         return ""

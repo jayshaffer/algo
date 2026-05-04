@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
@@ -40,7 +40,11 @@ def fetch_news(
     """Fetch news from Alpaca News API."""
     client = get_news_client()
 
-    start_time = datetime.now() - timedelta(hours=hours)
+    # T2.3: Alpaca returns aware UTC timestamps; the start filter must
+    # be aware too. A naive `datetime.now()` is interpreted as local
+    # time by some pieces of the SDK, which can shift the cutoff and
+    # cause "lost" news on hosts whose clock is not UTC.
+    start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     request_params = {
         "start": start_time,

@@ -79,29 +79,29 @@ Real correctness/safety risks but not single-session blockers.
 - [x] Test: invalid thesis_id with only `add_signal_refs` returns clean error string, not raw psycopg2 error
 
 ### T1.8 — Truthy-check bug repeated in 5 sites (P3.41 not propagated)
-- [ ] `attribution.py:185-186` (`build_attribution_constraints`): replace `if r.get(...) else 0` with `is not None` checks
-- [ ] `patterns.py:93-97` (`analyze_signal_categories` builder)
-- [ ] `patterns.py:131-134` (`analyze_sentiment_buckets` builder)
-- [ ] `patterns.py:165-167` (`analyze_ticker_performance` builder)
-- [ ] `patterns.py:204-205` (`analyze_confidence_buckets` builder)
-- [ ] `attribution.py:149,156` (`_format_attribution_summary` — coincidentally correct output, but fix for consistency)
-- [ ] Test: insert a category with `avg_outcome_7d=Decimal(0)`; assert it appears in the underperforming bucket and pattern report (not "N/A")
+- [x] `attribution.py:185-186` (`build_attribution_constraints`): replaced `if r.get(...) else 0` with `is not None` checks
+- [x] `patterns.py` `analyze_signal_categories` builder
+- [x] `patterns.py` `analyze_sentiment_performance` builder
+- [x] `patterns.py` `analyze_ticker_performance` builder
+- [x] `patterns.py` `analyze_confidence_correlation` builder
+- [x] `attribution.py` `_format_attribution_summary` (already partially fixed by P3.41 for bucket gating; remaining truthy formatting checks fixed for consistency)
+- [x] Also fixed `generate_pattern_report` rendering — without this fix the dataclass-level `0.0` still renders "N/A" because the report uses the same truthy pattern
+- [x] Test: signal_categories/sentiment/ticker/confidence rows with `Decimal(0)` render as "+0.00%" not "N/A" in `generate_pattern_report`; None still renders as "N/A"
 
 ### T1.9 — `backfill.py:75,152` calendar vs trading-day cutoff mismatch
-- [ ] Replace `today - timedelta(days=days_threshold)` with a trading-day-aware cutoff: scan back `days_threshold` trading days from today and use that date
-- [ ] Reuse the existing `trading_day_offset` logic in reverse, or build a small `trading_day_cutoff(today, n)` helper
-- [ ] Test: a decision made 7 calendar days ago on a Friday is NOT eligible; one made 10 calendar days ago (= 7 trading days) IS eligible
+- [x] Added `trading_day_cutoff(today, n)` helper (mirror of `trading_day_offset` in reverse)
+- [x] `get_decisions_needing_backfill` now uses trading-day cutoff
+- [x] Test: from a Friday, calendar-day cutoff would be 7 days back (the prior Friday); trading-day cutoff lands on the Wednesday before — verified
 
 ### T1.10 — `backfill.py:170-172` SPY cache stores None on transient failure
-- [ ] Only cache successful fetches: `if result is not None: spy_prices[date] = result`
-- [ ] Add parallel `spy_exit_prices` cache keyed by `exit_date` (perf — eliminates redundant fetches)
-- [ ] Test: mock first SPY fetch to return None; assert second call to same date refetches (cache miss); third with success caches
+- [x] Cache only successful fetches via `_spy_price` helper that gates on `price is not None`
+- [x] Added parallel `spy_exit_prices` cache keyed by `exit_date` to eliminate redundant exit-side fetches
+- [x] Tests: transient failure does NOT poison cache (refetch on second access); successful fetches cached for subsequent decisions sharing the same date
 
-### T1.11 — `strategy.py:246-253` `tool_get_session_summary` missing orphan guards
-- [ ] Add `LEFT JOIN theses t ON ds.signal_type = 'thesis' AND ds.signal_id = t.id`
-- [ ] Add WHERE clauses: `(ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)`, same for macro_signal and thesis
-- [ ] Mirror the pattern from `attribution.py:70-72`
-- [ ] Test: insert a `decision_signals` row pointing to a deleted thesis; assert `tool_get_session_summary` excludes it
+### T1.11 — `strategy.py` `tool_get_session_summary` missing orphan guards
+- [x] Added `LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id`
+- [x] Added WHERE filters for all three signal types (news/macro/thesis), mirroring `attribution.py`
+- [x] Test: SQL contains the three orphan-FK guards; orphan thesis labels do not leak through to reflection text
 
 ---
 
@@ -109,75 +109,79 @@ Real correctness/safety risks but not single-session blockers.
 
 Quality issues; address in batches when convenient.
 
-### T2.1 — `session.py:131-132` "session already completed" exits 1
-- [ ] Add `result.idempotent_skip: str | None` field; exclude from `_ERROR_FIELDS`
-- [ ] Route the early-return through it; `main()` exits 0 with a distinct log line
-- [ ] Test: re-run session same day without `--force`; assert exit 0
+### T2.1 — `session.py` "session already completed" exits 1
+- [x] Added `result.idempotent_skip: str | None` field; not in `_ERROR_FIELDS`
+- [x] Idempotent early-return now populates that field; `main()` exits 0 with a "no-op" log line
+- [x] Test: idempotent skip leaves has_errors False and routes through the new field
 
-### T2.2 — `session.py:146-158` stage 0 bypasses session_stages tracking
-- [ ] Wrap `_run_learning_refresh` with `_start_stage(session_id, "learning")` / `_complete_stage` / `_fail_stage`
-- [ ] Test: learning stage success/failure both produce a `session_stages` row
+### T2.2 — stage 0 bypasses session_stages tracking
+- [x] Wrapped `_run_learning_refresh` with start/complete/fail stage helpers under stage name "learning"
+- [x] Resume path skips re-running backfill+attribution if "learning" already completed
+- [x] Tests: success and failure each produce a session_stages row; resume skip leaves backfill uncalled
 
-### T2.3 — `news.py:43,66` + schema TZ handling
-- [ ] `news.py:43`: `datetime.now(timezone.utc) - timedelta(...)` instead of naive `datetime.now()`
-- [ ] Migration: `ALTER TABLE news_signals ALTER COLUMN published_at TYPE TIMESTAMPTZ USING published_at AT TIME ZONE 'UTC'`
-- [ ] Same for `macro_signals.published_at`
-- [ ] Test: publish_at round-trips as tz-aware UTC
+### T2.3 — TZ handling for news/macro published_at
+- [x] `news.py:fetch_news` uses `datetime.now(timezone.utc) - timedelta(hours=hours)` for the start cutoff
+- [x] New migration `db/init/022_news_macro_published_at_tz.sql` promotes `published_at` to TIMESTAMPTZ on both signal tables (USING ... AT TIME ZONE 'UTC' for existing rows)
+- [ ] **Manual step:** apply migration to running prod + paper DBs (denied permission to run ALTER TABLE on prod from this session)
 
-### T2.4 — `market_data.py:71-96` `get_bar_change(days=1)` returns 0.0 on insufficient data
-- [ ] Require `len(symbol_bars) > days` strictly before computing
-- [ ] Return `None` otherwise
-- [ ] Update `format_market_snapshot` and downstream context builders to render `None` as `"N/A"` (not 0%)
-- [ ] Test: single-bar response returns None, not 0.0
+### T2.4 — `get_bar_change(days=1)` returns 0.0 on insufficient data
+- [x] Strict `len(symbol_bars) <= days` returns None
+- [x] Removed the `change_5d or 0.0` coercion; SectorPerformance.change_5d is now Optional[float]
+- [x] `format_market_snapshot` renders missing 5d as "N/A" instead of "0.0%"
+- [x] Tests: 1-bar/5-bar responses return None; sectors with no 5d data render as N/A
 
-### T2.5 — `patterns.py:149,269` `total_pnl_7d` sums percentages
-- [ ] Either rename to `sum_pct_returns` and order by `AVG(outcome_7d)`, OR
-- [ ] Compute real dollar P&L: `SUM(quantity * price * outcome_7d / 100)`
-- [ ] Update report header in `analyze_ticker_performance` to match the chosen semantics
-- [ ] Test: ticker leaderboard ordering matches the chosen metric
+### T2.5 — `total_pnl_7d` sums percentages
+- [x] Renamed dataclass field and SQL alias to `sum_pct_returns_7d`; ORDER BY now `avg_outcome_7d`
+- [x] Pattern report header updated to "by avg 7d return" and renders avg per ticker
+- [x] Tests: SQL contains `as sum_pct_returns_7d` and `ORDER BY avg_outcome_7d`; existing fixture data flowed through
 
-### T2.6 — `strategy.py` asymmetric session caps
-- [ ] Add `MAX_PROPOSALS_PER_SESSION = 3` (mirrors `MAX_RETIREMENTS_PER_SESSION`)
-- [ ] Wire through `tool_propose_rule` with the same ContextVar pattern
-- [ ] Test: 4th proposal in same session is rejected with clean error
+### T2.6 — strategy asymmetric session caps
+- [x] `MAX_PROPOSALS_PER_SESSION = 3`, `_session_proposals` ContextVar mirrors retirements
+- [x] `tool_propose_rule` enforces the cap and surfaces a clean message
+- [x] System prompt + `reset_session()` updated
+- [x] Tests: cap rejection, no DB write past cap, isolation across threads (mirror of retirement test)
 
-### T2.7 — `strategy.py:134,188` TZ comparison hazard
-- [ ] Convert `current["created_at"]` to UTC before `.date()`, OR
-- [ ] Use `datetime.now(timezone.utc).date()` consistently
-- [ ] Apply to both 3-day identity throttle and 5-day rule-tenure check
-- [ ] Test: a created_at at 23:30 ET (= 03:30 UTC next day) compared from 09:00 ET 3 days later behaves consistently
+### T2.7 — strategy TZ comparison hazard
+- [x] Added `_utc_date(dt)` helper that treats naive datetimes as UTC and converts aware ones via `astimezone(UTC)`
+- [x] Identity throttle and rule tenure both compute age via `datetime.now(UTC).date() - _utc_date(created_at)`
+- [x] Tests: helper covers both naive and aware cases (23:30 ET → May 2 UTC)
 
-### T2.8 — `executor.py:341-379` `wait_for_fill` partial-fill semantics
-- [ ] On post-cancel re-fetch returning partial fill, return `success=True` with `filled_qty=Decimal("0")` only if confirmed zero
-- [ ] Otherwise propagate explicit `unknown_partial_fill` marker so trader logic can handle vs treating as failure
-- [ ] Test: timeout + re-fetch shows partial fill; assert decision row is logged with the partial qty
+### T2.8 — `wait_for_fill` partial-fill semantics
+- [x] Confirmed-zero post-cancel re-fetch returns `success=False, filled_qty=Decimal('0'), unknown_partial_fill=False`
+- [x] Re-fetch failures set `unknown_partial_fill=True` so the trader treats the result as needing reconciliation
+- [x] Trader's `_insert_decision_with_retry` now writes an orphan log entry when `unknown_partial_fill=True` even if `filled_qty` is None
+- [x] Tests: confirmed-zero case, unknown-fill case, and orphan-log behavior
 
-### T2.9 — `executor.py:317-339` `wait_for_fill` no try/except around get_order_by_id
-- [ ] Wrap with try/except; on transient error sleep + retry up to 3 times before cancelling
-- [ ] Test: mock `get_order_by_id` to raise once then succeed; loop continues
+### T2.9 — `wait_for_fill` no try/except around get_order_by_id
+- [x] Per-iteration try/except with up to 3 consecutive transient errors before breaking the poll loop
+- [x] Persistent failures still trigger the cancel + post-cancel re-fetch dance (which then surfaces unknown_partial_fill via T2.8)
+- [x] Tests: one transient error then success; persistent errors break loop and attempt cancel
 
-### T2.10 — `trader.py:213-223,300,525,709,721` `date.today()` evaluated repeatedly
-- [ ] Capture `session_date = datetime.now(ZoneInfo("America/New_York")).date()` once at top of `run_trading_session`
-- [ ] Thread through every `date.today()` callsite in trader.py
-- [ ] Test: mock the clock to roll past midnight mid-session; assert all decision rows + client_order_ids share one date
+### T2.10 — `trader.py` `date.today()` repeated
+- [x] Captured once at the top of `run_trading_session` as `datetime.now(ZoneInfo("America/New_York")).date()`
+- [x] Threaded `session_date` through `_execute_decisions`, `_prepare_decision`, `_execute_decision_order`, `_log_decisions`
+- [x] Replaces every prior `date.today()` callsite in trader.py — verified with grep
+- [x] Test: insert_decision is called with a single distinct `decision_date` across all logged rows
 
-### T2.11 — `executor.py:153-186` `sync_orders_from_alpaca` deletes filled orders
-- [ ] Decide intent: transient `open_orders` (current behavior) vs audit log
-- [ ] If transient, add a docstring clarifying; if audit, query with `status=ALL, after=session_start` and only delete confirmed-not-found
+### T2.11 — `sync_orders_from_alpaca` docstring
+- [x] Added a multi-paragraph docstring clarifying the function as a transient mirror of Alpaca's open-orders set, not an audit log; calls out that filled orders' history lives in `decisions`
 
-### T2.12 — `ideation_claude.py:161-182` `count_actions` conflates adopt with create
-- [ ] Have `tool_adopt_thesis` return `"Adopted thesis ID ..."` (distinct prefix)
-- [ ] Add `adopted` counter in `count_actions`; surface separately in the dashboard memo
-- [ ] Test: a session with 2 creates + 3 adopts reports `created=2, adopted=3`
+### T2.12 — `count_actions` conflates adopt with create
+- [x] `tool_adopt_thesis` now returns `"Adopted thesis ID ..."` instead of reusing the `Created` prefix
+- [x] `count_actions` returns a 4-tuple including `adopted`; matching field added to StrategistResult/ClaudeIdeationResult
+- [x] `_print_cost_summary` shows `Theses adopted: N` when nonzero
+- [x] Tests: distinct adopt/create counters; existing test_adopt_success updated to assert the new prefix
 
-### T2.13 — `formation.py:27-32` + DB queries strict `>` excludes boundary day
-- [ ] `database/trading_db.py:183-190`: change `>` to `>=` for `get_recent_decisions` window
-- [ ] Audit similar `> CURRENT_DATE - INTERVAL` shapes in the same file; fix consistently
-- [ ] Document the lookback semantic in a one-liner so it doesn't regress
+### T2.13 — `get_recent_decisions` strict `>` excludes boundary
+- [x] `database/trading_db.py:get_recent_decisions` uses `>=` for the lookback window
+- [x] Same fix for `get_account_snapshots` so window math is consistent across the codebase
+- [x] Both functions now have a one-liner docstring documenting "inclusive of boundary day"
+- [x] Tests: SQL contains the inclusive `>=` form for both functions
 
-### T2.14 — `ideation_claude.py:310-337` + `formation.py` orphan positions fetched twice
-- [ ] Fetch once in `run_strategist_loop`; pass the list into both `build_formation_context` and `_build_orphan_block`
-- [ ] Test: assert `get_orphan_positions` is called exactly once per strategist run
+### T2.14 — orphan positions fetched twice
+- [x] `run_strategist_loop` fetches `get_orphan_positions()` once and passes the list into both `build_formation_context(orphans=...)` and `_build_orphan_block(orphans=...)`
+- [x] Both helper functions accept an optional pre-fetched list and fall back to a DB fetch when called standalone
+- [x] Test: `get_orphan_positions` is called exactly once per strategist run
 
 ---
 

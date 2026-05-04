@@ -37,7 +37,10 @@ class SectorPerformance:
     sector: str
     etf: str
     change_1d: float
-    change_5d: float
+    # T2.4: change_5d may legitimately be missing (e.g. on a stock with
+    # fewer than 6 bars). Keep None distinguishable from 0.0% so the
+    # rendered context shows "N/A" instead of a misleading "0.0%".
+    change_5d: float | None
 
 
 @dataclass
@@ -69,7 +72,13 @@ def get_data_client() -> StockHistoricalDataClient:
 
 
 def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) -> float | None:
-    """Get percentage change over N days for a symbol."""
+    """Get percentage change over N days for a symbol.
+
+    T2.4: previously the guard was `len < days`, which still computed
+    a change for `days=1` with only one bar (recent and past collapsed
+    to the same row → 0.0%). The strict `len > days` ensures we have
+    at least one bar prior to `recent`.
+    """
     end = datetime.now()
     start = end - timedelta(days=days + 5)
 
@@ -84,11 +93,11 @@ def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) ->
         bars = client.get_stock_bars(request)
         symbol_bars = list(bars[symbol])
 
-        if len(symbol_bars) < days:
+        if len(symbol_bars) <= days:
             return None
 
         recent = symbol_bars[-1]
-        past = symbol_bars[-days - 1] if len(symbol_bars) > days else symbol_bars[0]
+        past = symbol_bars[-days - 1]
 
         change = ((recent.close - past.close) / past.close) * 100
         return round(change, 2)
@@ -109,7 +118,7 @@ def get_sector_performance(client: StockHistoricalDataClient) -> list[SectorPerf
                 sector=sector,
                 etf=etf,
                 change_1d=change_1d,
-                change_5d=change_5d or 0.0,
+                change_5d=change_5d,
             ))
 
     return sectors
@@ -280,8 +289,12 @@ def format_market_snapshot(snapshot: MarketSnapshot) -> str:
     lines.append("Sector Performance:")
     for sector in sorted(snapshot.sectors, key=lambda s: s.change_1d, reverse=True):
         sign_1d = "+" if sector.change_1d >= 0 else ""
-        sign_5d = "+" if sector.change_5d >= 0 else ""
-        lines.append(f"  {sector.sector}: {sign_1d}{sector.change_1d:.1f}% (1d), {sign_5d}{sector.change_5d:.1f}% (5d)")
+        if sector.change_5d is None:
+            change_5d_str = "N/A"
+        else:
+            sign_5d = "+" if sector.change_5d >= 0 else ""
+            change_5d_str = f"{sign_5d}{sector.change_5d:.1f}%"
+        lines.append(f"  {sector.sector}: {sign_1d}{sector.change_1d:.1f}% (1d), {change_5d_str} (5d)")
     lines.append("")
 
     lines.append("Top Gainers:")

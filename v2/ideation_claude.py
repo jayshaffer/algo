@@ -138,9 +138,12 @@ class StrategistResult:
     theses_created: int
     theses_updated: int
     theses_closed: int
-    final_summary: str
-    input_tokens: int
-    output_tokens: int
+    # T2.12: distinct from `theses_created` so adoption-heavy sessions
+    # don't read as bursts of new idea generation.
+    theses_adopted: int = 0
+    final_summary: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -153,16 +156,25 @@ class ClaudeIdeationResult:
     theses_created: int
     theses_updated: int
     theses_closed: int
-    final_summary: str
-    input_tokens: int
-    output_tokens: int
+    theses_adopted: int = 0
+    final_summary: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
-def count_actions(messages: list[dict]) -> tuple[int, int, int]:
-    """Count thesis actions from tool results in conversation."""
+def count_actions(messages: list[dict]) -> tuple[int, int, int, int]:
+    """Count thesis actions from tool results in conversation.
+
+    T2.12: returns a 4-tuple (created, updated, closed, adopted). Previously
+    `count_actions` returned 3 values and `Adopted` was a `Created`
+    prefix, so adoption-heavy sessions inflated `created` and the
+    dashboard couldn't separate "the system found new ideas" from
+    "the system tidied orphan positions."
+    """
     created = 0
     updated = 0
     closed = 0
+    adopted = 0
 
     for msg in messages:
         if msg["role"] == "user":
@@ -172,14 +184,16 @@ def count_actions(messages: list[dict]) -> tuple[int, int, int]:
                     if isinstance(item, dict) and item.get("type") == "tool_result":
                         result = item.get("content", "")
                         if isinstance(result, str):
-                            if "Created thesis ID" in result:
+                            if "Adopted thesis ID" in result:
+                                adopted += 1
+                            elif "Created thesis ID" in result:
                                 created += 1
                             elif "Updated thesis ID" in result:
                                 updated += 1
                             elif "Closed thesis ID" in result:
                                 closed += 1
 
-    return created, updated, closed
+    return created, updated, closed, adopted
 
 
 def _run_claude_loop(
@@ -209,10 +223,10 @@ def _run_claude_loop(
         max_turns=max_turns,
     )
 
-    created, updated, closed = count_actions(result.messages)
+    created, updated, closed, adopted = count_actions(result.messages)
     summary = extract_final_text(result.messages) or "No summary available"
 
-    _print_cost_summary(label, result, created, updated, closed, summary)
+    _print_cost_summary(label, result, created, updated, closed, summary, adopted=adopted)
 
     return ClaudeIdeationResult(
         timestamp=timestamp,
@@ -221,13 +235,14 @@ def _run_claude_loop(
         theses_created=created,
         theses_updated=updated,
         theses_closed=closed,
+        theses_adopted=adopted,
         final_summary=summary,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
     )
 
 
-def _print_cost_summary(label, result, created, updated, closed, summary):
+def _print_cost_summary(label, result, created, updated, closed, summary, adopted=0):
     """Print token usage and cost estimate for an agentic loop result."""
     uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
     input_cost = uncached_input * 5 / 1_000_000
@@ -244,6 +259,8 @@ def _print_cost_summary(label, result, created, updated, closed, summary):
     print(f"  Theses created: {created}")
     print(f"  Theses updated: {updated}")
     print(f"  Theses closed: {closed}")
+    if adopted:
+        print(f"  Theses adopted: {adopted}")
     print("\nToken usage:")
     print(f"  Input tokens: {result.input_tokens:,}")
     if result.cache_read_input_tokens:
@@ -307,13 +324,19 @@ def _build_pre_seeded_context() -> str:
     return "\n\n".join(parts)
 
 
-def _build_orphan_block() -> tuple[str, str, int]:
-    """Return (orphan_block, adopt_step, step_offset). Empty strings / 0 when no orphans."""
-    try:
-        orphans = get_orphan_positions()
-    except Exception:
-        logger.exception("Failed to fetch orphan positions for initial message")
-        orphans = []
+def _build_orphan_block(orphans: list[dict] | None = None) -> tuple[str, str, int]:
+    """Return (orphan_block, adopt_step, step_offset). Empty strings / 0 when no orphans.
+
+    T2.14: callers can pass a pre-fetched orphans list to share state
+    with `build_formation_context`. The function still falls back to a
+    DB fetch if nothing is passed.
+    """
+    if orphans is None:
+        try:
+            orphans = get_orphan_positions()
+        except Exception:
+            logger.exception("Failed to fetch orphan positions for initial message")
+            orphans = []
 
     if not orphans:
         return "", "", 0
@@ -352,12 +375,20 @@ def run_strategist_loop(
     if attribution_constraints:
         base_prompt = base_prompt + "\n\n" + attribution_constraints
 
-    formation_context = build_formation_context()
+    # T2.14: fetch orphans once and share with both consumers — formation
+    # context (system prompt block) and the orphan-adoption step list.
+    try:
+        orphans = get_orphan_positions()
+    except Exception:
+        logger.exception("Failed to fetch orphan positions for strategist setup")
+        orphans = []
+
+    formation_context = build_formation_context(orphans=orphans)
     if formation_context:
         base_prompt = base_prompt + "\n\n" + formation_context
 
     pre_seeded = _build_pre_seeded_context()
-    orphan_block, adopt_step, step_offset = _build_orphan_block()
+    orphan_block, adopt_step, step_offset = _build_orphan_block(orphans=orphans)
     if orphan_block:
         pre_seeded = pre_seeded + "\n\n" + orphan_block
 

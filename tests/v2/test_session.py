@@ -77,6 +77,91 @@ class TestRunSession:
         assert result.learning_error is not None
         assert "DB error" in result.learning_error
 
+    def test_stage_0_tracked_in_session_stages(self):
+        """T2.2: learning refresh must be tracked as a session_stages row
+        so resume + dashboards see it the same way as every other stage.
+        """
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.insert_session_record", return_value=42), \
+             patch("v2.session.insert_session_stage") as mock_start, \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage"):
+
+            run_session(dry_run=False)
+
+        # Both start and complete must be called for the "learning" stage.
+        start_stages = [c.args[1] for c in mock_start.call_args_list]
+        complete_stages = [c.args[1] for c in mock_complete.call_args_list]
+        assert "learning" in start_stages
+        assert "learning" in complete_stages
+
+    def test_stage_0_failure_marks_stage_failed(self):
+        """T2.2: failure path also lands in session_stages as 'failed'."""
+        with patch("v2.session.run_backfill", side_effect=Exception("DB error")), \
+             patch("v2.session.compute_signal_attribution"), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.insert_session_record", return_value=42), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage"), \
+             patch("v2.session.fail_session_stage") as mock_fail:
+
+            run_session(dry_run=False)
+
+        # learning stage should be the one marked failed.
+        failed_stages = [c.args[1] for c in mock_fail.call_args_list]
+        assert "learning" in failed_stages
+
+    def test_stage_0_skipped_when_completed(self):
+        """T2.2: a resumed session whose learning stage already completed
+        must NOT re-run backfill — that's the whole point of stage tracking.
+        """
+        with patch("v2.session.run_backfill") as mock_backfill, \
+             patch("v2.session.compute_signal_attribution") as mock_attr, \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.insert_session_record", return_value=42), \
+             patch("v2.session.insert_session_stage"), \
+             patch("v2.session.complete_session_stage"), \
+             patch("v2.session.fail_session_stage"), \
+             patch("v2.session.get_completed_stages", return_value={"learning"}), \
+             patch("v2.session.get_session_for_date",
+                   return_value={"id": 42, "status": "running"}):
+
+            run_session(dry_run=False)
+
+        mock_backfill.assert_not_called()
+        mock_attr.assert_not_called()
+
+    def test_idempotent_skip_routes_to_idempotent_field(self):
+        """T2.1: when a session is already completed and force=False, the
+        early return must populate idempotent_skip — not learning_error.
+        That keeps has_errors False so main() exits 0.
+        """
+        with patch("v2.session.get_session_for_date",
+                   return_value={"id": 42, "status": "completed"}), \
+             patch("v2.session.run_backfill") as mock_backfill, \
+             patch("v2.session.run_pipeline") as mock_pipeline:
+
+            result = run_session(dry_run=False)
+
+        assert result.idempotent_skip is not None
+        assert "already completed" in result.idempotent_skip
+        assert result.learning_error is None
+        assert result.has_errors is False
+        # Importantly, no stage work runs after the idempotent skip.
+        mock_backfill.assert_not_called()
+        mock_pipeline.assert_not_called()
+
     def test_skip_pipeline(self):
         """Pipeline should be skipped when flag is set."""
         with patch("v2.session.run_backfill"), \
@@ -145,6 +230,7 @@ class TestSessionResult:
         assert result.strategist_error is None
         assert result.trading_error is None
         assert result.strategy_error is None
+        assert result.idempotent_skip is None
         assert result.skipped_pipeline is False
         assert result.skipped_ideation is False
         assert result.skipped_strategy is False
@@ -155,6 +241,13 @@ class TestSessionResult:
         assert result.dashboard_error is None
         assert result.skipped_dashboard is False
         assert result.duration_seconds == 0.0
+
+    def test_idempotent_skip_not_an_error(self):
+        """T2.1: idempotent_skip is a benign signal, not an error.
+        has_errors must remain False so main() exits 0.
+        """
+        result = SessionResult(idempotent_skip="Session already completed for 2026-05-03")
+        assert result.has_errors is False
 
 
 class TestStage4StrategyReflection:
@@ -478,7 +571,10 @@ class TestStage6Dashboard:
 
 class TestSessionIdempotency:
     def test_blocks_duplicate_session(self):
-        """Should refuse to run if a completed session exists for today."""
+        """Should refuse to run if a completed session exists for today.
+        T2.1: this is a benign skip, not an error — has_errors stays False
+        and the result instead carries `idempotent_skip`.
+        """
         with patch("v2.session.get_session_for_date") as mock_get, \
              patch("v2.session.run_backfill"), \
              patch("v2.session.compute_signal_attribution", return_value=[]), \
@@ -490,7 +586,8 @@ class TestSessionIdempotency:
             result = run_session(dry_run=False)
 
         mock_pipeline.assert_not_called()
-        assert result.has_errors or result.skipped_executor
+        assert result.idempotent_skip is not None
+        assert result.has_errors is False
 
     def test_allows_session_when_none_exists(self):
         """Should proceed normally when no session exists for today."""

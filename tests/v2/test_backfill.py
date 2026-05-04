@@ -4,7 +4,13 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from v2.backfill import backfill_outcomes, calculate_outcome, trading_day_offset
+from v2.backfill import (
+    backfill_outcomes,
+    calculate_outcome,
+    get_decisions_needing_backfill,
+    trading_day_cutoff,
+    trading_day_offset,
+)
 
 
 class TestTradingDayOffset:
@@ -40,6 +46,71 @@ class TestTradingDayOffset:
         result = trading_day_offset(monday, 30)
         # 30 trading days = 6 weeks = 42 calendar days
         assert result == date(2026, 4, 13)
+
+
+class TestTradingDayCutoff:
+    def test_seven_trading_days_back_from_friday(self):
+        """T1.9: 7 trading days back from Friday spans 9 calendar days
+        (skipping the weekend), not 7. The previous calendar-day cutoff
+        let a Friday-decision become eligible on the next Friday — only
+        5 trading days closed, not 7.
+        """
+        friday = date(2026, 3, 20)
+        result = trading_day_cutoff(friday, 7)
+        # Going back: Thu=1, Wed=2, Tue=3, Mon=4, Fri(prev)=5, Thu=6, Wed=7
+        assert result == date(2026, 3, 11)
+
+    def test_seven_trading_days_back_from_monday(self):
+        """7 trading days back from Monday lands on the Thursday before."""
+        monday = date(2026, 3, 23)
+        result = trading_day_cutoff(monday, 7)
+        # Sun(weekend), Sat(weekend), Fri=1, Thu=2, Wed=3, Tue=4, Mon=5, Fri(prev)=6, Thu=7
+        assert result == date(2026, 3, 12)
+
+    def test_thirty_trading_days_back(self):
+        """30 trading days back ≈ 6 weeks of calendar days."""
+        friday = date(2026, 5, 1)
+        result = trading_day_cutoff(friday, 30)
+        # 30 trading days back from a Friday = 6 weeks back = 42 calendar days
+        assert result == date(2026, 3, 20)
+
+
+class TestGetDecisionsNeedingBackfillCutoff:
+    """T1.9: cutoff must be trading-day aware so a decision made 7 calendar
+    days ago on a Friday is NOT yet eligible (only 5 trading days closed),
+    while one made 10 calendar days ago (= 7 trading days) IS eligible.
+    """
+
+    def test_cutoff_is_trading_days_not_calendar_days(self):
+        from contextlib import contextmanager
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+
+        @contextmanager
+        def _get_cursor():
+            yield cursor
+
+        # Anchor "today" to a Friday so the bug shape is testable.
+        with patch("v2.backfill.get_cursor", _get_cursor), \
+             patch("v2.backfill.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 20)
+            # Allow real date(...) construction.
+            mock_date.side_effect = lambda *a, **k: date(*a, **k)
+
+            get_decisions_needing_backfill(days_threshold=7)
+
+        # Calendar-day cutoff would be 2026-03-13 (the prior Friday).
+        # Trading-day cutoff is 2026-03-11 (Wednesday before).
+        # Therefore a decision made on 2026-03-13 must NOT be eligible.
+        passed_cutoff = cursor.execute.call_args[0][1][0]
+        assert passed_cutoff == date(2026, 3, 11), (
+            f"Expected trading-day cutoff 2026-03-11, got {passed_cutoff}"
+        )
+        assert passed_cutoff < date(2026, 3, 13), (
+            "A decision made 7 calendar days ago on a Friday must not be eligible — "
+            "the trading-day cutoff has to be earlier than the calendar-day cutoff."
+        )
 
 
 class TestCalculateOutcome:
@@ -184,6 +255,103 @@ class TestSellAlphaSign:
         outcome, benchmark = mock_update.call_args.args[2:4]
         assert outcome == Decimal("10")
         assert benchmark == Decimal("5")  # buys keep benchmark positive
+
+
+class TestSpyBenchmarkCache:
+    """T1.10: SPY price fetches must only cache successful results.
+    Caching None poisons every later decision sharing that date.
+    """
+
+    @patch("v2.backfill.update_outcome")
+    @patch("v2.backfill.get_price_on_date")
+    @patch("v2.backfill.get_data_client")
+    @patch("v2.backfill.get_decisions_needing_backfill")
+    def test_transient_spy_failure_is_not_cached(
+        self, mock_get_decisions, mock_client, mock_price, mock_update,
+    ):
+        """First SPY fetch returns None (transient failure); a second
+        decision sharing the same date must trigger a re-fetch, not see
+        the cached None.
+        """
+        mock_get_decisions.return_value = [
+            {"id": 1, "date": date(2026, 3, 13), "ticker": "AAPL",
+             "action": "buy", "price": Decimal("100")},
+            {"id": 2, "date": date(2026, 3, 13), "ticker": "MSFT",
+             "action": "buy", "price": Decimal("200")},
+        ]
+        mock_client.return_value = MagicMock()
+
+        # SPY entry on 2026-03-13: first call None, second call $400.
+        # SPY exit on 2026-03-24: always $420.
+        spy_entry_calls = {"count": 0}
+
+        def price(_client, ticker, dt):
+            if ticker == "AAPL":
+                return Decimal("110")
+            if ticker == "MSFT":
+                return Decimal("220")
+            if ticker == "SPY":
+                if dt == date(2026, 3, 13):
+                    spy_entry_calls["count"] += 1
+                    return None if spy_entry_calls["count"] == 1 else Decimal("400")
+                return Decimal("420")
+            return None
+
+        mock_price.side_effect = price
+
+        backfill_outcomes(days=7, dry_run=False)
+
+        # The first decision had no benchmark; second must have one because
+        # the cache was not poisoned with the failed first fetch.
+        first_call = mock_update.call_args_list[0]
+        second_call = mock_update.call_args_list[1]
+        assert first_call.args[3] is None, "First decision must have no benchmark"
+        assert second_call.args[3] is not None, (
+            "Second decision must have a benchmark — cache was poisoned by the None fetch"
+        )
+        # SPY entry was called twice (refetch on cache miss).
+        assert spy_entry_calls["count"] == 2
+
+    @patch("v2.backfill.update_outcome")
+    @patch("v2.backfill.get_price_on_date")
+    @patch("v2.backfill.get_data_client")
+    @patch("v2.backfill.get_decisions_needing_backfill")
+    def test_successful_spy_fetch_is_cached(
+        self, mock_get_decisions, mock_client, mock_price, mock_update,
+    ):
+        """Two decisions sharing entry+exit dates should each only trigger
+        one fetch per (date) pair on a successful path.
+        """
+        mock_get_decisions.return_value = [
+            {"id": 1, "date": date(2026, 3, 13), "ticker": "AAPL",
+             "action": "buy", "price": Decimal("100")},
+            {"id": 2, "date": date(2026, 3, 13), "ticker": "MSFT",
+             "action": "buy", "price": Decimal("200")},
+        ]
+        mock_client.return_value = MagicMock()
+
+        spy_entry_calls = {"count": 0}
+        spy_exit_calls = {"count": 0}
+
+        def price(_client, ticker, dt):
+            if ticker == "AAPL":
+                return Decimal("110")
+            if ticker == "MSFT":
+                return Decimal("220")
+            if ticker == "SPY":
+                if dt == date(2026, 3, 13):
+                    spy_entry_calls["count"] += 1
+                    return Decimal("400")
+                spy_exit_calls["count"] += 1
+                return Decimal("420")
+            return None
+
+        mock_price.side_effect = price
+
+        backfill_outcomes(days=7, dry_run=False)
+
+        assert spy_entry_calls["count"] == 1, "SPY entry should be cached after first hit"
+        assert spy_exit_calls["count"] == 1, "SPY exit should be cached after first hit"
 
 
 class TestBackfillNoPrice:

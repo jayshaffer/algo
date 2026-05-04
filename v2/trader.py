@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from alpaca.data.historical import StockHistoricalDataClient
 
@@ -284,12 +285,19 @@ def _execute_decision_order(
     positions: dict,
     dry_run: bool,
     errors: list[str],
+    session_date: date,
 ) -> _DecisionOutcome:
     """Submit the order, wait for fill, run post-fill side effects.
 
     Updates playbook_action_status on success/failure, handles thesis lifecycle
     on sell fills, and returns the outcome so the caller can update aggregate
     counters.
+
+    T2.10: `session_date` is captured once at the top of the trading
+    session and threaded through every callsite that needs "today's
+    date". Without this, a session that crosses midnight ET could log
+    decisions, dedup-check, and sign client_order_ids against three
+    different dates within a single run.
     """
     logger.info("%s: %s %s @ ~$%.2f", decision.ticker, decision.action.upper(),
                 decision.quantity, price)
@@ -300,7 +308,7 @@ def _execute_decision_order(
         qty=decision.quantity,
         dry_run=dry_run,
         simulated_price=price,
-        client_order_id=_client_order_id(decision, date.today()),
+        client_order_id=_client_order_id(decision, session_date),
     )
 
     if not result.success:
@@ -451,6 +459,7 @@ def _prepare_decision(
     buying_power: Decimal,
     totals: "_ExecutionTotals",
     errors: list[str],
+    session_date: date,
     position_values: dict | None = None,
 ) -> Decimal | None:
     """Price-lookup, resolve intent to share count, and run sell precheck.
@@ -529,7 +538,7 @@ def _prepare_decision(
     # (or was about to). The broker-side `client_order_id` covers the
     # narrower case where the prior run's DB write itself failed.
     if not dry_run:
-        existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
+        existing_id = check_decision_exists(session_date, decision.ticker, decision.action)
         if existing_id:
             logger.warning(
                 "%s: duplicate %s decision today (existing id=%d) — skipping submit",
@@ -563,6 +572,7 @@ def _execute_decisions(
     data_client,
     dry_run: bool,
     errors: list[str],
+    session_date: date,
 ) -> tuple[_ExecutionTotals, dict, dict, dict]:
     """Run the per-decision execution loop.
 
@@ -610,12 +620,15 @@ def _execute_decisions(
         price = _prepare_decision(
             decision, positions, data_client, dry_run,
             portfolio_value, buying_power, totals, errors,
+            session_date,
             position_values=position_values,
         )
         if price is None:
             continue
 
-        outcome = _execute_decision_order(decision, price, positions, dry_run, errors)
+        outcome = _execute_decision_order(
+            decision, price, positions, dry_run, errors, session_date,
+        )
         if not outcome.executed:
             totals.trades_failed += 1
             continue
@@ -782,12 +795,19 @@ def _insert_decision_with_retry(
 
     assert last_exc is not None
     filled_qty = getattr(order_result, "filled_qty", None)
+    unknown_partial_fill = bool(getattr(order_result, "unknown_partial_fill", False))
     is_orphan = bool(
         order_result
         and getattr(order_result, "success", False)
         and filled_qty is not None
         and Decimal(str(filled_qty)) > 0
     )
+    # T2.8: when post-cancel re-fetch failed we don't know whether a
+    # partial fill landed. Persist the orphan record so an operator can
+    # reconcile against the broker — better a redundant log line than a
+    # silent missed fill.
+    if not is_orphan and unknown_partial_fill:
+        is_orphan = True
     if is_orphan:
         _persist_orphan_decision(
             decision=decision, order_id=order_id, order_result=order_result,
@@ -808,6 +828,7 @@ def _log_decisions(
     data_client,
     account_info: dict,
     errors: list[str],
+    session_date: date,
     decision_account_states: dict | None = None,
 ) -> int:
     """Insert decision rows and signal-links. Returns count of successfully logged decisions.
@@ -834,7 +855,7 @@ def _log_decisions(
                 continue
 
             # Skip duplicate decisions (same ticker+action already logged today)
-            existing_id = check_decision_exists(date.today(), decision.ticker, decision.action)
+            existing_id = check_decision_exists(session_date, decision.ticker, decision.action)
             if existing_id:
                 logger.warning(
                     "%s: duplicate %s decision — already logged as ID %d",
@@ -846,7 +867,7 @@ def _log_decisions(
 
             state = (decision_account_states or {}).get(i, account_info)
             payload = dict(
-                decision_date=date.today(),
+                decision_date=session_date,
                 ticker=decision.ticker,
                 action=decision.action,
                 quantity=logged_qty,
@@ -903,8 +924,16 @@ def run_trading_session(
     """
     errors: list[str] = []
     timestamp = datetime.now()
+    # T2.10: capture session date once, in market-local time. Every later
+    # callsite (client_order_id signing, dedup checks, decision row
+    # insertion) reuses this value so a session that runs across midnight
+    # ET still shows up as a single trading day.
+    session_date = datetime.now(ZoneInfo("America/New_York")).date()
 
-    logger.info("Starting trading session (dry_run=%s, model=%s)", dry_run, model)
+    logger.info(
+        "Starting trading session (dry_run=%s, model=%s, session_date=%s)",
+        dry_run, model, session_date,
+    )
 
     # Step 1: Sync positions and orders
     logger.info("[Step 1] Syncing positions and orders from Alpaca")
@@ -943,6 +972,7 @@ def run_trading_session(
     _build_open_sell_orders()  # run for side effect (future: pass to precheck)
     totals, order_ids, order_results, decision_account_states = _execute_decisions(
         response, positions, account_info, data_client, dry_run, errors,
+        session_date,
     )
 
     # Step 5b: Process thesis invalidations
@@ -952,6 +982,7 @@ def run_trading_session(
     logger.info("[Step 6] Logging decisions")
     logged_count = _log_decisions(
         response, order_ids, order_results, data_client, account_info, errors,
+        session_date,
         decision_account_states=decision_account_states,
     )
     logger.info("Logged %d decisions (%d emitted by executor)", logged_count, len(response.decisions))

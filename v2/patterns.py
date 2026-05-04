@@ -36,7 +36,12 @@ class TickerPerformance:
     sells: int
     avg_outcome_7d: float | None
     avg_outcome_30d: float | None
-    total_pnl_7d: float | None
+    # T2.5: previously `total_pnl_7d`, summed `outcome_7d` (a percentage).
+    # The label was actively misleading because summing percentages across
+    # decisions of different sizes does not produce real P&L. Renamed to
+    # `sum_pct_returns_7d` and the leaderboard now orders by `avg_outcome_7d`
+    # instead — averaging percent returns is a defensible per-ticker metric.
+    sum_pct_returns_7d: float | None
 
 
 @dataclass
@@ -97,10 +102,10 @@ def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
             results.append(SignalPerformance(
                 category=row["category"],
                 total_signals=row["total_signals"],
-                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] else None,
-                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] else None,
-                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] else None,
-                win_rate_30d=float(row["win_rate_30d"]) if row["win_rate_30d"] else None,
+                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] is not None else None,
+                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] is not None else None,
+                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] is not None else None,
+                win_rate_30d=float(row["win_rate_30d"]) if row["win_rate_30d"] is not None else None,
             ))
         return results
 
@@ -135,15 +140,22 @@ def analyze_sentiment_performance(days: int = 90) -> list[SentimentPerformance]:
             results.append(SentimentPerformance(
                 sentiment=row["sentiment"],
                 total_decisions=row["total_decisions"],
-                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] else None,
-                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] else None,
-                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] else None,
+                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] is not None else None,
+                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] is not None else None,
+                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] is not None else None,
             ))
         return results
 
 
 def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
-    """Performance by ticker. No signal JOIN needed — groups decisions directly."""
+    """Performance by ticker. No signal JOIN needed — groups decisions directly.
+
+    T2.5: leaderboard now orders by `avg_outcome_7d`. Summing percentage
+    returns across decisions of varying notional values is not P&L; using
+    SUM as the rank function favored tickers with many small wins over
+    tickers with fewer larger ones in a way the label "total_pnl" misled
+    readers about.
+    """
     with get_cursor() as cur:
         cur.execute("""
             SELECT
@@ -153,13 +165,13 @@ def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
                 SUM(CASE WHEN action = 'sell' THEN 1 ELSE 0 END) as sells,
                 AVG(outcome_7d) as avg_outcome_7d,
                 AVG(outcome_30d) as avg_outcome_30d,
-                SUM(outcome_7d) as total_pnl_7d
+                SUM(outcome_7d) as sum_pct_returns_7d
             FROM decisions
             WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
               AND action IN ('buy', 'sell')
               AND outcome_7d IS NOT NULL
             GROUP BY ticker
-            ORDER BY total_pnl_7d DESC NULLS LAST
+            ORDER BY avg_outcome_7d DESC NULLS LAST
         """, (days,))
 
         results = []
@@ -169,9 +181,9 @@ def analyze_ticker_performance(days: int = 90) -> list[TickerPerformance]:
                 total_decisions=row["total_decisions"],
                 buys=row["buys"],
                 sells=row["sells"],
-                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] else None,
-                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] else None,
-                total_pnl_7d=float(row["total_pnl_7d"]) if row["total_pnl_7d"] else None,
+                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] is not None else None,
+                avg_outcome_30d=float(row["avg_outcome_30d"]) if row["avg_outcome_30d"] is not None else None,
+                sum_pct_returns_7d=float(row["sum_pct_returns_7d"]) if row["sum_pct_returns_7d"] is not None else None,
             ))
         return results
 
@@ -208,8 +220,8 @@ def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation
             results.append(ConfidenceCorrelation(
                 confidence=row["confidence"],
                 total_decisions=row["total_decisions"],
-                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] else None,
-                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] else None,
+                avg_outcome_7d=float(row["avg_outcome_7d"]) if row["avg_outcome_7d"] is not None else None,
+                win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] is not None else None,
             ))
         return results
 
@@ -255,8 +267,8 @@ def generate_pattern_report(days: int = 90) -> str:
     if signal_perf:
         lines.append("Signal Category Performance (alpha vs SPY):")
         for sp in signal_perf:
-            outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d else "N/A"
-            win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d else "N/A"
+            outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d is not None else "N/A"
+            win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d is not None else "N/A"
             lines.append(f"  {sp.category}: {outcome} avg alpha (beat-market rate: {win_rate}, n={sp.total_signals})")
         lines.append("")
 
@@ -265,18 +277,20 @@ def generate_pattern_report(days: int = 90) -> str:
     if sentiment_perf:
         lines.append("Sentiment Performance (alpha vs SPY):")
         for sp in sentiment_perf:
-            outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d else "N/A"
-            win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d else "N/A"
+            outcome = f"{sp.avg_outcome_7d:+.2f}%" if sp.avg_outcome_7d is not None else "N/A"
+            win_rate = f"{sp.win_rate_7d:.0f}%" if sp.win_rate_7d is not None else "N/A"
             lines.append(f"  {sp.sentiment}: {outcome} avg alpha (beat-market rate: {win_rate}, n={sp.total_decisions})")
         lines.append("")
 
-    # Top tickers
+    # Top tickers — T2.5: ranked by avg 7d return, not summed percentages.
     ticker_perf = analyze_ticker_performance(days)
     if ticker_perf:
-        lines.append("Ticker Performance (by total P&L):")
+        lines.append("Ticker Performance (by avg 7d return):")
         for tp in ticker_perf[:5]:
-            total = f"{tp.total_pnl_7d:+.2f}%" if tp.total_pnl_7d else "N/A"
-            lines.append(f"  {tp.ticker}: {total} total ({tp.buys} buys, {tp.sells} sells)")
+            avg = f"{tp.avg_outcome_7d:+.2f}%" if tp.avg_outcome_7d is not None else "N/A"
+            lines.append(
+                f"  {tp.ticker}: {avg} avg ({tp.buys} buys, {tp.sells} sells)"
+            )
         lines.append("")
 
     # Confidence correlation
@@ -284,8 +298,8 @@ def generate_pattern_report(days: int = 90) -> str:
     if conf_perf:
         lines.append("Confidence vs Alpha:")
         for cp in conf_perf:
-            outcome = f"{cp.avg_outcome_7d:+.2f}%" if cp.avg_outcome_7d else "N/A"
-            win_rate = f"{cp.win_rate_7d:.0f}%" if cp.win_rate_7d else "N/A"
+            outcome = f"{cp.avg_outcome_7d:+.2f}%" if cp.avg_outcome_7d is not None else "N/A"
+            win_rate = f"{cp.win_rate_7d:.0f}%" if cp.win_rate_7d is not None else "N/A"
             lines.append(f"  {cp.confidence}: {outcome} avg alpha (beat-market rate: {win_rate})")
         lines.append("")
 

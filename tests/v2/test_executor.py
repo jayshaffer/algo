@@ -395,8 +395,11 @@ class TestWaitForFillPartialFillOnTimeout:
 
     @patch("v2.executor.get_trading_client")
     def test_timeout_with_zero_fill_returns_failure(self, mock_client):
-        """No fill before cancel → preserve the prior failure semantics so
-        the trader marks the trade as failed and doesn't log a phantom row."""
+        """No fill before cancel → success=False so the trader marks the
+        trade as failed. T2.8: the post-cancel re-fetch confirmed zero, so
+        filled_qty is Decimal('0') (not None) and unknown_partial_fill
+        stays False — this is a clean miss, not an ambiguous outcome.
+        """
         mock_order = MagicMock()
         mock_order.status.value = "accepted"
         mock_order.filled_qty = "0"
@@ -407,8 +410,76 @@ class TestWaitForFillPartialFillOnTimeout:
         result = wait_for_fill("order-abc", timeout_seconds=0.05, poll_interval=0.01)
 
         assert result.success is False
-        assert result.filled_qty is None
+        assert result.filled_qty == Decimal("0")
+        assert result.unknown_partial_fill is False
         assert "cancel attempted" in result.error.lower()
+
+    @patch("v2.executor.get_trading_client")
+    def test_timeout_with_unknown_post_cancel_state(self, mock_client):
+        """T2.8: if post-cancel re-fetch fails, we don't know whether a
+        partial fill landed. The result must carry `unknown_partial_fill=True`
+        so the trader treats the order as needing reconciliation, not as a
+        clean miss.
+        """
+        # First call: poll loop, "accepted". Second call: post-cancel
+        # re-fetch, raises.
+        accepted = MagicMock()
+        accepted.status.value = "accepted"
+        accepted.filled_qty = None
+        accepted.filled_avg_price = None
+        mock_client.return_value.get_order_by_id.side_effect = [
+            accepted, accepted, accepted, accepted, accepted,  # poll iterations
+            Exception("network blip"),  # post-cancel re-fetch
+        ]
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-xyz", timeout_seconds=0.05, poll_interval=0.01)
+
+        assert result.success is False
+        assert result.unknown_partial_fill is True
+        assert "partial-fill state unknown" in result.error.lower()
+
+
+class TestWaitForFillTransientFetchRetry:
+    """T2.9: transient errors fetching order state must not abort the
+    poll loop. The function should swallow brief failures and retry up
+    to a small limit before treating the situation as fatal.
+    """
+
+    @patch("v2.executor.get_trading_client")
+    def test_one_transient_error_then_success(self, mock_client):
+        filled = MagicMock()
+        filled.status.value = "filled"
+        filled.filled_qty = "5"
+        filled.filled_avg_price = "100.00"
+        mock_client.return_value.get_order_by_id.side_effect = [
+            Exception("blip"),
+            filled,
+        ]
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-1", timeout_seconds=5, poll_interval=0.01)
+
+        assert result.success is True
+        assert result.filled_qty == Decimal("5")
+        # Both calls happened: the poll loop retried after the transient.
+        assert mock_client.return_value.get_order_by_id.call_count == 2
+
+    @patch("v2.executor.get_trading_client")
+    def test_persistent_errors_break_poll_loop_and_attempt_cancel(self, mock_client):
+        """3 consecutive errors break the loop, cancel is attempted, then the
+        post-cancel re-fetch path runs. With the post-cancel re-fetch also
+        erroring, the result must carry `unknown_partial_fill=True`.
+        """
+        mock_client.return_value.get_order_by_id.side_effect = Exception("persistent")
+
+        from v2.executor import wait_for_fill
+        result = wait_for_fill("order-2", timeout_seconds=5, poll_interval=0.01)
+
+        # Cancel was still attempted.
+        mock_client.return_value.cancel_order_by_id.assert_called_once_with("order-2")
+        assert result.success is False
+        assert result.unknown_partial_fill is True
 
     @patch("v2.executor.get_trading_client")
     def test_post_cancel_refetch_failure_falls_through_to_timeout(self, mock_client):
