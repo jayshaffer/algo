@@ -853,14 +853,18 @@ def _log_decisions(
                 logger.error("Cannot log decision for %s: no price available", decision.ticker)
                 continue
 
-            # Skip duplicate decisions (same ticker+action already logged today)
-            existing_id = check_decision_exists(session_date, decision.ticker, decision.action)
-            if existing_id:
-                logger.warning(
-                    "%s: duplicate %s decision — already logged as ID %d",
-                    decision.ticker, decision.action, existing_id,
-                )
-                continue
+            # Skip duplicate decisions (same ticker+action already logged today).
+            # Only meaningful for buy/sell/hold; rejected decisions carry
+            # action='invalid' and dedup'ing them would collapse distinct
+            # rejection audit rows for the same ticker.
+            if decision.action in ("buy", "sell", "hold"):
+                existing_id = check_decision_exists(session_date, decision.ticker, decision.action)
+                if existing_id:
+                    logger.warning(
+                        "%s: duplicate %s decision — already logged as ID %d",
+                        decision.ticker, decision.action, existing_id,
+                    )
+                    continue
 
             logged_qty = _resolve_logged_qty(result, decision)
 

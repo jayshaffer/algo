@@ -1579,6 +1579,66 @@ class TestDecisionLoggingBranches:
         assert any("No price available" in e for e in result.errors)
         mocks["insert_decision"].assert_not_called()
 
+    def test_log_decisions_skips_dedup_for_invalid_actions(self, mock_db, mock_cursor):
+        """Rejected decisions (action='invalid') should not query
+        check_decision_exists. The dedup gate is meaningful only for
+        buy/sell/hold; running it on 'invalid' suppresses distinct
+        rejection audit rows on the same ticker.
+        """
+        from v2.trader import _log_decisions
+        from v2.agent import AgentResponse, ExecutorDecision
+
+        decisions = [
+            ExecutorDecision(
+                playbook_action_id=None,
+                ticker="AAPL",
+                action="invalid",
+                intent_type=None,
+                intent_magnitude=None,
+                reasoning="[REJECTED: no price] -",
+                confidence="low",
+                is_off_playbook=False,
+                thesis_id=None,
+            ),
+            ExecutorDecision(
+                playbook_action_id=None,
+                ticker="AAPL",
+                action="invalid",
+                intent_type=None,
+                intent_magnitude=None,
+                reasoning="[REJECTED: intent error] -",
+                confidence="low",
+                is_off_playbook=False,
+                thesis_id=None,
+            ),
+        ]
+        response = AgentResponse(
+            decisions=decisions,
+            thesis_invalidations=[],
+            market_summary="",
+            risk_assessment="",
+        )
+        account_info = {
+            "buying_power": Decimal("10000"),
+            "portfolio_value": Decimal("50000"),
+        }
+        errors: list = []
+
+        with patch("v2.trader.check_decision_exists") as mock_check, \
+             patch("v2.trader.get_latest_trade_price", return_value=Decimal("150")), \
+             patch("v2.trader._insert_decision_with_retry", return_value=1), \
+             patch("v2.trader.format_decisions_for_logging", return_value={}), \
+             patch("v2.trader.insert_decision_signals_batch"):
+            _log_decisions(
+                response, {}, {}, MagicMock(), account_info, errors,
+                date(2026, 5, 3),
+            )
+
+        assert mock_check.call_count == 0, (
+            f"check_decision_exists should not be called for action='invalid'; "
+            f"got {mock_check.call_count} calls"
+        )
+
 
 class TestInsertDecisionRetryAndOrphanFallback:
     """T1.5: filled order + failed insert_decision must not produce a silent
