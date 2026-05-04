@@ -296,3 +296,108 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
         decisions_section=_render_decisions_section(decisions),
         meta_block=meta_block,
     )
+
+
+_MISTAKES_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>What didn't work — Bikini Bottom Capital</title>
+$meta_block
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header><div class="container"><h1><a href="/">&#9875; Bikini Bottom Capital</a></h1></div></header>
+<main class="container">
+<section class="panel">
+<h2>What didn't work</h2>
+<p class="subtitle">Closed losers (last 30 days) and retired rules (last 90 days). No spin.</p>
+$losers_section
+$rules_section
+</section>
+</main>
+<footer><div class="container"><p><a href="/">Back to dashboard</a></p></div></footer>
+</body>
+</html>
+""")
+
+
+def _render_loser_row(d: dict) -> str:
+    did = int(d["id"])
+    ticker = _esc(str(d["ticker"]))
+    action_caps = _esc(str(d.get("action", "")).upper())
+    qty = _esc(str(d.get("quantity") or 0))
+    price = _fmt_money(d.get("price") or 0)
+    o30 = _fmt_outcome(d.get("outcome_30d"))
+    trade_date = (
+        d["date"].isoformat()
+        if hasattr(d["date"], "isoformat")
+        else _esc(str(d["date"]))
+    )
+    reasoning = _esc(str(d.get("reasoning") or ""))
+    return (
+        f'<li class="loser-row">'
+        f'<a href="/trade/{did}/"><strong>{action_caps} {ticker}</strong></a>'
+        f' — {trade_date} · {qty} @ {price} · '
+        f'<span class="loser-outcome">{o30}</span>'
+        f'<p class="loser-reason">{reasoning}</p>'
+        f'</li>'
+    )
+
+
+def _render_rule_row(r: dict) -> str:
+    text = _esc(str(r.get("rule_text") or ""))
+    reason = _esc(str(r.get("retirement_reason") or ""))
+    retired_at = r.get("retired_at")
+    if hasattr(retired_at, "isoformat"):
+        retired_at = retired_at.isoformat()
+    retired_at_esc = _esc(str(retired_at or ""))
+    return (
+        f'<li class="rule-row">'
+        f'<p>{text}</p>'
+        f'<p class="rule-meta">retired {retired_at_esc} — {reason}</p>'
+        f'</li>'
+    )
+
+
+def render_mistakes_page(closed_losers: list[dict], retired_rules: list[dict],
+                         base_url: str) -> str:
+    """Return the full HTML for /mistakes/index.html."""
+    base = base_url.rstrip("/")
+
+    if closed_losers:
+        rows = "".join(_render_loser_row(d) for d in closed_losers)
+        losers_section = (
+            "<h3>Closed losers</h3>"
+            f'<ul class="loser-list">{rows}</ul>'
+        )
+    else:
+        losers_section = (
+            '<h3>Closed losers</h3>'
+            '<p class="empty-state">No closed losers in window. '
+            'Either we got lucky or we didn\'t trade enough.</p>'
+        )
+
+    if retired_rules:
+        rows = "".join(_render_rule_row(r) for r in retired_rules)
+        rules_section = (
+            "<h3>Retired rules</h3>"
+            f'<ul class="rule-list">{rows}</ul>'
+        )
+    else:
+        rules_section = ""
+
+    meta_block = _render_meta_block(
+        title="What didn't work — Bikini Bottom Capital",
+        description="Closed losers and retired rules. The receipts most accounts hide.",
+        og_image=f"{base}/og/mistakes.png",
+        page_url=f"{base}/mistakes/",
+        og_type="article",
+    )
+
+    return _MISTAKES_PAGE_TEMPLATE.substitute(
+        meta_block=meta_block,
+        losers_section=losers_section,
+        rules_section=rules_section,
+    )
