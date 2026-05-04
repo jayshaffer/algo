@@ -274,7 +274,7 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
     title = f"{ticker_esc} — {direction_esc} thesis"
 
     # og:description — build from raw, escape once
-    description_raw = str(thesis.get("thesis", ""))[:160].replace("\n", " ")
+    description_raw = str(thesis.get("thesis", ""))[:160].replace("\n", " ").rstrip()
     description = _esc(description_raw)
 
     meta_block = _render_meta_block(
