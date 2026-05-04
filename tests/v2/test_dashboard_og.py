@@ -4,8 +4,6 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 
-import pytest
-
 from v2.dashboard_og import render_trade_og
 
 
@@ -41,3 +39,16 @@ class TestRenderTradeOg:
         }
         png = render_trade_og(decision)
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_renders_non_trivial_content(self):
+        """Catch the regression where the canvas is created but draw calls silently no-op."""
+        decision = {
+            "id": 42, "date": date(2026, 5, 3), "ticker": "NVDA",
+            "action": "buy", "quantity": 12, "price": Decimal("450.25"),
+        }
+        img = _decoded(render_trade_og(decision)).convert("RGB")
+        pixels = list(img.getdata())
+        distinct = set(pixels)
+        # Should have at least 4 distinct colors: background, accent bar, ticker FG,
+        # text muted color (and font anti-aliasing produces many more).
+        assert len(distinct) >= 4, f"Only {len(distinct)} distinct colors — text didn't render?"
