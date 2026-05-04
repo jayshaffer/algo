@@ -10,7 +10,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from .database.connection import get_cursor
-from .market_calendar import NYSE_HOLIDAYS, is_trading_day as _is_trading_day  # noqa: F401  re-export
+from .market_calendar import NYSE_HOLIDAYS, is_trading_day as _is_trading_day  # noqa: F401  alias preserves internal call sites
 
 
 def trading_day_offset(start: date, trading_days: int) -> date:
