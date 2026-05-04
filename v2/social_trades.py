@@ -121,8 +121,9 @@ def generate_trade_post(
 # importable in tests without dragging in the whole post stack).
 # ---------------------------------------------------------------------------
 
-from .twitter import get_twitter_client, post_tweet           # noqa: E402
-from .bluesky import get_bluesky_client, post_to_bluesky      # noqa: E402
+from .market_calendar import is_trading_day                        # noqa: E402
+from .twitter import get_twitter_client, post_tweet, gather_tweet_context, generate_tweet  # noqa: E402
+from .bluesky import get_bluesky_client, post_to_bluesky, generate_bluesky_post  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -231,12 +232,83 @@ def _post_quiet_day_recap(
     bluesky_client,
     result: TradePostsStageResult,
 ) -> None:
-    """Quiet-day fallback: when no postable decisions, post the existing
-    Mr. Krabs-style recap so the account doesn't go dark on trading days.
+    """Quiet-day fallback: post the existing recap-style summary on trading
+    days when there are no postable decisions. Skipped entirely on weekends
+    and NYSE holidays so the account doesn't spam non-content."""
+    if not is_trading_day(session_date):
+        logger.info("Quiet-day recap skipped — %s is not a trading day", session_date)
+        return
 
-    Implemented in Task 7. Stub here so Task 6's orchestrator can wire it up.
-    """
-    return None
+    try:
+        context = gather_tweet_context(session_date)
+    except Exception as e:
+        result.errors.append(f"Quiet-day context failed: {e}")
+        logger.error("Quiet-day context gather failed: %s", e)
+        return
+
+    posted_any = False
+
+    if twitter_client is not None:
+        try:
+            already = posted_tweet_exists(session_date, "recap", "twitter")
+        except Exception as e:
+            logger.warning("Quiet-day twitter dedup check failed: %s", e)
+            already = False
+        if not already:
+            tweet = generate_tweet(context)
+            if tweet:
+                if _is_dry_run():
+                    logger.info("[DRY-RUN] quiet-day twitter recap:\n%s", tweet["text"])
+                    posted_any = True
+                else:
+                    try:
+                        post_result = post_tweet(tweet, client=twitter_client)
+                        insert_tweet(
+                            session_date=session_date,
+                            tweet_type=post_result.get("type", "recap"),
+                            tweet_text=post_result["text"],
+                            tweet_id=post_result.get("tweet_id"),
+                            posted=post_result["posted"],
+                            error=post_result.get("error"),
+                            platform="twitter",
+                        )
+                        if post_result["posted"]:
+                            posted_any = True
+                    except Exception as e:
+                        result.errors.append(f"Quiet-day twitter recap failed: {e}")
+                        logger.error("Quiet-day twitter recap failed: %s", e)
+
+    if bluesky_client is not None:
+        try:
+            already = posted_tweet_exists(session_date, "recap", "bluesky")
+        except Exception as e:
+            logger.warning("Quiet-day bluesky dedup check failed: %s", e)
+            already = False
+        if not already:
+            post = generate_bluesky_post(context)
+            if post:
+                if _is_dry_run():
+                    logger.info("[DRY-RUN] quiet-day bluesky recap:\n%s", post["text"])
+                    posted_any = True
+                else:
+                    try:
+                        post_result = post_to_bluesky(post, client=bluesky_client)
+                        insert_tweet(
+                            session_date=session_date,
+                            tweet_type=post_result.get("type", "recap"),
+                            tweet_text=post_result["text"],
+                            tweet_id=post_result.get("post_id"),
+                            posted=post_result["posted"],
+                            error=post_result.get("error"),
+                            platform="bluesky",
+                        )
+                        if post_result["posted"]:
+                            posted_any = True
+                    except Exception as e:
+                        result.errors.append(f"Quiet-day bluesky recap failed: {e}")
+                        logger.error("Quiet-day bluesky recap failed: %s", e)
+
+    result.quiet_day_recap_posted = posted_any
 
 
 def run_trade_posts_stage(

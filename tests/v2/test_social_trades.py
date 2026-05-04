@@ -255,3 +255,63 @@ class TestRunTradePostsStage:
 
         result = run_trade_posts_stage(date(2026, 5, 4))
         assert result.skipped is True
+
+
+class TestQuietDayFallback:
+    @patch("v2.social_trades.is_trading_day", return_value=False)
+    def test_skips_quiet_day_recap_on_non_trading_day(self, mock_is_td):
+        """Weekends/holidays produce no post — even the quiet-day recap is muted."""
+        from datetime import date
+        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        result = TradePostsStageResult()
+        _post_quiet_day_recap(date(2026, 5, 9), object(), object(), result)  # Saturday
+        assert result.quiet_day_recap_posted is False
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_bluesky_post")
+    @patch("v2.social_trades.generate_tweet")
+    @patch("v2.social_trades.gather_tweet_context", return_value="ctx")
+    @patch("v2.social_trades.is_trading_day", return_value=True)
+    def test_posts_recap_on_trading_day_no_decisions(
+        self, mock_is_td, mock_ctx, mock_gen_tw, mock_gen_bs,
+        mock_post_tw, mock_post_bs, mock_dedup, mock_insert,
+    ):
+        from datetime import date
+        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        mock_gen_tw.return_value = {"text": "Quiet day.", "type": "recap"}
+        mock_gen_bs.return_value = {"text": "Quiet day.", "type": "recap"}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "Quiet day.", "type": "recap", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "Quiet day.", "type": "recap", "error": None}
+
+        result = TradePostsStageResult()
+        _post_quiet_day_recap(date(2026, 5, 4), object(), object(), result)
+
+        assert result.quiet_day_recap_posted is True
+        mock_post_tw.assert_called_once()
+        mock_post_bs.assert_called_once()
+
+    @patch("v2.social_trades.posted_tweet_exists", return_value=True)
+    @patch("v2.social_trades.gather_tweet_context", return_value="ctx")
+    @patch("v2.social_trades.is_trading_day", return_value=True)
+    def test_dedup_blocks_recap_when_already_posted(
+        self, mock_is_td, mock_ctx, mock_dedup,
+    ):
+        """Existing rerun guard: if a recap was already posted today on
+        either platform, don't repost on that platform."""
+        from datetime import date
+        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        result = TradePostsStageResult()
+        with patch("v2.social_trades.post_tweet") as mock_post_tw, \
+             patch("v2.social_trades.post_to_bluesky") as mock_post_bs:
+            _post_quiet_day_recap(date(2026, 5, 4), object(), object(), result)
+
+        mock_post_tw.assert_not_called()
+        mock_post_bs.assert_not_called()
