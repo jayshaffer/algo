@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from alpaca.data.enums import DataFeed
@@ -79,7 +79,7 @@ def get_bar_change(client: StockHistoricalDataClient, symbol: str, days: int) ->
     to the same row → 0.0%). The strict `len > days` ensures we have
     at least one bar prior to `recent`.
     """
-    end = datetime.now()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=days + 5)
 
     try:
@@ -143,7 +143,7 @@ def get_top_movers(
 ) -> tuple[list[StockMover], list[StockMover]]:
     """Get top gainers and losers from a universe of stocks."""
     movers = []
-    end = datetime.now()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=10)
 
     for ticker in universe:
@@ -195,7 +195,7 @@ def get_unusual_volume(
 ) -> list[StockMover]:
     """Find stocks with unusual volume (above threshold of average)."""
     unusual = []
-    end = datetime.now()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=30)
 
     for ticker in universe:
@@ -267,7 +267,7 @@ def get_market_snapshot(universe: list[str] | None = None) -> MarketSnapshot:
     unusual_volume = get_unusual_volume(client, universe)
 
     return MarketSnapshot(
-        timestamp=datetime.now(),
+        timestamp=datetime.now(timezone.utc),
         sectors=sectors,
         indices=indices,
         gainers=gainers,

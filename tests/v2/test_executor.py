@@ -583,6 +583,35 @@ class TestClientOrderId:
         request = mock_client.return_value.submit_order.call_args.args[0]
         assert request.client_order_id == "algo-20260502-s-AAPL-7"
 
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_flags_duplicate_client_order_id(self, mock_client):
+        """Concurrent run race: Alpaca rejects a re-submitted client_order_id
+        with HTTP 422. The executor should flag this distinctly so the trader
+        can log it as a benign skip rather than a real execution error."""
+        mock_client.return_value.submit_order.side_effect = Exception(
+            "client_order_id must be unique"
+        )
+
+        from v2.executor import execute_market_order
+        result = execute_market_order(
+            "AAPL", "buy", Decimal("1"), client_order_id="algo-20260502-b-AAPL-42"
+        )
+        assert result.success is False
+        assert result.duplicate_client_order_id is True
+
+    @patch("v2.executor.get_trading_client")
+    def test_market_order_does_not_flag_other_errors_as_duplicate(self, mock_client):
+        mock_client.return_value.submit_order.side_effect = Exception(
+            "insufficient buying power"
+        )
+
+        from v2.executor import execute_market_order
+        result = execute_market_order(
+            "AAPL", "buy", Decimal("1"), client_order_id="algo-20260502-b-AAPL-42"
+        )
+        assert result.success is False
+        assert result.duplicate_client_order_id is False
+
 
 class TestAlpacaEnvValidation:
     """T1.4: ALPACA_PAPER must be explicit and consistent with ALPACA_BASE_URL.

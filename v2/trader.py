@@ -300,6 +300,19 @@ def _execute_decision_order(
     )
 
     if not result.success:
+        # P1.6 race-loser: a concurrent run already submitted this order with
+        # the same deterministic client_order_id, so Alpaca rejected ours.
+        # The DB-side dedup will keep the loser's decision row from being
+        # written too. Log it as a benign skip rather than an error and don't
+        # mark the playbook action as failed — the winner will mark it
+        # executed.
+        if getattr(result, "duplicate_client_order_id", False):
+            logger.warning(
+                "  %s: skipped — duplicate client_order_id rejected by broker "
+                "(concurrent run already submitted): %s",
+                decision.ticker, result.error,
+            )
+            return _DecisionOutcome(False, None, None, None, Decimal(0))
         errors.append(f"{decision.ticker} execution failed: {result.error}")
         logger.error("  %s: execution failed: %s", decision.ticker, result.error)
         if decision.playbook_action_id:

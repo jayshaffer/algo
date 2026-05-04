@@ -44,8 +44,24 @@ class TestTradingDayOffset:
     def test_30_trading_days(self):
         monday = date(2026, 3, 2)
         result = trading_day_offset(monday, 30)
-        # 30 trading days = 6 weeks = 42 calendar days
-        assert result == date(2026, 4, 13)
+        # 30 trading days from Mon 3/2: 6 weeks of trading days (4/13)
+        # plus one extra calendar day because Good Friday 2026-04-03 is
+        # an NYSE holiday inside the window.
+        assert result == date(2026, 4, 14)
+
+    def test_skips_christmas_day(self):
+        """+1 trading day from Wed 2025-12-24 lands on Fri 2025-12-26
+        because Christmas (Thu 2025-12-25) is an NYSE holiday."""
+        wednesday = date(2025, 12, 24)
+        result = trading_day_offset(wednesday, 1)
+        assert result == date(2025, 12, 26)
+
+    def test_zero_offset_advances_off_holiday(self):
+        """+0 from a market holiday (Christmas Thu 2025-12-25) should
+        return the next trading day (Fri 2025-12-26)."""
+        christmas = date(2025, 12, 25)
+        result = trading_day_offset(christmas, 0)
+        assert result == date(2025, 12, 26)
 
 
 class TestTradingDayCutoff:
@@ -68,11 +84,13 @@ class TestTradingDayCutoff:
         assert result == date(2026, 3, 12)
 
     def test_thirty_trading_days_back(self):
-        """30 trading days back ≈ 6 weeks of calendar days."""
+        """30 trading days back ≈ 6 weeks of calendar days, plus any
+        NYSE holidays inside the window."""
         friday = date(2026, 5, 1)
         result = trading_day_cutoff(friday, 30)
-        # 30 trading days back from a Friday = 6 weeks back = 42 calendar days
-        assert result == date(2026, 3, 20)
+        # Good Friday 2026-04-03 is inside the window, so the cutoff
+        # extends one trading day further back.
+        assert result == date(2026, 3, 19)
 
 
 class TestGetDecisionsNeedingBackfillCutoff:

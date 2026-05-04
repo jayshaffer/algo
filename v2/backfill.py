@@ -12,20 +12,52 @@ from alpaca.data.timeframe import TimeFrame
 from .database.connection import get_cursor
 
 
-def trading_day_offset(start: date, trading_days: int) -> date:
-    """Advance start date by N trading days (skipping weekends).
+# NYSE full-day market closures. Maintained manually because adding a
+# pandas_market_calendars dependency is overkill for ~10 dates a year.
+# Sources: https://www.nyse.com/markets/hours-calendars (verify yearly).
+# Half-days (early closes) are NOT included — they still produce a daily bar.
+NYSE_HOLIDAYS: frozenset[date] = frozenset({
+    # 2024
+    date(2024, 1, 1), date(2024, 1, 15), date(2024, 2, 19),
+    date(2024, 3, 29), date(2024, 5, 27), date(2024, 6, 19),
+    date(2024, 7, 4), date(2024, 9, 2), date(2024, 11, 28),
+    date(2024, 12, 25),
+    # 2025
+    date(2025, 1, 1), date(2025, 1, 9), date(2025, 1, 20),
+    date(2025, 2, 17), date(2025, 4, 18), date(2025, 5, 26),
+    date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1),
+    date(2025, 11, 27), date(2025, 12, 25),
+    # 2026
+    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16),
+    date(2026, 4, 3), date(2026, 5, 25), date(2026, 6, 19),
+    date(2026, 7, 3), date(2026, 9, 7), date(2026, 11, 26),
+    date(2026, 12, 25),
+    # 2027
+    date(2027, 1, 1), date(2027, 1, 18), date(2027, 2, 15),
+    date(2027, 3, 26), date(2027, 5, 31), date(2027, 6, 18),
+    date(2027, 7, 5), date(2027, 9, 6), date(2027, 11, 25),
+    date(2027, 12, 24),
+})
 
-    Does not account for market holidays — a minor inaccuracy
-    that's acceptable for 7/30 day outcome windows.
+
+def _is_trading_day(d: date) -> bool:
+    return d.weekday() < 5 and d not in NYSE_HOLIDAYS
+
+
+def trading_day_offset(start: date, trading_days: int) -> date:
+    """Advance start date by N trading days (skipping weekends + NYSE holidays).
+
+    Returns the date that is `trading_days` market sessions after `start`.
+    If `trading_days=0`, returns the next trading day on or after `start`
+    (so a Saturday/holiday input advances to the next session).
     """
     current = start
     days_counted = 0
     while days_counted < trading_days:
         current += timedelta(days=1)
-        if current.weekday() < 5:  # Mon-Fri
+        if _is_trading_day(current):
             days_counted += 1
-    # If we land on a weekend (only if trading_days=0), advance to Monday
-    while current.weekday() >= 5:
+    while not _is_trading_day(current):
         current += timedelta(days=1)
     return current
 
@@ -38,14 +70,14 @@ def trading_day_cutoff(today: date, trading_days: int) -> date:
     has closed. Using calendar days (`today - timedelta(days=N)`) lets a
     Friday decision become "eligible" on the next Friday — only 5 trading
     days have passed for a 7d window, so the price hasn't actually moved
-    7 sessions yet. Holidays still aren't tracked (matches
-    `trading_day_offset`).
+    7 sessions yet. NYSE holidays are also skipped so a window crossing
+    a holiday doesn't open eligibility a day early.
     """
     current = today
     days_counted = 0
     while days_counted < trading_days:
         current -= timedelta(days=1)
-        if current.weekday() < 5:  # Mon-Fri
+        if _is_trading_day(current):
             days_counted += 1
     return current
 

@@ -52,6 +52,19 @@ class OrderResult:
     # "needs reconciliation" case rather than ambiguously False (= clean
     # failure) or True (= clean fill).
     unknown_partial_fill: bool = False
+    # Set when Alpaca rejected the submission because the deterministic
+    # client_order_id already existed broker-side (concurrent run lost the
+    # dedup race). Distinct from a real execution failure so the trader
+    # can log it as a benign skip rather than an error.
+    duplicate_client_order_id: bool = False
+
+
+def _is_duplicate_client_order_id_error(err: Exception) -> bool:
+    """Detect Alpaca's response when a client_order_id collides with an
+    already-submitted order. Alpaca returns HTTP 422 with a message that
+    includes the literal substring "client_order_id must be unique"."""
+    msg = str(err).lower()
+    return "client_order_id" in msg and "unique" in msg
 
 
 def _validate_alpaca_env() -> None:
@@ -308,6 +321,7 @@ def execute_market_order(
             filled_qty=None,
             filled_avg_price=None,
             error=str(e),
+            duplicate_client_order_id=_is_duplicate_client_order_id_error(e),
         )
 
 
@@ -365,6 +379,7 @@ def execute_limit_order(
             filled_qty=None,
             filled_avg_price=None,
             error=str(e),
+            duplicate_client_order_id=_is_duplicate_client_order_id_error(e),
         )
 
 

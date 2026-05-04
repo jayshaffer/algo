@@ -93,7 +93,8 @@ def generate_entertainment_tweet(context: str, model: str = "claude-haiku-4-5-20
         text = response.content[0].text.strip()
         logger.info("AI response:\n%s", text)
         if text.startswith("```"):
-            text = text.split("\n", 1)[1]
+            parts = text.split("\n", 1)
+            text = parts[1] if len(parts) == 2 else parts[0].lstrip("`")
             text = text.rsplit("```", 1)[0].strip()
         result = json.loads(text)
     except Exception as e:
