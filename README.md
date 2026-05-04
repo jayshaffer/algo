@@ -351,24 +351,26 @@ ALGO_TRADE_POST_DRY_RUN=0
 
 Example crontab (`crontab -e` or `crontab /path/to/algo/crontab`):
 
-```cron
-# Backfill outcomes (6 AM ET, Mon-Fri)
-0 8 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.backfill
+The repo ships a working crontab at [`crontab`](./crontab) — install with:
 
-# Pre-market social post (~07:30 ET, Mon-Fri).
-# Self-skips on NYSE holidays. Requires ALGO_ENABLE_TRADE_POSTS-style
-# rollout to be considered safe; the module is independent of the daily
-# session and can be enabled separately by simply scheduling this entry.
-30 11 * * 1-5 /path/to/algo/run-docker.sh trading python -m v2.premarket
-
-# Consolidated daily session (3 PM ET, Mon-Fri)
-0 19 * * 1-5 /path/to/algo/run-docker.sh trading python -m trading.session
-
-# Weekly learning loop (7 AM ET Sunday)
-0 7 * * 0 /path/to/algo/run-docker.sh trading python -m trading.learn --days 60
+```bash
+crontab /home/jay/dev/algo/crontab
 ```
 
-Cron times above are in **UTC** (server-local), with ET conversions in the comments. Adjust if your server uses a different timezone.
+Times are **MST** (America/Denver, UTC-7). Adjust the hour fields if your server runs in a different timezone. The defaults:
+
+```cron
+# Pre-market social post (5:30 AM MST / 7:30 AM ET, Mon-Fri)
+30 5 * * 1-5 cd /home/jay/dev/algo && (task premarket ; task docker:stop:session)
+
+# Daily session (1 PM MST / 3 PM ET, Mon-Fri) — runs all 7 stages
+0 13 * * 1-5 cd /home/jay/dev/algo && (task session ; task docker:stop:session)
+
+# Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
+0 5 * * 0 cd /home/jay/dev/algo && (task learn -- --days 60 ; task docker:stop:session)
+```
+
+The pre-market entry self-skips on weekends and NYSE holidays, so a fixed weekday cron is correct. Stage 5 of the daily session honors `ALGO_ENABLE_TRADE_POSTS` from `.env` — flip it to `1` to switch from the legacy recap to the live-trade pipeline.
 
 ## Project Structure
 
