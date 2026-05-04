@@ -87,7 +87,7 @@ These get added to the JSON files written by `write_json_files`, so the SPA can 
 
 ### New module: `v2/social_weekly.py`
 
-Two scheduled-post functions, mirrors the shape of Spec #2's modules:
+Single module with two scheduled-post functions, mirrors the shape of Spec #2's `social_trades.py` / `premarket.py`. Standalone module — not a session stage — since these run on their own cron, independent of the daily session.
 
 **`run_mistakes_post(today: date) -> WeeklyPostResult`**
 - Pulls the worst N losers from the last 7 days.
@@ -102,14 +102,16 @@ Two scheduled-post functions, mirrors the shape of Spec #2's modules:
 - Posts to Twitter + Bluesky, links to `/attribution/`.
 - Idempotent.
 
+Entrypoint: `python -m v2.social_weekly mistakes` and `python -m v2.social_weekly attribution` (argparse subcommand). Skips on weekends and NYSE holidays via `is_trading_day` from `market_calendar`. Honors `ALGO_TRADE_POST_DRY_RUN=1` (same flag as Spec #2).
+
 ### Schedule
 
-Weekly cron triggers, separate from the daily session:
-- **Sunday 17:30 ET**: daily session runs (Stage 6 publishes `/mistakes/` and `/attribution/` with fresh data)
-- **Sunday 18:00 ET**: `python -m v2.session --stage weekly_mistakes`
-- **Sunday 18:30 ET**: `python -m v2.session --stage weekly_attribution`
+Weekly cron triggers, separate from the daily session. **Friday after the daily session** so the linked dashboard pages already reflect the week's full data:
 
-Order is load-bearing: the weekly posts must run *after* Sunday's Stage 6 publish so the linked pages reflect the data the post text was generated from. If Stage 6 fails on Sunday, the weekly posts skip with an error rather than linking to stale content (guard checks `dashboard_publishes.completed_at` from the latest session).
+- **Friday 14:00 MST / 16:00 ET**: `python -m v2.social_weekly mistakes`
+- **Friday 14:15 MST / 16:15 ET**: `python -m v2.social_weekly attribution`
+
+The 1pm MST daily session normally finishes within an hour, so 2pm MST is safely after Stage 6 publishes. If a weekly run fires before Stage 6 is done (unusual), the weekly post points at whatever's currently published — one day stale at worst, since Stage 6 ran Thursday too. We don't add a hard "wait for Stage 6" guard; the cost of stale-by-one-day content is lower than the operational cost of a guard rail that fails open.
 
 ## System prompts
 
@@ -198,8 +200,10 @@ Stage 6 keeps emitting `/mistakes/index.html` and `/attribution/index.html` dail
 - `tests/test_dashboard_og.py` extensions:
   - `render_attribution_og` renders chart bars at expected pixel coordinates (use `Image.getpixel` checks at known positions).
 
-## Open questions left for the implementation plan
+## Sizing decisions (resolved)
 
-- Exactly how many losers and retired rules to surface on `/mistakes/`. 20 is a starting cap; might be too many for the front page.
-- Whether the homepage `#mistakes` section should show the same data as `/mistakes/` or a teaser. Probably teaser + "see all" link.
-- Whether to add a "regression test" for the chart — e.g., pixel-diff the OG PNG against a checked-in golden. Likely overkill.
+- **`/mistakes/` page**: 15 closed losers + 10 retired rules.
+- **`/attribution/` page**: full signal-attribution table (no cap; the table is small).
+- **Homepage `#mistakes` teaser**: top 3 losers + top 2 retired rules + "see all" link.
+- **Homepage `#attribution` teaser**: top 5 signal types + "see all" link.
+- **OG image regression test**: skip pixel-diff; verify bar coordinates with `Image.getpixel` at known positions, mirroring the existing `dashboard_og.py` test pattern.
