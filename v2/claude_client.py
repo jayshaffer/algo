@@ -1,5 +1,7 @@
 """Claude API client with tool handling and agentic loop."""
 
+import contextlib
+import contextvars
 import logging
 import os
 import random
@@ -72,6 +74,38 @@ class UsageAccumulator:
         self.output_tokens         += (usage.output_tokens or 0)
         self.cache_creation_tokens += (getattr(usage, "cache_creation_input_tokens", 0) or 0)
         self.cache_read_tokens     += (getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+
+_current_usage: contextvars.ContextVar[UsageAccumulator | None] = contextvars.ContextVar(
+    "_current_usage", default=None
+)
+
+
+@contextlib.contextmanager
+def capture_usage():
+    """Open an accumulator that records all Claude calls until the block exits.
+
+    Stage code is unaffected — instrumentation lives at `_call_with_retry`.
+    Sessions wrap each stage in this block to collect per-stage usage.
+    """
+    acc = UsageAccumulator()
+    token = _current_usage.set(acc)
+    try:
+        yield acc
+    finally:
+        _current_usage.reset(token)
+
+
+def _record_usage(model: str, usage) -> None:
+    """Record one API call's usage into the active accumulator (if any).
+
+    No-op when called outside a capture_usage() block — the function is
+    safe to call from any code path; production callers don't need to
+    know whether tracking is on.
+    """
+    acc = _current_usage.get()
+    if acc is not None:
+        acc.add(model, usage)
 
 
 def get_claude_client() -> anthropic.Anthropic:
