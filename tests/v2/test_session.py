@@ -1535,3 +1535,34 @@ class TestStageCaptureUsage:
         assert captured["stage"] == "pipeline"
         assert captured["model"] == "claude-haiku-4-5-20251001"
         assert captured["input_tokens"] == 500
+
+
+class TestLogSessionCosts:
+    def test_log_session_costs_emits_per_stage_breakdown(self, mock_db, mock_cursor, caplog):
+        """The end-of-session cost summary should log one line per stage with a
+        Claude call, and a Total: line."""
+        from v2.session import _log_session_costs
+
+        mock_cursor.fetchall.return_value = [
+            {"stage_name": "pipeline",   "model": "claude-haiku-4-5-20251001",
+             "cost_usd": 0.04, "input_tokens": 100, "output_tokens": 50,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0},
+            {"stage_name": "strategist", "model": "claude-opus-4-7",
+             "cost_usd": 1.28, "input_tokens": 5000, "output_tokens": 2000,
+             "cache_creation_tokens": 100000, "cache_read_tokens": 500000},
+            {"stage_name": "dashboard",  "model": None,
+             "cost_usd": None, "input_tokens": None, "output_tokens": None,
+             "cache_creation_tokens": None, "cache_read_tokens": None},
+        ]
+
+        with caplog.at_level("INFO", logger="session"):
+            _log_session_costs(session_id=42)
+
+        log_text = "\n".join(caplog.messages)
+        assert "pipeline" in log_text
+        assert "strategist" in log_text
+        assert "$0.04" in log_text
+        assert "$1.28" in log_text
+        assert "$1.32" in log_text  # Total
+        # Stages with NULL cost are omitted from the breakdown
+        assert "dashboard" not in log_text

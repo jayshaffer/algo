@@ -126,6 +126,41 @@ def _fail_stage(session_id: int | None, stage: str, error: str, usage=None) -> N
         pass
 
 
+def _log_session_costs(session_id: int | None) -> None:
+    """Emit a per-stage cost breakdown to the session logger.
+
+    Reads from the session_stage_costs view (defined in
+    db/init/024_session_stage_token_usage.sql). Stages with NULL cost
+    (no Claude calls or unseeded model) are omitted from the breakdown
+    but contribute NULL to the SUM (i.e. nothing).
+    """
+    if session_id is None:
+        return
+    try:
+        from v2.database.trading_db import get_cursor
+        with get_cursor() as cur:
+            cur.execute("""
+                SELECT stage_name, model, cost_usd
+                FROM session_stage_costs
+                WHERE session_id = %s
+                ORDER BY id
+            """, (session_id,))
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("Could not load session costs: %s", e)
+        return
+
+    priced = [r for r in rows if r["cost_usd"] is not None]
+    if not priced:
+        return
+
+    logger.info("Stage costs (USD):")
+    for r in priced:
+        logger.info("  %-12s $%.4f  (%s)", r["stage_name"] + ":", float(r["cost_usd"]), r["model"])
+    total = sum(float(r["cost_usd"]) for r in priced)
+    logger.info("  Total: $%.4f", total)
+
+
 def _check_and_record_session(force: bool, session_date) -> tuple[int | None, set, str | None]:
     """Returns (session_id, completed_stages, early_error).
 
@@ -445,6 +480,7 @@ def _finalize_session(result: SessionResult, session_id: int | None) -> None:
         except Exception as e:
             logger.warning("Could not update session status: %s", e)
 
+    _log_session_costs(session_id)
     logger.info("=" * 60)
     logger.info("Session complete in %.1fs", result.duration_seconds)
     if result.has_errors:
