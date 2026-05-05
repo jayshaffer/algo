@@ -122,6 +122,67 @@ class TestGenerateTradePost:
         assert result is None
 
 
+class TestFetchOgImage:
+    """`_fetch_og_image` returns the PNG bytes for /og/trade/<id>.png on the
+    public dashboard, or None on any failure. Failures must not raise — a
+    missing card is degraded gracefully to a no-image post."""
+
+    @patch("v2.social_trades.requests.get")
+    def test_returns_png_bytes_on_success(self, mock_get):
+        from v2.social_trades import _fetch_og_image
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\x89PNG\r\n\x1a\n" + b"data"
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_og_image(decision_id=328, dashboard_base_url="https://bbottomcap.com")
+
+        assert result == b"\x89PNG\r\n\x1a\ndata"
+        mock_get.assert_called_once()
+        args, kwargs = mock_get.call_args
+        assert args[0] == "https://bbottomcap.com/og/trade/328.png"
+        assert kwargs.get("timeout") is not None
+
+    @patch("v2.social_trades.requests.get")
+    def test_returns_none_on_http_error(self, mock_get):
+        from v2.social_trades import _fetch_og_image
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = Exception("404 Not Found")
+        mock_get.return_value = mock_response
+
+        result = _fetch_og_image(decision_id=999, dashboard_base_url="https://bbottomcap.com")
+        assert result is None
+
+    @patch("v2.social_trades.requests.get")
+    def test_returns_none_on_network_exception(self, mock_get):
+        from v2.social_trades import _fetch_og_image
+
+        mock_get.side_effect = Exception("Connection refused")
+        result = _fetch_og_image(decision_id=1, dashboard_base_url="https://bbottomcap.com")
+        assert result is None
+
+    def test_returns_none_when_no_dashboard_base_url(self):
+        from v2.social_trades import _fetch_og_image
+
+        result = _fetch_og_image(decision_id=1, dashboard_base_url="")
+        assert result is None
+
+    @patch("v2.social_trades.requests.get")
+    def test_strips_trailing_slash_from_base_url(self, mock_get):
+        from v2.social_trades import _fetch_og_image
+
+        mock_response = MagicMock()
+        mock_response.content = b"png"
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        _fetch_og_image(decision_id=42, dashboard_base_url="https://bbottomcap.com/")
+        assert mock_get.call_args.args[0] == "https://bbottomcap.com/og/trade/42.png"
+
+
 class TestRunTradePostsStage:
     """End-to-end stage orchestrator. All external calls mocked."""
 
@@ -255,6 +316,162 @@ class TestRunTradePostsStage:
 
         result = run_trade_posts_stage(date(2026, 5, 4))
         assert result.skipped is True
+
+
+class TestBlueskyExternalCardWiring:
+    """`run_trade_posts_stage` should enrich the bluesky post_body with an
+    `external_card` so post_to_bluesky can attach a link preview. The card
+    URI/title/description are computed from the decision; the thumbnail is
+    the pre-rendered OG PNG fetched from the public dashboard. Twitter's
+    post_body must NOT carry the card (would either be ignored or
+    surface as accidental coupling later)."""
+
+    def _decision(self, decision_id: int = 11, ticker: str = "AMZN"):
+        return {
+            "id": decision_id, "ticker": ticker, "action": "buy",
+            "quantity": 1.1, "price": 271.60, "reasoning": "Q1 solid",
+            "thesis_id": None, "thesis_text": None,
+            "thesis_direction": None, "is_off_playbook": False,
+        }
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades._fetch_og_image")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client")
+    def test_bluesky_post_body_carries_external_card_with_thumb(
+        self, mock_tw_client, mock_bs_client, mock_select, mock_fetch,
+        mock_gen, mock_post_tw, mock_post_bs, mock_dedup, mock_insert,
+        monkeypatch,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_select.return_value = [self._decision(11, "AMZN")]
+        mock_gen.return_value = {"text": "Bought 1.1 $AMZN", "type": "trade",
+                                 "decision_id": 11}
+        mock_fetch.return_value = b"\x89PNGfake"
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4))
+
+        # Twitter receives a post_body WITHOUT external_card
+        tw_body = mock_post_tw.call_args.args[0]
+        assert "external_card" not in tw_body
+
+        # Bluesky receives a post_body WITH external_card
+        bs_body = mock_post_bs.call_args.args[0]
+        card = bs_body.get("external_card")
+        assert card is not None, "bluesky post_body missing external_card"
+        assert card["uri"] == "https://bbottomcap.com/trade/11/"
+        assert "AMZN" in card["title"]
+        assert "AMZN" in card["description"]
+        assert card["thumb_png"] == b"\x89PNGfake"
+
+        mock_fetch.assert_called_once_with(11, "https://bbottomcap.com")
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades._fetch_og_image")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client", return_value=None)
+    def test_card_attached_without_thumb_when_image_fetch_fails(
+        self, mock_tw_client, mock_bs_client, mock_select, mock_fetch,
+        mock_gen, mock_post_bs, mock_dedup, mock_insert, monkeypatch,
+    ):
+        """If the OG image fetch fails, still attach the card (text-only) —
+        a card without an image is better than a bare URL with no preview."""
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
+
+        mock_bs_client.return_value = object()
+        mock_select.return_value = [self._decision(11, "AMZN")]
+        mock_gen.return_value = {"text": "Bought", "type": "trade", "decision_id": 11}
+        mock_fetch.return_value = None
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4))
+
+        bs_body = mock_post_bs.call_args.args[0]
+        card = bs_body.get("external_card")
+        assert card is not None
+        assert "thumb_png" not in card
+        assert card["uri"] == "https://bbottomcap.com/trade/11/"
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades._fetch_og_image")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client", return_value=None)
+    def test_no_card_and_no_fetch_when_dashboard_url_unset(
+        self, mock_tw_client, mock_bs_client, mock_select, mock_fetch,
+        mock_gen, mock_post_bs, mock_dedup, mock_insert, monkeypatch,
+    ):
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        monkeypatch.delenv("DASHBOARD_URL", raising=False)
+
+        mock_bs_client.return_value = object()
+        mock_select.return_value = [self._decision(11, "AMZN")]
+        mock_gen.return_value = {"text": "Bought", "type": "trade", "decision_id": 11}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4))
+
+        bs_body = mock_post_bs.call_args.args[0]
+        assert "external_card" not in bs_body
+        mock_fetch.assert_not_called()
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades._fetch_og_image")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client", return_value=None)
+    @patch("v2.social_trades.get_twitter_client")
+    def test_no_image_fetch_when_bluesky_disabled(
+        self, mock_tw_client, mock_bs_client, mock_select, mock_fetch,
+        mock_gen, mock_post_tw, mock_dedup, mock_insert, monkeypatch,
+    ):
+        """Don't waste an HTTP call fetching the OG PNG when there's no
+        Bluesky client to consume it."""
+        from datetime import date
+        from v2.social_trades import run_trade_posts_stage
+
+        monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
+
+        mock_tw_client.return_value = object()
+        mock_select.return_value = [self._decision(11, "AMZN")]
+        mock_gen.return_value = {"text": "Bought", "type": "trade", "decision_id": 11}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4))
+
+        mock_fetch.assert_not_called()
 
 
 class TestQuietDayFallback:

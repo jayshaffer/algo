@@ -54,6 +54,70 @@ class TestRenderTradeOg:
         assert len(distinct) >= 4, f"Only {len(distinct)} distinct colors — text didn't render?"
 
 
+class TestFormatTradeHeadline:
+    """Past-tense action + dollar notional, rounded — readable at thumbnail
+    size where '1.10452487 shares' is unreadable noise."""
+
+    def test_buy_uses_past_tense_with_dollar_notional(self):
+        from v2.dashboard_og import _format_trade_headline
+        assert _format_trade_headline("buy", Decimal("1.10452487"), Decimal("271.60")) == "Bought $300"
+
+    def test_sell_uses_past_tense(self):
+        from v2.dashboard_og import _format_trade_headline
+        assert _format_trade_headline("sell", Decimal("2"), Decimal("450.00")) == "Sold $900"
+
+    def test_large_notional_uses_thousands_separator(self):
+        from v2.dashboard_og import _format_trade_headline
+        assert _format_trade_headline("buy", Decimal("100"), Decimal("250")) == "Bought $25,000"
+
+    def test_uppercases_unknown_actions(self):
+        from v2.dashboard_og import _format_trade_headline
+        # Trade-posts stage filters out 'hold', but keep the renderer robust.
+        result = _format_trade_headline("trim", Decimal("5"), Decimal("100"))
+        assert "$500" in result
+        assert "Trim" in result
+
+    def test_missing_quantity_or_price_omits_dollars(self):
+        from v2.dashboard_og import _format_trade_headline
+        # Quantity/price can be None when render is fed a partial row.
+        assert _format_trade_headline("buy", None, Decimal("100")) == "Bought"
+        assert _format_trade_headline("buy", Decimal("1"), None) == "Bought"
+
+
+class TestRenderTradeOgNewLayout:
+    """The card now leads with the action+notional, then ticker+price, then
+    the trade reasoning. Verifies fields land somewhere on the canvas, not
+    that we crash on edge cases — see TestRenderTradeOg above for those."""
+
+    def test_renders_reasoning_when_present(self):
+        """Adding a reasoning string changes the rendered pixels — proves
+        the reasoning is being drawn, not silently dropped."""
+        decision_no_reasoning = {
+            "id": 1, "ticker": "AAPL", "action": "buy",
+            "quantity": Decimal("1"), "price": Decimal("100"),
+        }
+        decision_with_reasoning = {
+            **decision_no_reasoning,
+            "reasoning": "Q1 fundamentals are solid; AWS hitting $150B run rate.",
+        }
+        from v2.dashboard_og import render_trade_og
+        without = render_trade_og(decision_no_reasoning)
+        with_ = render_trade_og(decision_with_reasoning)
+        assert without != with_, "reasoning text should change the rendered PNG"
+
+    def test_handles_long_reasoning_without_overflow(self):
+        from v2.dashboard_og import render_trade_og
+        long_text = ("This is a very long reasoning string. " * 40).strip()
+        decision = {
+            "id": 1, "ticker": "AAPL", "action": "buy",
+            "quantity": Decimal("1"), "price": Decimal("100"),
+            "reasoning": long_text,
+        }
+        png = render_trade_og(decision)
+        img = _decoded(png)
+        assert img.size == (1200, 630)
+
+
 from v2.dashboard_og import render_home_og, render_thesis_og
 
 

@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass, field
 from datetime import date
 
+import requests
+
 from .claude_client import _call_with_retry, get_claude_client
 from .database.trading_db import (
     insert_tweet,
@@ -62,6 +64,43 @@ def _build_trade_context(decision: dict) -> str:
     if decision.get("is_off_playbook"):
         parts.append("Note: this is an off-playbook trade.")
     return "\n".join(parts)
+
+
+def _fetch_og_image(decision_id: int, dashboard_base_url: str) -> bytes | None:
+    """Fetch the pre-rendered OG card image for a trade. Returns the PNG
+    bytes, or None on any failure (no base URL configured, HTTP error,
+    network exception). Failures degrade to a no-image post — never raise."""
+    if not dashboard_base_url:
+        return None
+    url = f"{dashboard_base_url.rstrip('/')}/og/trade/{decision_id}.png"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return response.content
+    except Exception as e:
+        logger.warning("OG image fetch failed for decision %s: %s", decision_id, e)
+        return None
+
+
+def _build_bluesky_card(decision: dict, dashboard_base_url: str) -> dict | None:
+    """Card metadata for the Bluesky external embed. Title/description are
+    derived from the decision (matching the public dashboard's OG tags),
+    thumbnail is the pre-rendered /og/trade/<id>.png — omitted from the
+    card if the fetch failed, so the post still gets a (text-only) card."""
+    if not dashboard_base_url:
+        return None
+    base = dashboard_base_url.rstrip("/")
+    action = decision["action"].upper()
+    ticker = decision["ticker"]
+    card = {
+        "uri": f"{base}/trade/{decision['id']}/",
+        "title": f"{action} {ticker}",
+        "description": f"{action} {decision['quantity']} {ticker} @ ${decision['price']:.2f}",
+    }
+    png = _fetch_og_image(decision["id"], dashboard_base_url)
+    if png:
+        card["thumb_png"] = png
+    return card
 
 
 def _build_url_suffix(decision: dict, dashboard_base_url: str) -> str:
@@ -366,8 +405,12 @@ def run_trade_posts_stage(
                 post_tweet, session_date, result,
             )
         if bluesky_client is not None:
+            bs_post_body = dict(post_body)
+            card = _build_bluesky_card(decision, dashboard_base_url)
+            if card:
+                bs_post_body["external_card"] = card
             _platform_post_one(
-                "bluesky", post_body, decision, bluesky_client,
+                "bluesky", bs_post_body, decision, bluesky_client,
                 post_to_bluesky, session_date, result,
             )
 

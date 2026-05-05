@@ -51,21 +51,55 @@ def _to_png_bytes(img) -> bytes:
     return buf.getvalue()
 
 
+_ACTION_PAST_TENSE = {"buy": "Bought", "sell": "Sold"}
+
+
+def _format_trade_headline(action, quantity, price) -> str:
+    """Past-tense action verb with dollar notional, e.g. 'Bought $300'.
+
+    Falls back to just the verb (no notional) when quantity or price is
+    missing, so partial decision rows still render something readable
+    instead of '$0' or 'None'.
+    """
+    verb = _ACTION_PAST_TENSE.get(str(action or "").lower(), str(action or "").title())
+    if quantity is None or price is None:
+        return verb
+    notional = Decimal(quantity) * Decimal(price)
+    return f"{verb} ${notional:,.0f}"
+
+
 def render_trade_og(decision: dict) -> bytes:
-    """Return PNG bytes (1200x630) for the OG card of one trade."""
+    """Return PNG bytes (1200x630) for the OG card of one trade.
+
+    Layout (top to bottom):
+      * Headline: past-tense action + dollar notional ('Bought $300') —
+        readable at thumbnail size where '1.10452487 shares' wasn't.
+      * Subline: ticker + entry price ('AMZN @ $271.60').
+      * Body: wrapped reasoning, up to 4 lines.
+    """
     img, draw = _canvas()
     ticker = str(decision.get("ticker", "?"))
-    action = str(decision.get("action", "")).upper()
-    qty = decision.get("quantity") or 0
+    qty = decision.get("quantity")
     price = decision.get("price")
-    price_str = f"${Decimal(price):,.2f}" if price is not None else ""
+    reasoning = str(decision.get("reasoning") or "").strip()
 
-    draw.text((48, 90), action, fill=_ACCENT, font=_load_font(64))
-    draw.text((48, 170), ticker, fill=_FG, font=_load_font(220))
-    if qty:
-        draw.text((48, 430), f"{qty} shares", fill=_FG, font=_load_font(42))
-    if price_str:
-        draw.text((48, 490), price_str, fill=_MUTED, font=_load_font(56))
+    headline = _format_trade_headline(decision.get("action"), qty, price)
+    draw.text((48, 60), headline, fill=_ACCENT, font=_load_font(96))
+
+    subline_parts = [ticker]
+    if price is not None:
+        subline_parts.append(f"@ ${Decimal(price):,.2f}")
+    draw.text((48, 200), " ".join(subline_parts), fill=_FG, font=_load_font(72))
+
+    if reasoning:
+        body_font = _load_font(36)
+        wrapped = _wrap_pixels(
+            draw, reasoning, body_font,
+            max_width_px=OG_WIDTH - 96,
+            max_lines=4,
+        )
+        for i, line in enumerate(wrapped):
+            draw.text((48, 340 + i * 50), line, fill=_FG, font=body_font)
 
     return _to_png_bytes(img)
 
