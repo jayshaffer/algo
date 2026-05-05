@@ -41,11 +41,14 @@ _TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 _TICKER_BLOCKLIST = frozenset({
     # group/category acronyms — never tradable tickers
     "FAANG", "MAANG", "MAGS", "MAG", "FAAMG", "BATX", "BAT",
-    # generic non-equity acronyms commonly mentioned in news
-    "ETF", "ETN", "IPO", "SPAC", "REIT", "MLP",
+    # generic non-equity acronyms commonly mentioned in news.
+    # NOTE: ADP (Automatic Data Processing) and ETN (Eaton Corp) are real
+    # S&P 500 tickers that share names with macro indicators / instrument
+    # classes — leaving them out matches the BE/ON/GO tradeoff above.
+    "ETF", "IPO", "SPAC", "REIT", "MLP",
     "CEO", "CFO", "CTO", "COO", "CIO", "CMO", "CISO",
     "SEC", "FDA", "FTC", "DOJ", "FBI", "CIA", "NSA", "EPA", "IRS",
-    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM", "ADP",
+    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM",
     "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "CNY",
     # platform/sector buzzwords (lowercase tradable equivalents may exist
     # — block only when LLM emits them as if they were tickers)

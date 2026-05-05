@@ -359,6 +359,25 @@ class TestTickerValidation:
             )
             assert result.ticker_signals[0].ticker == t
 
+    def test_does_not_block_ambiguous_real_tickers(self):
+        """ADP (Automatic Data Processing) and ETN (Eaton Corp) are real
+        S&P 500 tickers that share names with macro indicators / instrument
+        classes. Without an Alpaca-asset allowlist, blocking them silently
+        drops every news signal for those names — same tradeoff as BE/ON/GO."""
+        for t in ["ADP", "ETN"]:
+            entry = {
+                "type": "ticker_specific",
+                "tickers": [t],
+                "category": "earnings",
+                "sentiment": "neutral",
+                "confidence": "low",
+            }
+            result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+            assert len(result.ticker_signals) == 1, (
+                f"Real ticker {t!r} should not be blocked"
+            )
+            assert result.ticker_signals[0].ticker == t
+
     def test_strips_trailing_sentence_punctuation(self):
         """Haiku occasionally emits tickers with trailing punctuation
         copied from sentence boundaries (e.g. 'AAPL.', 'NVDA,'). Strip
