@@ -47,6 +47,33 @@ class AgenticLoopResult:
     cache_read_input_tokens: int = 0
 
 
+@dataclass
+class UsageAccumulator:
+    """Sums Claude API token usage across calls within a stage.
+
+    Populated by `_record_usage` (called from `_call_with_retry`) when
+    a `capture_usage()` block is active; consumed by session.py to
+    write per-stage token counts to the database.
+    """
+
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    mixed_models: bool = False
+
+    def add(self, model: str, usage) -> None:
+        if self.model is None:
+            self.model = model
+        elif self.model != model:
+            self.mixed_models = True
+        self.input_tokens          += (usage.input_tokens or 0)
+        self.output_tokens         += (usage.output_tokens or 0)
+        self.cache_creation_tokens += (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        self.cache_read_tokens     += (getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+
 def get_claude_client() -> anthropic.Anthropic:
     """Create Claude client. Requires ANTHROPIC_API_KEY environment variable."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
