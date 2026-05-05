@@ -18,6 +18,18 @@ from trading.news import NewsItem
 # Integration test logging
 # ---------------------------------------------------------------------------
 
+def _has_integration_tests(session) -> bool:
+    """True iff the collected test session contains any integration test.
+
+    Uses pytest's already-applied marker filter (`session.items` reflects
+    `-m` filtering) instead of substring-checking the markexpr string —
+    the substring approach treated `-m "not integration"` (the default
+    in pytest.ini) as "running integration tests" because the substring
+    'integration' is present in both directions of the expression.
+    """
+    return any(item.get_closest_marker("integration") for item in session.items)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _integration_logging(request):
     """Configure logging for integration test runs.
@@ -26,8 +38,7 @@ def _integration_logging(request):
     logs/integration_tests.log.  Only activates when the integration marker
     is selected (i.e. ``-m integration``).
     """
-    markers = request.config.option.markexpr
-    if not markers or "integration" not in markers:
+    if not _has_integration_tests(request.session):
         return
 
     log_dir = "logs"
