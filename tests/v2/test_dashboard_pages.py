@@ -623,6 +623,11 @@ class TestRenderHomepage:
         assert "XOM" in html
         assert 'href="/thesis/7/"' in html
 
+    def test_renders_intro_blurb_explaining_what_this_is(self):
+        html = render_homepage(**self._data())
+        assert 'class="intro"' in html
+        assert "Bikini Bottom Capital is a real Alpaca brokerage account" in html
+
     def test_omits_chips_when_no_active_theses(self):
         html = render_homepage(**self._data(theses=[]))
         assert "Currently betting on" not in html

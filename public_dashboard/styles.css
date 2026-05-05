@@ -77,6 +77,10 @@ a:hover { text-decoration: underline; }
 .hero h1 .strip {
   font-size: 0.95rem; font-weight: 600; margin-left: 0.6rem;
 }
+.hero .intro {
+  font-size: 0.95rem; line-height: 1.5; color: var(--text-dim);
+  max-width: 60ch; margin: 0.9rem 0 0;
+}
 .hero .label {
   font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--text-dim); margin: 1rem 0 0.4rem;

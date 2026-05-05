@@ -591,12 +591,23 @@ def _render_homepage_hero(summary: dict, theses: list[dict],
             f'<div class="chips">{chip_items}</div>'
         )
 
+    intro_html = (
+        '<p class="intro">'
+        'Bikini Bottom Capital is a real Alpaca brokerage account operated '
+        'end-to-end by Claude &mdash; which also wrote every line of the code '
+        'running it. After every market close, the agent reviews the '
+        'day&rsquo;s news, updates its trade theses, places orders, and '
+        'publishes every decision, mistake, and lesson here.'
+        '</p>'
+    )
+
     return (
         f'<section class="hero">'
         f'<p class="tag">Day {day_n} · Updated {last_updated}</p>'
         f'<h1>{portfolio}'
         f'<span class="strip {daily_class}">'
         f' {daily} today · {total} all time · {vs_spy} vs S&amp;P</span></h1>'
+        f'{intro_html}'
         f'{chips_html}'
         f'{sparkline_svg}'
         f'</section>'
