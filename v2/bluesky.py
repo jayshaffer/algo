@@ -62,7 +62,8 @@ def post_to_bluesky(post: dict, client=None) -> dict:
         dashboard_url = post.get("dashboard_url")
         if dashboard_url:
             facets = _build_link_facets(post["text"], _DASHBOARD_LINK_TEXT, dashboard_url)
-        response = client.send_post(text=post["text"], facets=facets)
+        embed = _build_external_embed(client, post.get("external_card"))
+        response = client.send_post(text=post["text"], facets=facets, embed=embed)
         post_id = response.uri
         logger.info("Posted to Bluesky %s: %s...", post_id, post["text"][:50])
         return {"text": post["text"], "type": post_type, "posted": True, "post_id": post_id, "error": None}
@@ -182,6 +183,35 @@ def _dashboard_url_suffix() -> str:
     if dashboard_url:
         return f"\n{_DASHBOARD_LINK_TEXT}"
     return ""
+
+
+def _build_external_embed(client, card: dict | None):
+    """Build an app.bsky.embed.external for a link preview card.
+
+    Bluesky doesn't auto-fetch OG tags from linked URLs, so a card only
+    appears when we attach it explicitly here. ``card`` is a dict with
+    ``uri``/``title``/``description`` and an optional ``thumb_png`` (PNG
+    bytes, uploaded as a blob and referenced as the card thumbnail).
+    """
+    if not card:
+        return None
+    try:
+        from atproto import models
+    except ImportError:
+        return None
+
+    thumb_png = card.get("thumb_png")
+    thumb = None
+    if thumb_png:
+        thumb = client.upload_blob(thumb_png).blob
+
+    external = models.AppBskyEmbedExternal.External(
+        uri=card["uri"],
+        title=card["title"],
+        description=card["description"],
+        thumb=thumb,
+    )
+    return models.AppBskyEmbedExternal.Main(external=external)
 
 
 def _build_link_facets(text: str, link_text: str, url: str) -> list | None:

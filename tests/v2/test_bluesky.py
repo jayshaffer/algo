@@ -91,7 +91,7 @@ class TestPostToBluesky:
         assert result["post_id"] == "at://did:plc:abc/app.bsky.feed.post/123"
         assert result["error"] is None
         assert result["type"] == "recap"
-        mock_client.send_post.assert_called_once_with(text="Hello from Bikini Bottom!", facets=None)
+        mock_client.send_post.assert_called_once_with(text="Hello from Bikini Bottom!", facets=None, embed=None)
 
     @patch("v2.bluesky._build_link_facets")
     @patch("v2.bluesky.get_bluesky_client")
@@ -107,7 +107,7 @@ class TestPostToBluesky:
         result = post_to_bluesky(post)
         assert result["posted"] is True
         mock_build.assert_called_once_with("Ahoy!\nportfolio", _DASHBOARD_LINK_TEXT, "https://example.github.io")
-        mock_client.send_post.assert_called_once_with(text="Ahoy!\nportfolio", facets=mock_facets)
+        mock_client.send_post.assert_called_once_with(text="Ahoy!\nportfolio", facets=mock_facets, embed=None)
 
     @patch("v2.bluesky.get_bluesky_client")
     def test_handles_api_error(self, mock_get_client):
@@ -134,6 +134,116 @@ def _make_claude_response(json_data):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock(text=_json.dumps(json_data))]
     return mock_resp
+
+
+class TestPostToBlueskyExternalCard:
+    """Verify post_to_bluesky attaches an app.bsky.embed.external when the
+    post dict carries card fields. This is what gives Bluesky a real link
+    preview — without it Bluesky shows the bare URL (no card at all),
+    since unlike Twitter it does not auto-fetch OG tags from the linked
+    page.
+    """
+
+    @patch("v2.bluesky.get_bluesky_client")
+    def test_attaches_external_embed_with_thumb(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.uri = "at://did:plc:abc/app.bsky.feed.post/789"
+        mock_client.send_post.return_value = mock_response
+        # upload_blob returns an object with a .blob ref
+        mock_blob_response = MagicMock()
+        mock_blob_response.blob = "BLOB_REF"
+        mock_client.upload_blob.return_value = mock_blob_response
+        mock_get_client.return_value = mock_client
+
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"fake"
+        post = {
+            "text": "Bought 1.1 $AMZN @ $271.60",
+            "type": "trade",
+            "external_card": {
+                "uri": "https://bbottomcap.com/trade/328/",
+                "title": "BUY AMZN",
+                "description": "BUY 1.10 AMZN @ $271.60",
+                "thumb_png": png_bytes,
+            },
+        }
+
+        mock_models = MagicMock()
+        with patch.dict("sys.modules", {"atproto": mock_models}):
+            result = post_to_bluesky(post)
+
+        assert result["posted"] is True
+        mock_client.upload_blob.assert_called_once_with(png_bytes)
+        # External record built with the right fields and the blob ref
+        mock_models.models.AppBskyEmbedExternal.External.assert_called_once_with(
+            uri="https://bbottomcap.com/trade/328/",
+            title="BUY AMZN",
+            description="BUY 1.10 AMZN @ $271.60",
+            thumb="BLOB_REF",
+        )
+        # Embed wrapper built around the External
+        external_obj = mock_models.models.AppBskyEmbedExternal.External.return_value
+        mock_models.models.AppBskyEmbedExternal.Main.assert_called_once_with(
+            external=external_obj,
+        )
+        # send_post received the embed
+        embed_obj = mock_models.models.AppBskyEmbedExternal.Main.return_value
+        send_kwargs = mock_client.send_post.call_args.kwargs
+        assert send_kwargs.get("embed") is embed_obj
+
+    @patch("v2.bluesky.get_bluesky_client")
+    def test_external_card_without_thumb_skips_blob_upload(self, mock_get_client):
+        """A card may be posted without an image — embed still attached, but
+        no upload_blob call and no thumb on the External record."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.uri = "at://did:plc:abc/app.bsky.feed.post/790"
+        mock_client.send_post.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        post = {
+            "text": "Bought 1.1 $AMZN @ $271.60",
+            "type": "trade",
+            "external_card": {
+                "uri": "https://bbottomcap.com/trade/328/",
+                "title": "BUY AMZN",
+                "description": "BUY 1.10 AMZN @ $271.60",
+                # no thumb_png
+            },
+        }
+
+        mock_models = MagicMock()
+        with patch.dict("sys.modules", {"atproto": mock_models}):
+            result = post_to_bluesky(post)
+
+        assert result["posted"] is True
+        mock_client.upload_blob.assert_not_called()
+        mock_models.models.AppBskyEmbedExternal.External.assert_called_once_with(
+            uri="https://bbottomcap.com/trade/328/",
+            title="BUY AMZN",
+            description="BUY 1.10 AMZN @ $271.60",
+            thumb=None,
+        )
+        send_kwargs = mock_client.send_post.call_args.kwargs
+        assert "embed" in send_kwargs
+        assert send_kwargs["embed"] is not None
+
+    @patch("v2.bluesky.get_bluesky_client")
+    def test_no_embed_when_no_external_card(self, mock_get_client):
+        """Posts without external_card must pass embed=None to send_post."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.uri = "at://did:plc:abc/app.bsky.feed.post/791"
+        mock_client.send_post.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        post = {"text": "Plain post", "type": "recap"}
+        result = post_to_bluesky(post)
+
+        assert result["posted"] is True
+        mock_client.upload_blob.assert_not_called()
+        send_kwargs = mock_client.send_post.call_args.kwargs
+        assert send_kwargs.get("embed") is None
 
 
 class TestGenerateBlueskyPost:
