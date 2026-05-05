@@ -998,6 +998,63 @@ class TestSessionStages:
         result = get_completed_stages(session_id=1)
         assert result == set()
 
+    def test_complete_session_stage_writes_usage_columns(self, mock_db, mock_cursor):
+        """complete_session_stage should write the five token columns when
+        a usage object is supplied."""
+        from v2.claude_client import UsageAccumulator
+        from v2.database.trading_db import complete_session_stage
+
+        usage = UsageAccumulator(
+            model="claude-haiku-4-5-20251001",
+            input_tokens=1234,
+            output_tokens=567,
+            cache_creation_tokens=89,
+            cache_read_tokens=10,
+        )
+        complete_session_stage(session_id=42, stage_name="executor", usage=usage)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "model" in sql
+        assert "input_tokens" in sql
+        assert "output_tokens" in sql
+        assert "cache_creation_tokens" in sql
+        assert "cache_read_tokens" in sql
+
+        params = mock_cursor.execute.call_args[0][1]
+        assert "claude-haiku-4-5-20251001" in params
+        assert 1234 in params
+        assert 567 in params
+
+    def test_complete_session_stage_without_usage_omits_columns(self, mock_db, mock_cursor):
+        """When usage is None or has no model (no Claude calls fired), the
+        five new columns must not appear in the UPDATE — preserves existing
+        behavior for stages like learning/dashboard."""
+        from v2.database.trading_db import complete_session_stage
+
+        complete_session_stage(session_id=42, stage_name="dashboard", usage=None)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "model" not in sql
+        assert "input_tokens" not in sql
+
+    def test_fail_session_stage_writes_partial_usage(self, mock_db, mock_cursor):
+        """A stage that fails after firing some calls should still record the
+        partial token usage."""
+        from v2.claude_client import UsageAccumulator
+        from v2.database.trading_db import fail_session_stage
+
+        partial = UsageAccumulator(
+            model="claude-opus-4-7",
+            input_tokens=500,
+            output_tokens=0,
+            cache_creation_tokens=0,
+            cache_read_tokens=0,
+        )
+        fail_session_stage(session_id=42, stage_name="strategist", error="boom", usage=partial)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "model" in sql
+        assert "input_tokens" in sql
+
 
 class TestStrategyMemos:
     def test_insert_strategy_memo(self, mock_db, mock_cursor):
