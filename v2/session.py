@@ -26,6 +26,7 @@ from .agent import DEFAULT_EXECUTOR_MODEL
 from .attribution import build_attribution_constraints, compute_signal_attribution
 from .backfill import run_backfill
 from .bluesky import BlueskyStageResult, run_bluesky_stage
+from .claude_client import capture_usage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 from .database.trading_db import (
     complete_session,
@@ -107,20 +108,20 @@ def _start_stage(session_id: int | None, stage: str) -> None:
         pass
 
 
-def _complete_stage(session_id: int | None, stage: str) -> None:
+def _complete_stage(session_id: int | None, stage: str, usage=None) -> None:
     if session_id is None:
         return
     try:
-        complete_session_stage(session_id, stage)
+        complete_session_stage(session_id, stage, usage=usage)
     except Exception:
         pass
 
 
-def _fail_stage(session_id: int | None, stage: str, error: str) -> None:
+def _fail_stage(session_id: int | None, stage: str, error: str, usage=None) -> None:
     if session_id is None:
         return
     try:
-        fail_session_stage(session_id, stage, error)
+        fail_session_stage(session_id, stage, error, usage=usage)
     except Exception:
         pass
 
@@ -172,18 +173,19 @@ def _run_learning_refresh(
         return build_attribution_constraints()
     logger.info("[Stage 0] Refreshing learning data")
     _start_stage(session_id, "learning")
-    try:
-        run_backfill()
-        compute_signal_attribution()
-        constraints = build_attribution_constraints()
-        _complete_stage(session_id, "learning")
-        logger.info("Learning refresh complete")
-        return constraints
-    except Exception as e:
-        result.learning_error = str(e)
-        _fail_stage(session_id, "learning", str(e))
-        logger.warning("Learning refresh failed: %s — continuing with stale data", e)
-        return ""
+    with capture_usage() as usage:
+        try:
+            run_backfill()
+            compute_signal_attribution()
+            constraints = build_attribution_constraints()
+            _complete_stage(session_id, "learning", usage=usage)
+            logger.info("Learning refresh complete")
+            return constraints
+        except Exception as e:
+            result.learning_error = str(e)
+            _fail_stage(session_id, "learning", str(e), usage=usage)
+            logger.warning("Learning refresh failed: %s — continuing with stale data", e)
+            return ""
 
 
 def _run_pipeline_stage(
@@ -200,13 +202,14 @@ def _run_pipeline_stage(
         return
     logger.info("[Stage 1] Running news pipeline")
     _start_stage(session_id, "pipeline")
-    try:
-        result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit)
-        _complete_stage(session_id, "pipeline")
-    except Exception as e:
-        result.pipeline_error = str(e)
-        _fail_stage(session_id, "pipeline", str(e))
-        logger.error("Pipeline failed: %s — continuing with existing signals", e)
+    with capture_usage() as usage:
+        try:
+            result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit)
+            _complete_stage(session_id, "pipeline", usage=usage)
+        except Exception as e:
+            result.pipeline_error = str(e)
+            _fail_stage(session_id, "pipeline", str(e), usage=usage)
+            logger.error("Pipeline failed: %s — continuing with existing signals", e)
 
 
 def _persist_strategist_memo(result: SessionResult, session_date) -> None:
@@ -240,28 +243,29 @@ def _run_strategist_stage(
         return
     logger.info("[Stage 2] Running Claude strategist")
     _start_stage(session_id, "strategist")
-    try:
-        result.strategist_result = run_strategist_loop(
-            model=model,
-            max_turns=max_turns,
-            attribution_constraints=attribution_constraints,
-        )
-        # P2.24: validate playbook BEFORE persisting the memo. The previous
-        # order committed the memo first, then raised on missing playbook;
-        # the failure path didn't complete the stage, so the next run re-ran
-        # the strategist and inserted a *second* memo for the same date.
-        # Validate first → fail fast → no memo on failure → no duplicates.
-        if get_playbook(session_date) is None:
-            raise RuntimeError(
-                f"Strategist finished without writing a playbook for {session_date} "
-                "(likely hit max_tokens or max_turns before calling write_playbook)"
+    with capture_usage() as usage:
+        try:
+            result.strategist_result = run_strategist_loop(
+                model=model,
+                max_turns=max_turns,
+                attribution_constraints=attribution_constraints,
             )
-        _persist_strategist_memo(result, session_date)
-        _complete_stage(session_id, "strategist")
-    except Exception as e:
-        result.strategist_error = str(e)
-        _fail_stage(session_id, "strategist", str(e))
-        logger.error("Strategist failed: %s — continuing with existing playbook", e)
+            # P2.24: validate playbook BEFORE persisting the memo. The previous
+            # order committed the memo first, then raised on missing playbook;
+            # the failure path didn't complete the stage, so the next run re-ran
+            # the strategist and inserted a *second* memo for the same date.
+            # Validate first → fail fast → no memo on failure → no duplicates.
+            if get_playbook(session_date) is None:
+                raise RuntimeError(
+                    f"Strategist finished without writing a playbook for {session_date} "
+                    "(likely hit max_tokens or max_turns before calling write_playbook)"
+                )
+            _persist_strategist_memo(result, session_date)
+            _complete_stage(session_id, "strategist", usage=usage)
+        except Exception as e:
+            result.strategist_error = str(e)
+            _fail_stage(session_id, "strategist", str(e), usage=usage)
+            logger.error("Strategist failed: %s — continuing with existing playbook", e)
 
 
 def _run_executor_stage(
@@ -299,13 +303,14 @@ def _run_executor_stage(
 
     logger.info("[Stage 3] Running trading session")
     _start_stage(session_id, "executor")
-    try:
-        result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
-        _complete_stage(session_id, "executor")
-    except Exception as e:
-        result.trading_error = str(e)
-        _fail_stage(session_id, "executor", str(e))
-        logger.error("Trading session failed: %s", e)
+    with capture_usage() as usage:
+        try:
+            result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
+            _complete_stage(session_id, "executor", usage=usage)
+        except Exception as e:
+            result.trading_error = str(e)
+            _fail_stage(session_id, "executor", str(e), usage=usage)
+            logger.error("Trading session failed: %s", e)
 
 
 def _run_strategy_stage(
@@ -321,28 +326,29 @@ def _run_strategy_stage(
         return
     logger.info("[Stage 4] Running strategy reflection")
     _start_stage(session_id, "strategy")
-    try:
-        result.strategy_result = run_strategy_reflection(
-            model=DEFAULT_REFLECTION_MODEL,
-            max_turns=10,
-            trading_result=result.trading_result,
-        )
-        # P1.15: parallel to P2.24 for the strategist — the reflection LLM is
-        # instructed to "always write a memo" but nothing structurally enforced
-        # it. Silent omissions left journal gaps and, worse, marked the stage
-        # complete so resume would skip the reflection on the next run instead
-        # of retrying. Treat a missing memo as a stage failure: the stage stays
-        # incomplete and the next session re-runs reflection.
-        if not result.strategy_result.memo_written:
-            raise RuntimeError(
-                "Reflection finished without writing a memo "
-                "(LLM did not call write_strategy_memo)"
+    with capture_usage() as usage:
+        try:
+            result.strategy_result = run_strategy_reflection(
+                model=DEFAULT_REFLECTION_MODEL,
+                max_turns=10,
+                trading_result=result.trading_result,
             )
-        _complete_stage(session_id, "strategy")
-    except Exception as e:
-        result.strategy_error = str(e)
-        _fail_stage(session_id, "strategy", str(e))
-        logger.error("Strategy reflection failed: %s", e)
+            # P1.15: parallel to P2.24 for the strategist — the reflection LLM is
+            # instructed to "always write a memo" but nothing structurally enforced
+            # it. Silent omissions left journal gaps and, worse, marked the stage
+            # complete so resume would skip the reflection on the next run instead
+            # of retrying. Treat a missing memo as a stage failure: the stage stays
+            # incomplete and the next session re-runs reflection.
+            if not result.strategy_result.memo_written:
+                raise RuntimeError(
+                    "Reflection finished without writing a memo "
+                    "(LLM did not call write_strategy_memo)"
+                )
+            _complete_stage(session_id, "strategy", usage=usage)
+        except Exception as e:
+            result.strategy_error = str(e)
+            _fail_stage(session_id, "strategy", str(e), usage=usage)
+            logger.error("Strategy reflection failed: %s", e)
 
 
 def _run_twitter_stage_wrapper(
@@ -355,13 +361,14 @@ def _run_twitter_stage_wrapper(
         return
     logger.info("[Stage 5] Running Twitter posting")
     _start_stage(session_id, "twitter")
-    try:
-        result.twitter_result = run_twitter_stage()
-        _complete_stage(session_id, "twitter")
-    except Exception as e:
-        result.twitter_error = str(e)
-        _fail_stage(session_id, "twitter", str(e))
-        logger.error("Twitter stage failed: %s", e)
+    with capture_usage() as usage:
+        try:
+            result.twitter_result = run_twitter_stage()
+            _complete_stage(session_id, "twitter", usage=usage)
+        except Exception as e:
+            result.twitter_error = str(e)
+            _fail_stage(session_id, "twitter", str(e), usage=usage)
+            logger.error("Twitter stage failed: %s", e)
 
 
 def _run_bluesky_stage_wrapper(
@@ -374,13 +381,14 @@ def _run_bluesky_stage_wrapper(
         return
     logger.info("[Stage 5b] Running Bluesky posting")
     _start_stage(session_id, "bluesky")
-    try:
-        result.bluesky_result = run_bluesky_stage()
-        _complete_stage(session_id, "bluesky")
-    except Exception as e:
-        result.bluesky_error = str(e)
-        _fail_stage(session_id, "bluesky", str(e))
-        logger.error("Bluesky stage failed: %s", e)
+    with capture_usage() as usage:
+        try:
+            result.bluesky_result = run_bluesky_stage()
+            _complete_stage(session_id, "bluesky", usage=usage)
+        except Exception as e:
+            result.bluesky_error = str(e)
+            _fail_stage(session_id, "bluesky", str(e), usage=usage)
+            logger.error("Bluesky stage failed: %s", e)
 
 
 def _run_trade_posts_stage_wrapper(
@@ -395,13 +403,14 @@ def _run_trade_posts_stage_wrapper(
         return
     logger.info("[Stage 5] Running trade-posts stage")
     _start_stage(session_id, "trade_posts")
-    try:
-        result.trade_posts_result = run_trade_posts_stage()
-        _complete_stage(session_id, "trade_posts")
-    except Exception as e:
-        result.trade_posts_error = str(e)
-        _fail_stage(session_id, "trade_posts", str(e))
-        logger.error("Trade-posts stage crashed: %s", e)
+    with capture_usage() as usage:
+        try:
+            result.trade_posts_result = run_trade_posts_stage()
+            _complete_stage(session_id, "trade_posts", usage=usage)
+        except Exception as e:
+            result.trade_posts_error = str(e)
+            _fail_stage(session_id, "trade_posts", str(e), usage=usage)
+            logger.error("Trade-posts stage crashed: %s", e)
 
 
 def _run_dashboard_stage_wrapper(
