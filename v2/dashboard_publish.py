@@ -164,6 +164,86 @@ def _enrich_snapshots_with_deposits(snapshots: list[dict], deposit_history: list
                     s["cumulative_deposits"] += credit
 
 
+def _enrich_snapshots_with_spy_match(
+    snapshots: list[dict],
+    deposit_history: list[dict],
+    benchmark: list[dict],
+) -> None:
+    """Add `spy_value_if_deposited` to each snapshot, in place.
+
+    Models a shadow portfolio that buys SPY at each deposit's date and marks
+    to market on every snapshot date. Mirrors the same crediting rule used by
+    `_enrich_snapshots_with_deposits` so a deposit hitting cumulative_deposits
+    on snapshot S also adds SPY shares to the shadow portfolio on S.
+
+    Powers the equity-curve chart's deposit-matched SPY benchmark — "what the
+    same cash would have been worth had it gone into SPY instead." Without
+    this match, comparing actual equity to a single-lump SPY normalization is
+    misleading once the account has multiple deposits.
+    """
+    if not snapshots:
+        return
+
+    spy_by_date = {str(b["date"]): float(b["close"]) for b in (benchmark or [])}
+
+    if not spy_by_date or not deposit_history:
+        for s in snapshots:
+            s["spy_value_if_deposited"] = None
+        return
+
+    sorted_spy_dates = sorted(spy_by_date.keys())
+
+    def spy_close_on_or_after(d_str: str) -> float | None:
+        for sd in sorted_spy_dates:
+            if sd >= d_str:
+                return spy_by_date[sd]
+        return None
+
+    sorted_deposits = sorted(deposit_history, key=lambda x: str(x["date"]))
+    # (date_str, amount, spy_price_at_purchase) — drop deposits we can't price
+    # (e.g. pre-history of benchmark window).
+    purchases: list[tuple[str, float, float]] = []
+    for d in sorted_deposits:
+        d_date = str(d["date"])
+        spy_buy = spy_close_on_or_after(d_date)
+        if spy_buy and spy_buy > 0:
+            purchases.append((d_date, float(d["amount"]), spy_buy))
+
+    if not purchases:
+        for s in snapshots:
+            s["spy_value_if_deposited"] = None
+        return
+
+    first_snap_date = str(snapshots[0]["date"])
+
+    for s in snapshots:
+        snap_date = str(s["date"])
+        spy_now = spy_by_date.get(snap_date)
+        if spy_now is None:
+            # Snapshot date isn't a SPY trading day — fall back to most recent
+            # prior close so the shadow portfolio still has a value.
+            for sd in reversed(sorted_spy_dates):
+                if sd <= snap_date:
+                    spy_now = spy_by_date[sd]
+                    break
+        if spy_now is None:
+            # Snapshot precedes every SPY close in the window (e.g. a weekend
+            # snapshot at the start of the benchmark range). Use the first
+            # available close so the chart still has a baseline point.
+            spy_now = spy_close_on_or_after(snap_date)
+        if spy_now is None:
+            s["spy_value_if_deposited"] = None
+            continue
+
+        if snap_date <= first_snap_date:
+            credited = [p for p in purchases if p[0] <= first_snap_date]
+        else:
+            credited = [p for p in purchases if p[0] < snap_date]
+
+        shares = sum(amt / buy_price for (_, amt, buy_price) in credited)
+        s["spy_value_if_deposited"] = round(shares * spy_now, 2)
+
+
 def _enrich_snapshots_with_twr_value(snapshots: list[dict]) -> None:
     """Add twr_value to each snapshot, in place.
 
@@ -385,6 +465,7 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
         deposit_history = []
     _enrich_snapshots_with_deposits(snapshot_dicts, deposit_history)
     _enrich_snapshots_with_twr_value(snapshot_dicts)
+    _enrich_snapshots_with_spy_match(snapshot_dicts, deposit_history, benchmark)
 
     # Daily deposit is the jump in cumulative_deposits between the last two
     # snapshots — matches the credit semantics in _enrich_snapshots_with_deposits.
@@ -398,6 +479,22 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     # Build summary (needs daily_deposit to exclude cash-ins from daily P&L)
     summary = _build_summary(latest, first, previous, len(positions), session_date,
                              net_deposits, daily_deposit=daily_deposit)
+
+    # Renderer-facing aliases. The dashboard pages spec uses `total_return_pct`
+    # for the hero strip; the publisher historically emitted `total_pnl_pct`.
+    # Keep both so the legacy summary contract still holds.
+    summary["total_return_pct"] = summary["total_pnl_pct"]
+
+    # vs_spy_pct: portfolio total return minus a deposit-matched SPY shadow
+    # portfolio's return over the same window. Same denominator (net_deposits)
+    # so the spread reads as alpha. None when we lack the data to compute it.
+    vs_spy_pct = None
+    if snapshot_dicts and net_deposits and net_deposits != 0:
+        spy_value = snapshot_dicts[-1].get("spy_value_if_deposited")
+        if spy_value is not None:
+            spy_return_pct = (Decimal(str(spy_value)) - net_deposits) / net_deposits * 100
+            vs_spy_pct = summary["total_pnl_pct"] - spy_return_pct
+    summary["vs_spy_pct"] = vs_spy_pct
 
     # NEW: gather full ID lists for page emission (link permanence)
     with get_cursor() as cur2:
@@ -472,8 +569,75 @@ def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = Non
     }
 
 
+def _fetch_signal_refs(cur, link_table: str, link_col: str, link_id: int) -> list[dict]:
+    """Hydrate signal citations for a decision or thesis.
+
+    INNER JOINs to news_signals/macro_signals/theses so orphan FKs (parent
+    deleted) drop out — same defense pattern used by attribution.py and
+    patterns.py. Returns one flat list with `signal_type` set on each row;
+    consumers render-side group by type.
+    """
+    refs: list[dict] = []
+
+    # f-string interpolation is safe because link_table and link_col come from
+    # hardcoded callers below (decision_signals/decision_id, thesis_signals/
+    # thesis_id), not user input. Assert the invariant so a future refactor
+    # trips immediately.
+    assert link_table in {"decision_signals", "thesis_signals"}, link_table
+    assert link_col in {"decision_id", "thesis_id"}, link_col
+
+    cur.execute(
+        f"""
+        SELECT ls.signal_id, ns.ticker, ns.headline, ns.category, ns.sentiment,
+               ns.published_at
+        FROM {link_table} ls
+        JOIN news_signals ns ON ns.id = ls.signal_id
+        WHERE ls.{link_col} = %s AND ls.signal_type = 'news_signal'
+        ORDER BY ns.published_at DESC NULLS LAST, ls.signal_id
+        """,  # noqa: S608
+        (link_id,),
+    )
+    for row in cur.fetchall():
+        d = dict(row)
+        d["signal_type"] = "news_signal"
+        refs.append(d)
+
+    cur.execute(
+        f"""
+        SELECT ls.signal_id, ms.headline, ms.category, ms.sentiment,
+               ms.affected_sectors, ms.published_at
+        FROM {link_table} ls
+        JOIN macro_signals ms ON ms.id = ls.signal_id
+        WHERE ls.{link_col} = %s AND ls.signal_type = 'macro_signal'
+        ORDER BY ms.published_at DESC NULLS LAST, ls.signal_id
+        """,  # noqa: S608
+        (link_id,),
+    )
+    for row in cur.fetchall():
+        d = dict(row)
+        d["signal_type"] = "macro_signal"
+        refs.append(d)
+
+    cur.execute(
+        f"""
+        SELECT ls.signal_id, t.ticker, t.direction, t.thesis, t.confidence, t.status
+        FROM {link_table} ls
+        JOIN theses t ON t.id = ls.signal_id
+        WHERE ls.{link_col} = %s AND ls.signal_type = 'thesis'
+        ORDER BY ls.signal_id
+        """,  # noqa: S608
+        (link_id,),
+    )
+    for row in cur.fetchall():
+        d = dict(row)
+        d["signal_type"] = "thesis"
+        refs.append(d)
+
+    return refs
+
+
 def gather_trade_detail(cur, decision_id: int) -> dict | None:
-    """Return full detail for one decision page: decision + thesis + position.
+    """Return full detail for one decision page: decision + thesis + position + signal_refs.
 
     Caller passes a cursor so this can run in any open transaction.
     Returns None if the decision_id doesn't exist.
@@ -518,7 +682,14 @@ def gather_trade_detail(cur, decision_id: int) -> dict | None:
     pos_row = cur.fetchone()
     position = dict(pos_row) if pos_row else None
 
-    return {"decision": decision, "thesis": thesis, "position": position}
+    signal_refs = _fetch_signal_refs(cur, "decision_signals", "decision_id", decision_id)
+
+    return {
+        "decision": decision,
+        "thesis": thesis,
+        "position": position,
+        "signal_refs": signal_refs,
+    }
 
 
 def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
@@ -556,7 +727,14 @@ def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
     pos_row = cur.fetchone()
     position = dict(pos_row) if pos_row else None
 
-    return {"thesis": thesis, "decisions": decisions, "position": position}
+    signal_refs = _fetch_signal_refs(cur, "thesis_signals", "thesis_id", thesis_id)
+
+    return {
+        "thesis": thesis,
+        "decisions": decisions,
+        "position": position,
+        "signal_refs": signal_refs,
+    }
 
 
 def gather_all_pages_data(cur) -> dict:
@@ -662,6 +840,7 @@ def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
                 thesis=detail["thesis"],
                 position=detail["position"],
                 base_url=base_url,
+                signal_refs=detail.get("signal_refs", []),
             )
             page_dir = os.path.join(deploy_dir, "trade", str(did))
             os.makedirs(page_dir, exist_ok=True)
@@ -682,6 +861,7 @@ def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
                 decisions=detail["decisions"],
                 position=detail["position"],
                 base_url=base_url,
+                signal_refs=detail.get("signal_refs", []),
             )
             page_dir = os.path.join(deploy_dir, "thesis", str(tid))
             os.makedirs(page_dir, exist_ok=True)

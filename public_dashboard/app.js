@@ -74,7 +74,13 @@ function setupHamburger() {
 
 // === Equity / benchmark charts (Performance page) ===
 
-function renderEquityCurve(snapshots, benchmark) {
+function renderEquityCurve(snapshots) {
+  // Plots actual account equity (portfolio_value) in dollars over time.
+  // Deposits stair-step the line up; trading P&L is the wiggle on top.
+  // SPY line shows the deposit-matched shadow portfolio (spy_value_if_deposited)
+  // computed server-side — what the same cash flows would be worth had they
+  // gone into SPY instead. Apples-to-apples vs an account that gets new
+  // deposits at irregular intervals.
   var canvas = document.getElementById("equity-chart");
   var emptyMsg = document.getElementById("chart-empty");
   if (!canvas) return;
@@ -86,13 +92,15 @@ function renderEquityCurve(snapshots, benchmark) {
   }
 
   var labels = snapshots.map(function (s) { return s.date; });
-  var portfolioValues = snapshots.map(function (s) {
-    return s.twr_value != null ? s.twr_value : s.portfolio_value;
+  var equityValues = snapshots.map(function (s) { return s.portfolio_value; });
+  var spyValues = snapshots.map(function (s) {
+    return s.spy_value_if_deposited != null ? s.spy_value_if_deposited : null;
   });
+  var hasSpy = spyValues.some(function (v) { return v != null; });
 
   var datasets = [{
     label: "Portfolio",
-    data: portfolioValues,
+    data: equityValues,
     borderColor: "#58a6ff",
     backgroundColor: "rgba(88, 166, 255, 0.08)",
     fill: true,
@@ -102,32 +110,19 @@ function renderEquityCurve(snapshots, benchmark) {
     borderWidth: 2,
   }];
 
-  if (benchmark && benchmark.length > 0) {
-    var spyMap = {};
-    benchmark.forEach(function (b) { spyMap[b.date] = b.close; });
-
-    var spyBase = spyMap[labels[0]];
-    if (spyBase) {
-      var baseValue = snapshots[0].portfolio_value;
-      var spyNormalized = labels.map(function (date) {
-        var close = spyMap[date];
-        if (close == null) return null;
-        return (close / spyBase) * baseValue;
-      });
-
-      datasets.push({
-        label: "S&P 500",
-        data: spyNormalized,
-        borderColor: "#8b949e",
-        borderDash: [6, 3],
-        backgroundColor: "transparent",
-        fill: false,
-        tension: 0.3,
-        pointRadius: 0,
-        pointHitRadius: 8,
-        borderWidth: 2,
-      });
-    }
+  if (hasSpy) {
+    datasets.push({
+      label: "S&P 500 (deposit-matched)",
+      data: spyValues,
+      borderColor: "#8b949e",
+      borderDash: [6, 3],
+      backgroundColor: "transparent",
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      pointHitRadius: 8,
+      borderWidth: 2,
+    });
   }
 
   new Chart(canvas, {
@@ -156,6 +151,82 @@ function renderEquityCurve(snapshots, benchmark) {
             callback: function (v) { return formatCurrency(v); },
           },
           grid: { color: "rgba(48, 54, 61, 0.5)" },
+        },
+      },
+    },
+  });
+}
+
+function renderPnlChart(snapshots) {
+  // Cumulative P&L in dollars: portfolio_value - cumulative_deposits.
+  // Deposits add to both terms simultaneously, so the line tracks pure trading
+  // gain/loss rather than the gross equity number.
+  var canvas = document.getElementById("pnl-chart");
+  var emptyMsg = document.getElementById("pnl-empty");
+  if (!canvas) return;
+
+  if (!snapshots || snapshots.length === 0) {
+    canvas.style.display = "none";
+    if (emptyMsg) emptyMsg.style.display = "block";
+    return;
+  }
+
+  var labels = snapshots.map(function (s) { return s.date; });
+  var pnlValues = snapshots.map(function (s) {
+    var pv = s.portfolio_value;
+    var dep = s.cumulative_deposits;
+    if (pv == null || dep == null) return null;
+    return pv - dep;
+  });
+
+  new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "Cumulative P&L",
+        data: pnlValues,
+        borderColor: "#58a6ff",
+        backgroundColor: "rgba(88, 166, 255, 0.08)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var v = ctx.parsed.y;
+              var sign = v >= 0 ? "+" : "−";
+              return sign + formatCurrency(Math.abs(v));
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#8b949e", maxTicksLimit: 8 },
+          grid: { color: "rgba(48, 54, 61, 0.5)" },
+        },
+        y: {
+          ticks: {
+            color: "#8b949e",
+            callback: function (v) {
+              var sign = v >= 0 ? "+" : "−";
+              return sign + formatCurrency(Math.abs(v));
+            },
+          },
+          grid: {
+            color: function (ctx) {
+              return ctx.tick.value === 0 ? "#8b949e" : "rgba(48, 54, 61, 0.5)";
+            },
+          },
         },
       },
     },
@@ -340,7 +411,8 @@ function initPerformancePage() {
   ]).then(function (parts) {
     var snapshots = parts[0];
     var benchmark = parts[1];
-    renderEquityCurve(snapshots, benchmark);
+    renderEquityCurve(snapshots);
+    renderPnlChart(snapshots);
     renderBenchmark(snapshots, benchmark);
   }).catch(function (err) {
     console.error("Failed to load performance data:", err);

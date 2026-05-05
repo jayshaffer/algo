@@ -12,6 +12,7 @@ from v2.dashboard_publish import (
     _build_summary,
     _DecimalEncoder,
     _enrich_snapshots_with_deposits,
+    _enrich_snapshots_with_spy_match,
     _enrich_snapshots_with_twr_value,
     _redact_order_id,
     assemble_deploy_dir,
@@ -187,6 +188,94 @@ class TestGatherDashboardData:
         # Investment return: 105000 - 100000 = 5000 (not 105000 - 80000 = 25000)
         assert summary["total_pnl"] == Decimal("5000")
         assert summary["total_pnl_pct"] == Decimal("5")  # 5000/100000 * 100
+
+    def test_summary_aliases_total_return_pct(self, mock_benchmark, mock_db):
+        """Summary exposes total_return_pct as an alias of total_pnl_pct.
+
+        The new dashboard pages read `total_return_pct` (per spec); the
+        legacy publisher emitted `total_pnl_pct`. Both keys must be present
+        and equal so the hero "all time" stat renders.
+        """
+        session_date = date(2025, 6, 15)
+        mock_db.fetchall.side_effect = [[], [], [], [], [], []]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("105000"), "cash": Decimal("50000"),
+             "long_market_value": Decimal("55000")},
+            {"portfolio_value": Decimal("80000"), "date": date(2025, 1, 1)},
+            {"portfolio_value": Decimal("104000")},
+        ]
+
+        result = gather_dashboard_data(session_date, net_deposits=Decimal("100000"))
+        summary = result["summary"]
+
+        assert "total_return_pct" in summary
+        assert summary["total_return_pct"] == summary["total_pnl_pct"]
+
+    @patch("v2.dashboard_publish.get_deposit_history")
+    def test_summary_includes_vs_spy_pct(self, mock_history, mock_benchmark, mock_db):
+        """vs_spy_pct = portfolio total return − deposit-matched SPY return.
+
+        Setup: $1000 deposited on 2025-06-14 when SPY=$500 → 2 SPY shares.
+        Latest portfolio = $1100 (+10%). SPY closes at $550 on 2025-06-15
+        → shadow value 2 × $550 = $1100, also +10%. Spread = 0%.
+        Bumping portfolio to $1200 (+20%) yields vs_spy_pct = +10%.
+        """
+        session_date = date(2025, 6, 15)
+        mock_history.return_value = [
+            {"date": "2025-06-14", "amount": Decimal("1000")},
+        ]
+        mock_benchmark.return_value = [
+            {"date": "2025-06-14", "close": 500.0},
+            {"date": "2025-06-15", "close": 550.0},
+        ]
+        mock_db.fetchall.side_effect = [
+            [
+                {"date": date(2025, 6, 14), "portfolio_value": Decimal("1000"),
+                 "cash": Decimal("1000"), "buying_power": Decimal("1000")},
+                {"date": date(2025, 6, 15), "portfolio_value": Decimal("1200"),
+                 "cash": Decimal("1200"), "buying_power": Decimal("1200")},
+            ],
+            [], [], [], [], [],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("1200"), "cash": Decimal("1200"),
+             "long_market_value": Decimal("0")},
+            {"portfolio_value": Decimal("1000"), "date": date(2025, 6, 14)},
+            {"portfolio_value": Decimal("1000")},
+        ]
+
+        result = gather_dashboard_data(session_date, net_deposits=Decimal("1000"))
+        summary = result["summary"]
+
+        # Portfolio: (1200 - 1000)/1000 = +20%
+        # SPY shadow: 2 shares × $550 = $1100 → (1100 - 1000)/1000 = +10%
+        # Spread: +10%
+        assert summary["vs_spy_pct"] is not None
+        assert abs(float(summary["vs_spy_pct"]) - 10.0) < 0.01
+
+    def test_summary_vs_spy_pct_none_when_no_benchmark(self, mock_benchmark, mock_db):
+        """vs_spy_pct is None when SPY benchmark fetch returns nothing.
+
+        Without SPY closes the shadow portfolio can't be priced, so the
+        renderer must show '—' rather than fabricate a comparison.
+        """
+        session_date = date(2025, 6, 15)
+        mock_benchmark.return_value = []
+        mock_db.fetchall.side_effect = [
+            [{"date": date(2025, 6, 15), "portfolio_value": Decimal("1100"),
+              "cash": Decimal("1100"), "buying_power": Decimal("1100")}],
+            [], [], [], [], [],
+        ]
+        mock_db.fetchone.side_effect = [
+            {"portfolio_value": Decimal("1100"), "cash": Decimal("1100"),
+             "long_market_value": Decimal("0")},
+            {"portfolio_value": Decimal("1000"), "date": date(2025, 6, 15)},
+            None,
+        ]
+
+        result = gather_dashboard_data(session_date, net_deposits=Decimal("1000"))
+
+        assert result["summary"]["vs_spy_pct"] is None
 
     def test_total_return_fallback_without_net_deposits(self, mock_benchmark, mock_db):
         """Without net_deposits, falls back to first snapshot comparison."""
@@ -617,6 +706,84 @@ class TestEnrichSnapshotsWithTwrValue:
         assert snapshots[0]["twr_value"] == Decimal("0")
         # When start capital is 0, we just carry previous twr_value forward.
         assert snapshots[1]["twr_value"] == Decimal("0")
+
+
+class TestEnrichSnapshotsWithSpyMatch:
+    """`spy_value_if_deposited` mirrors the cumulative_deposits crediting rule:
+    a deposit becomes part of the shadow SPY portfolio on the same snapshot
+    where it lands in cumulative_deposits, valued at the SPY close on the
+    deposit's own date."""
+
+    def test_empty_snapshots_is_noop(self):
+        snapshots: list[dict] = []
+        _enrich_snapshots_with_spy_match(snapshots, [], [])
+        assert snapshots == []
+
+    def test_no_deposits_or_benchmark_sets_none(self):
+        snapshots = [{"date": date(2025, 1, 1), "portfolio_value": Decimal("1000")}]
+        _enrich_snapshots_with_spy_match(snapshots, [], [])
+        assert snapshots[0]["spy_value_if_deposited"] is None
+
+    def test_single_deposit_grows_with_spy(self):
+        """Deposit on day 1 buys SPY at $400; on day 2 SPY = $440 → +10%."""
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("1000")},
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("1050")},
+        ]
+        deposits = [{"date": "2025-01-01", "amount": Decimal("1000")}]
+        benchmark = [
+            {"date": date(2025, 1, 1), "close": 400.0},
+            {"date": date(2025, 1, 2), "close": 440.0},
+        ]
+        _enrich_snapshots_with_spy_match(snapshots, deposits, benchmark)
+        # Day 1 (== first_snap_date): deposit credited under fix-up rule
+        # shares = 1000 / 400 = 2.5; value = 2.5 * 400 = 1000
+        assert snapshots[0]["spy_value_if_deposited"] == 1000.00
+        # Day 2: same shares, new SPY price → 2.5 * 440 = 1100
+        assert snapshots[1]["spy_value_if_deposited"] == 1100.00
+
+    def test_mid_window_deposit_credited_after_its_date(self):
+        """Mirror of cumulative_deposits crediting: deposit dated D shows up
+        on snapshot D+1 (or first snapshot strictly after D)."""
+        snapshots = [
+            {"date": date(2025, 1, 1), "portfolio_value": Decimal("1000")},
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("1050")},
+            {"date": date(2025, 1, 3), "portfolio_value": Decimal("2100")},
+        ]
+        deposits = [
+            {"date": "2025-01-01", "amount": Decimal("1000")},
+            {"date": "2025-01-02", "amount": Decimal("1000")},
+        ]
+        benchmark = [
+            {"date": date(2025, 1, 1), "close": 400.0},
+            {"date": date(2025, 1, 2), "close": 410.0},
+            {"date": date(2025, 1, 3), "close": 420.0},
+        ]
+        _enrich_snapshots_with_spy_match(snapshots, deposits, benchmark)
+
+        # Day 1: only the Jan-1 deposit credited (fix-up). 1000/400 * 400 = 1000.
+        assert snapshots[0]["spy_value_if_deposited"] == 1000.00
+        # Day 2: still only Jan-1 deposit (Jan-2 NOT < Jan-2). 2.5 * 410 = 1025.
+        assert snapshots[1]["spy_value_if_deposited"] == 1025.00
+        # Day 3: both deposits credited. 2.5 * 420 + (1000/410) * 420 ≈ 1050 + 1024.39
+        v = snapshots[2]["spy_value_if_deposited"]
+        assert 2070 < v < 2080
+
+    def test_falls_back_to_prior_close_when_snapshot_date_not_a_trading_day(self):
+        """Snapshot dates may include non-trading days (holiday/weekend writes)
+        that have no SPY close — fall back to the most recent prior close."""
+        snapshots = [
+            {"date": date(2025, 1, 2), "portfolio_value": Decimal("1000")},
+            {"date": date(2025, 1, 4), "portfolio_value": Decimal("1100")},  # Saturday
+        ]
+        deposits = [{"date": "2025-01-02", "amount": Decimal("1000")}]
+        benchmark = [
+            {"date": date(2025, 1, 2), "close": 400.0},
+            {"date": date(2025, 1, 3), "close": 410.0},
+        ]
+        _enrich_snapshots_with_spy_match(snapshots, deposits, benchmark)
+        # Day 2 (Sat): no SPY close — fall back to Jan-3 (Fri). 2.5 * 410 = 1025.
+        assert snapshots[1]["spy_value_if_deposited"] == 1025.00
 
 
 class TestWriteJsonFiles:
@@ -1051,6 +1218,38 @@ class TestGatherTradeDetail:
         result = gather_trade_detail(mock_db, decision_id=42)
         assert result["thesis"] is None
 
+    def test_signal_refs_hydrated_from_decision_signals(self, mock_db):
+        """gather_trade_detail should hydrate news/macro/thesis citations
+        with parent fields and tag each row with its signal_type."""
+        mock_db.fetchone.side_effect = [
+            {"id": 42, "date": date(2026, 5, 3), "ticker": "NVDA", "action": "buy",
+             "quantity": Decimal("12"), "price": Decimal("450.25"),
+             "reasoning": "x", "outcome_7d": None, "outcome_30d": None,
+             "thesis_id": None, "order_id": None},
+            None,  # position lookup
+        ]
+        mock_db.fetchall.side_effect = [
+            [{"signal_id": 100, "ticker": "NVDA", "headline": "AI capex surge",
+              "category": "earnings", "sentiment": "bullish",
+              "published_at": datetime(2026, 5, 1, 14, 30)}],
+            [{"signal_id": 200, "headline": "Fed pauses",
+              "category": "rate_decision", "sentiment": "dovish",
+              "affected_sectors": "tech,growth",
+              "published_at": datetime(2026, 5, 2, 9, 0)}],
+            [{"signal_id": 7, "ticker": "NVDA", "direction": "long",
+              "thesis": "AI capex acceleration",
+              "confidence": "high", "status": "active"}],
+        ]
+
+        result = gather_trade_detail(mock_db, decision_id=42)
+        refs = result["signal_refs"]
+        assert len(refs) == 3
+        types = [r["signal_type"] for r in refs]
+        assert types == ["news_signal", "macro_signal", "thesis"]
+        assert refs[0]["headline"] == "AI capex surge"
+        assert refs[1]["affected_sectors"] == "tech,growth"
+        assert refs[2]["signal_id"] == 7
+
 
 class TestGatherThesisDetail:
     def test_returns_thesis_with_decisions_and_position(self, mock_db):
@@ -1066,17 +1265,44 @@ class TestGatherThesisDetail:
                  "quantity": Decimal("12"), "price": Decimal("450.25"),
                  "outcome_7d": None, "outcome_30d": None},
             ],
+            [],  # news signal refs
+            [],  # macro signal refs
+            [],  # thesis signal refs
         ]
 
         result = gather_thesis_detail(mock_db, thesis_id=7)
         assert result["thesis"]["id"] == 7
         assert len(result["decisions"]) == 1
         assert result["position"]["ticker"] == "NVDA"
+        assert result["signal_refs"] == []
 
     def test_returns_none_when_missing(self, mock_db):
         mock_db.fetchone.side_effect = [None]
         result = gather_thesis_detail(mock_db, thesis_id=999)
         assert result is None
+
+    def test_signal_refs_hydrated_from_thesis_signals(self, mock_db):
+        """gather_thesis_detail should hydrate citations from thesis_signals."""
+        mock_db.fetchone.side_effect = [
+            {"id": 7, "ticker": "NVDA", "direction": "long", "thesis": "AI",
+             "entry_trigger": "<$440", "exit_trigger": "$520", "invalidation": "no",
+             "confidence": "high", "status": "active"},
+            None,  # position
+        ]
+        mock_db.fetchall.side_effect = [
+            [],  # decisions
+            [{"signal_id": 100, "ticker": "NVDA", "headline": "AI capex surge",
+              "category": "earnings", "sentiment": "bullish",
+              "published_at": datetime(2026, 5, 1, 14, 30)}],
+            [],  # macro
+            [],  # thesis citations
+        ]
+
+        result = gather_thesis_detail(mock_db, thesis_id=7)
+        refs = result["signal_refs"]
+        assert len(refs) == 1
+        assert refs[0]["signal_type"] == "news_signal"
+        assert refs[0]["headline"] == "AI capex surge"
 
 
 class TestFetchSpyBenchmark:

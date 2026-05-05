@@ -180,8 +180,100 @@ def _fmt_outcome(value: Decimal | int | float | None) -> str:
     return f"{Decimal(value):+.2f}%"
 
 
+def _fmt_signal_date(value) -> str:
+    """Render a published_at timestamp as YYYY-MM-DD; empty string if missing."""
+    if value is None:
+        return ""
+    if hasattr(value, "date"):
+        try:
+            return value.date().isoformat()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return _esc(str(value))
+
+
+def _render_signal_refs_section(refs: list[dict] | None) -> str:
+    """Render the 'Cited evidence' block for trade and thesis pages.
+
+    Refs are expected in the shape returned by `_fetch_signal_refs`:
+      - news_signal:  {signal_id, ticker, headline, category, sentiment, published_at}
+      - macro_signal: {signal_id, headline, category, sentiment, affected_sectors,
+                       published_at}
+      - thesis:       {signal_id, ticker, direction, thesis, confidence, status}
+
+    Returns "" when there are no refs so callers can splice unconditionally.
+    """
+    if not refs:
+        return ""
+
+    news = [r for r in refs if r.get("signal_type") == "news_signal"]
+    macro = [r for r in refs if r.get("signal_type") == "macro_signal"]
+    theses = [r for r in refs if r.get("signal_type") == "thesis"]
+
+    parts: list[str] = ['<h3>Cited evidence</h3>']
+
+    def _meta_join(*bits) -> str:
+        return " · ".join([b for b in bits if b])
+
+    if news:
+        items = []
+        for r in news:
+            ticker = _esc(str(r.get("ticker") or ""))
+            headline = _esc(str(r.get("headline") or ""))
+            meta = _meta_join(
+                _esc(str(r.get("category") or "")),
+                _esc(str(r.get("sentiment") or "")),
+                _fmt_signal_date(r.get("published_at")),
+            )
+            meta_html = f' <span class="signal-meta">({meta})</span>' if meta else ""
+            ticker_html = f"<strong>{ticker}</strong> " if ticker else ""
+            items.append(f"<li>{ticker_html}{headline}{meta_html}</li>")
+        parts.append('<h4>News</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+
+    if macro:
+        items = []
+        for r in macro:
+            headline = _esc(str(r.get("headline") or ""))
+            sectors = r.get("affected_sectors")
+            sectors_str = ""
+            if sectors:
+                if isinstance(sectors, (list, tuple)):
+                    sectors_str = ", ".join(_esc(str(s)) for s in sectors)
+                else:
+                    sectors_str = _esc(str(sectors))
+            meta = _meta_join(
+                _esc(str(r.get("category") or "")),
+                _esc(str(r.get("sentiment") or "")),
+                f"sectors: {sectors_str}" if sectors_str else "",
+                _fmt_signal_date(r.get("published_at")),
+            )
+            meta_html = f' <span class="signal-meta">({meta})</span>' if meta else ""
+            items.append(f"<li>{headline}{meta_html}</li>")
+        parts.append('<h4>Macro</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+
+    if theses:
+        items = []
+        for r in theses:
+            tid = int(r["signal_id"])
+            ticker = _esc(str(r.get("ticker") or ""))
+            direction = _esc(str(r.get("direction") or ""))
+            thesis_text = _truncate(str(r.get("thesis") or ""), 120)
+            label = _esc(thesis_text) if thesis_text else f"Thesis #{tid}"
+            heading_bits = " ".join([b for b in (ticker, direction) if b])
+            prefix = f"{heading_bits} — " if heading_bits else ""
+            items.append(
+                f'<li><a href="/thesis/{tid}/">{prefix}{label}</a></li>'
+            )
+        parts.append('<h4>Theses</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+
+    return "".join(parts)
+
+
 def render_trade_page(decision: dict, thesis: dict | None,
-                      position: dict | None, base_url: str) -> str:
+                      position: dict | None, base_url: str,
+                      signal_refs: list[dict] | None = None) -> str:
     """Return the full HTML page for one trade."""
     base = base_url.rstrip("/")
     decision_id = int(decision["id"])
@@ -221,6 +313,8 @@ def render_trade_page(decision: dict, thesis: dict | None,
             o30=_fmt_outcome(decision.get("outcome_30d")),
         )
 
+    signal_refs_section = _render_signal_refs_section(signal_refs)
+
     title_raw = f"{action_upper} {raw_ticker}"
     description_raw = f"{action_upper} {raw_qty} {raw_ticker} @ {_fmt_money(raw_price)}"
 
@@ -230,7 +324,7 @@ def render_trade_page(decision: dict, thesis: dict | None,
         f'<p class="trade-summary">{qty_display} shares at {price_display} on {trade_date}</p>'
         f'<h3>Reasoning</h3>'
         f'<p>{_esc(str(decision.get("reasoning") or ""))}</p>'
-        f'{thesis_section}{outcome_section}'
+        f'{thesis_section}{outcome_section}{signal_refs_section}'
         f'</section>'
     )
 
@@ -280,7 +374,8 @@ def _render_decisions_section(decisions: list[dict]) -> str:
 
 
 def render_thesis_page(thesis: dict, decisions: list[dict],
-                       position: dict | None, base_url: str) -> str:
+                       position: dict | None, base_url: str,
+                       signal_refs: list[dict] | None = None) -> str:
     """Return the full HTML page for one thesis."""
     base = base_url.rstrip("/")
     thesis_id = int(thesis["id"])
@@ -303,6 +398,7 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
         f'<p class="thesis-meta">Confidence: {confidence_esc} · Status: {status_esc}</p>'
         f'<h3>Thesis</h3><p>{thesis_text_esc}</p>'
         f'{_render_triggers_section(thesis)}'
+        f'{_render_signal_refs_section(signal_refs)}'
         f'{_render_decisions_section(decisions)}'
         f'</section>'
     )
@@ -693,9 +789,19 @@ def render_performance_page(*, summary: dict, performance: dict,
     )
 
     charts = (
-        '<section class="section"><div class="head"><h2>Equity curve</h2></div>'
+        '<section class="section">'
+        '<div class="head"><h2>Equity curve</h2></div>'
+        '<p class="section-subtitle">Account value over time. '
+        'SPY line shows what the same deposits would be worth in an index fund.</p>'
         '<div class="chart-wrap"><canvas id="equity-chart"></canvas></div>'
         '<p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>'
+        '</section>'
+        '<section class="section">'
+        '<div class="head"><h2>Cumulative P&amp;L</h2></div>'
+        '<p class="section-subtitle">Trading gain/loss in dollars, '
+        'with cash deposits subtracted out.</p>'
+        '<div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>'
+        '<p class="empty-state" id="pnl-empty" style="display:none;">No snapshot data yet</p>'
         '</section>'
         '<section class="section"><div class="head"><h2>Performance vs S&amp;P 500</h2></div>'
         '<div class="chart-wrap"><canvas id="benchmark-chart"></canvas></div>'

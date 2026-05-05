@@ -159,6 +159,73 @@ class TestRenderTradePage:
         assert 'data-page="activity"' in html
         assert 'class="active" href="/activity/"' in html
 
+    def test_signal_refs_section_renders_news_macro_thesis(self):
+        from datetime import datetime
+        refs = [
+            {"signal_type": "news_signal", "signal_id": 100, "ticker": "NVDA",
+             "headline": "AI capex surge", "category": "earnings",
+             "sentiment": "bullish",
+             "published_at": datetime(2026, 5, 1, 14, 30)},
+            {"signal_type": "macro_signal", "signal_id": 200,
+             "headline": "Fed pauses", "category": "rate_decision",
+             "sentiment": "dovish", "affected_sectors": "tech,growth",
+             "published_at": datetime(2026, 5, 2)},
+            {"signal_type": "thesis", "signal_id": 7, "ticker": "NVDA",
+             "direction": "long", "thesis": "AI capex acceleration",
+             "confidence": "high", "status": "active"},
+        ]
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+            signal_refs=refs,
+        )
+        assert "Cited evidence" in html
+        assert "AI capex surge" in html
+        assert "Fed pauses" in html
+        assert "earnings" in html
+        assert "tech,growth" in html
+        assert 'href="/thesis/7/"' in html
+        assert "2026-05-01" in html
+
+    def test_no_signal_refs_section_when_empty(self):
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+            signal_refs=[],
+        )
+        assert "Cited evidence" not in html
+
+    def test_signal_refs_default_to_no_section(self):
+        """Calling without signal_refs kwarg keeps the page identical to the
+        empty-list case — preserves prior call-site compatibility."""
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+        )
+        assert "Cited evidence" not in html
+
+    def test_signal_refs_escape_user_text(self):
+        refs = [{
+            "signal_type": "news_signal", "signal_id": 1,
+            "ticker": "X", "headline": "<script>alert(1)</script>",
+            "category": "x", "sentiment": "neutral", "published_at": None,
+        }]
+        html = render_trade_page(
+            decision=self._decision(),
+            thesis=None,
+            position=None,
+            base_url="https://example.com",
+            signal_refs=refs,
+        )
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+
 
 class TestRenderThesisPage:
     def _thesis(self, **overrides):
@@ -260,6 +327,30 @@ class TestRenderThesisPage:
         )
         assert 'data-page="activity"' in html
         assert 'class="active" href="/activity/"' in html
+
+    def test_signal_refs_section_appears_above_decisions(self):
+        from datetime import datetime
+        refs = [{
+            "signal_type": "news_signal", "signal_id": 100, "ticker": "NVDA",
+            "headline": "Datacenter capex bump", "category": "earnings",
+            "sentiment": "bullish",
+            "published_at": datetime(2026, 5, 1),
+        }]
+        decisions = [{
+            "id": 42, "date": date(2026, 5, 3), "ticker": "NVDA",
+            "action": "buy", "quantity": 12, "price": Decimal("450.25"),
+        }]
+        html = render_thesis_page(
+            thesis=self._thesis(),
+            decisions=decisions,
+            position=None,
+            base_url="https://example.com",
+            signal_refs=refs,
+        )
+        assert "Cited evidence" in html
+        assert "Datacenter capex bump" in html
+        # Evidence section should land before the related-decisions section.
+        assert html.index("Cited evidence") < html.index("Related decisions")
 
 
 from datetime import date as _date
@@ -638,7 +729,17 @@ class TestRenderPerformancePage:
     def test_renders_chart_canvases(self):
         html = render_performance_page(**self._data())
         assert 'id="equity-chart"' in html
+        assert 'id="pnl-chart"' in html
         assert 'id="benchmark-chart"' in html
+
+    def test_chart_section_headings_are_distinct(self):
+        """Equity curve and Cumulative P&L should be separately labeled —
+        one shows gross equity (with deposits), the other shows trading P&L."""
+        html = render_performance_page(**self._data())
+        assert ">Equity curve</h2>" in html
+        assert "Cumulative P&amp;L" in html
+        assert "deposits subtracted" in html
+        assert "deposit-matched" in html or "deposits would be worth" in html
 
     def test_renders_stats_panel(self):
         html = render_performance_page(**self._data())
