@@ -738,7 +738,12 @@ class TestPerStageResume:
             result = run_session(dry_run=False)
 
         assert result.pipeline_error == "fetch error"
-        mock_fail_stage.assert_any_call(5, "pipeline", "fetch error")
+        # fail_session_stage now takes a usage kwarg; assert the positional args match
+        matching = [
+            c for c in mock_fail_stage.call_args_list
+            if c.args[:3] == (5, "pipeline", "fetch error")
+        ]
+        assert matching, f"Expected fail_session_stage(5, 'pipeline', 'fetch error', ...); got {mock_fail_stage.call_args_list}"
 
     def test_stage_tracking_failure_does_not_break_session(self):
         """If insert_session_stage raises, the stage should still run."""
@@ -1493,3 +1498,71 @@ class TestAlgoEnableTradePostsFlag:
         mock_new.assert_not_called()
         mock_old_tw.assert_called_once()
         mock_old_bs.assert_called_once()
+
+
+class TestStageCaptureUsage:
+    def test_run_pipeline_stage_passes_usage_to_complete(self, mock_db, monkeypatch):
+        """When the pipeline stage runs, the captured token usage should be
+        forwarded to complete_session_stage."""
+        from types import SimpleNamespace
+        from v2 import session
+        from v2.claude_client import _record_usage
+
+        captured = {}
+
+        def fake_complete(session_id, stage_name, usage=None):
+            captured["stage"] = stage_name
+            captured["model"] = usage.model if usage else None
+            captured["input_tokens"] = usage.input_tokens if usage else 0
+
+        monkeypatch.setattr(session, "complete_session_stage", fake_complete)
+        monkeypatch.setattr(session, "insert_session_stage", lambda *a, **kw: None)
+
+        def fake_pipeline(*args, **kwargs):
+            _record_usage("claude-haiku-4-5-20251001", SimpleNamespace(
+                input_tokens=500, output_tokens=200,
+                cache_creation_input_tokens=0, cache_read_input_tokens=0,
+            ))
+            return MagicMock()
+
+        monkeypatch.setattr(session, "run_pipeline", fake_pipeline)
+
+        from v2.session import SessionResult, _run_pipeline_stage
+        result = SessionResult()
+        _run_pipeline_stage(result, session_id=1, completed_stages=set(),
+                            skip=False, pipeline_hours=24, pipeline_limit=300)
+
+        assert captured["stage"] == "pipeline"
+        assert captured["model"] == "claude-haiku-4-5-20251001"
+        assert captured["input_tokens"] == 500
+
+
+class TestLogSessionCosts:
+    def test_log_session_costs_emits_per_stage_breakdown(self, mock_db, mock_cursor, caplog):
+        """The end-of-session cost summary should log one line per stage with a
+        Claude call, and a Total: line."""
+        from v2.session import _log_session_costs
+
+        mock_cursor.fetchall.return_value = [
+            {"stage_name": "pipeline",   "model": "claude-haiku-4-5-20251001",
+             "cost_usd": 0.04, "input_tokens": 100, "output_tokens": 50,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0},
+            {"stage_name": "strategist", "model": "claude-opus-4-7",
+             "cost_usd": 1.28, "input_tokens": 5000, "output_tokens": 2000,
+             "cache_creation_tokens": 100000, "cache_read_tokens": 500000},
+            {"stage_name": "dashboard",  "model": None,
+             "cost_usd": None, "input_tokens": None, "output_tokens": None,
+             "cache_creation_tokens": None, "cache_read_tokens": None},
+        ]
+
+        with caplog.at_level("INFO", logger="session"):
+            _log_session_costs(session_id=42)
+
+        log_text = "\n".join(caplog.messages)
+        assert "pipeline" in log_text
+        assert "strategist" in log_text
+        assert "$0.04" in log_text
+        assert "$1.28" in log_text
+        assert "$1.32" in log_text  # Total
+        # Stages with NULL cost are omitted from the breakdown
+        assert "dashboard" not in log_text

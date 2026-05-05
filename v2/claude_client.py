@@ -1,5 +1,7 @@
 """Claude API client with tool handling and agentic loop."""
 
+import contextlib
+import contextvars
 import logging
 import os
 import random
@@ -47,6 +49,65 @@ class AgenticLoopResult:
     cache_read_input_tokens: int = 0
 
 
+@dataclass
+class UsageAccumulator:
+    """Sums Claude API token usage across calls within a stage.
+
+    Populated by `_record_usage` (called from `_call_with_retry`) when
+    a `capture_usage()` block is active; consumed by session.py to
+    write per-stage token counts to the database.
+    """
+
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    mixed_models: bool = False
+
+    def add(self, model: str, usage) -> None:
+        if self.model is None:
+            self.model = model
+        elif self.model != model:
+            self.mixed_models = True
+        self.input_tokens          += (usage.input_tokens or 0)
+        self.output_tokens         += (usage.output_tokens or 0)
+        self.cache_creation_tokens += (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        self.cache_read_tokens     += (getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+
+_current_usage: contextvars.ContextVar[UsageAccumulator | None] = contextvars.ContextVar(
+    "_current_usage", default=None
+)
+
+
+@contextlib.contextmanager
+def capture_usage():
+    """Open an accumulator that records all Claude calls until the block exits.
+
+    Stage code is unaffected — instrumentation lives at `_call_with_retry`.
+    Sessions wrap each stage in this block to collect per-stage usage.
+    """
+    acc = UsageAccumulator()
+    token = _current_usage.set(acc)
+    try:
+        yield acc
+    finally:
+        _current_usage.reset(token)
+
+
+def _record_usage(model: str, usage) -> None:
+    """Record one API call's usage into the active accumulator (if any).
+
+    No-op when called outside a capture_usage() block — the function is
+    safe to call from any code path; production callers don't need to
+    know whether tracking is on.
+    """
+    acc = _current_usage.get()
+    if acc is not None:
+        acc.add(model, usage)
+
+
 def get_claude_client() -> anthropic.Anthropic:
     """Create Claude client. Requires ANTHROPIC_API_KEY environment variable."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -73,7 +134,9 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
     for attempt in range(max_retries + 1):
         try:
             with client.messages.stream(**create_kwargs) as stream:
-                return stream.get_final_message()
+                message = stream.get_final_message()
+            _record_usage(create_kwargs["model"], message.usage)
+            return message
         except RETRYABLE_ERRORS as e:
             if attempt == max_retries:
                 logger.error(

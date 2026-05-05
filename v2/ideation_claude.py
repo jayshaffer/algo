@@ -8,6 +8,7 @@ from datetime import datetime
 from .claude_client import extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
 from .formation import build_formation_context, get_orphan_positions
+from .pricing import UnknownModelError, stage_cost_usd
 from .tools import (
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
@@ -226,7 +227,7 @@ def _run_claude_loop(
     created, updated, closed, adopted = count_actions(result.messages)
     summary = extract_final_text(result.messages) or "No summary available"
 
-    _print_cost_summary(label, result, created, updated, closed, summary, adopted=adopted)
+    _print_cost_summary(label, result, model, created, updated, closed, summary, adopted=adopted)
 
     return ClaudeIdeationResult(
         timestamp=timestamp,
@@ -242,14 +243,25 @@ def _run_claude_loop(
     )
 
 
-def _print_cost_summary(label, result, created, updated, closed, summary, adopted=0):
-    """Print token usage and cost estimate for an agentic loop result."""
-    uncached_input = result.input_tokens - result.cache_creation_input_tokens - result.cache_read_input_tokens
-    input_cost = uncached_input * 5 / 1_000_000
-    cache_write_cost = result.cache_creation_input_tokens * 6.25 / 1_000_000
-    cache_read_cost = result.cache_read_input_tokens * 0.50 / 1_000_000
-    output_cost = result.output_tokens * 25 / 1_000_000
-    total_cost = input_cost + cache_write_cost + cache_read_cost + output_cost
+def _print_cost_summary(label, result, model, created, updated, closed, summary, adopted=0):
+    """Print token usage and estimated USD cost for an agentic loop result.
+
+    Uses v2.pricing.stage_cost_usd, which reads rates from the
+    model_pricing DB table — single source of truth, matches the SQL
+    cost view exactly. Prior version hardcoded Opus pricing inline and
+    miscomputed uncached input by double-subtracting cache tokens.
+    """
+    try:
+        cost = stage_cost_usd(
+            model=model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_creation_tokens=result.cache_creation_input_tokens,
+            cache_read_tokens=result.cache_read_input_tokens,
+        )
+        cost_str = f"${cost:.4f}"
+    except UnknownModelError:
+        cost_str = f"(no price seeded for model {model})"
 
     print("\n" + "=" * 60)
     print(f"{label} Complete")
@@ -267,7 +279,7 @@ def _print_cost_summary(label, result, created, updated, closed, summary, adopte
         print(f"  Cache read tokens: {result.cache_read_input_tokens:,}")
         print(f"  Cache write tokens: {result.cache_creation_input_tokens:,}")
     print(f"  Output tokens: {result.output_tokens:,}")
-    print(f"  Estimated cost: ${total_cost:.4f}")
+    print(f"  Estimated cost: {cost_str}")
     print(f"\nSummary:\n{summary[:1000]}{'...' if len(summary) > 1000 else ''}")
 
 

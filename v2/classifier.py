@@ -23,14 +23,25 @@ VALID_MACRO_CATEGORIES = frozenset({
 })
 
 
-def _coerce_category(value: str, allowed: frozenset, default: str, context: str) -> str:
+def _validate_category(value: str, allowed: frozenset, context: str) -> str | None:
+    """Return `value` if it's in the allowed enum, else None and log.
+
+    Replaced the previous `_coerce_category` (which silently rewrote
+    out-of-vocab values to a default) because coercion still produced a
+    row downstream — fake-noise on the ticker side, fake-geopolitical on
+    the macro side — polluting attribution the same way the
+    news_signal:unknown orphan bucket did before its 2026-05-02 fix.
+    Cross-type leaks (e.g. 'regulation' on ticker_specific) are
+    indistinguishable here from typos, so both drop. Caller must skip
+    signal construction when this returns None.
+    """
     if value in allowed:
         return value
     logger.warning(
-        "classifier: invalid %s category %r — coercing to %r",
-        context, value, default,
+        "classifier: dropping signal — invalid %s category %r",
+        context, value,
     )
-    return default
+    return None
 
 
 # P3.40: ticker validation. Haiku occasionally emits hallucinated tickers
@@ -41,11 +52,14 @@ _TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 _TICKER_BLOCKLIST = frozenset({
     # group/category acronyms — never tradable tickers
     "FAANG", "MAANG", "MAGS", "MAG", "FAAMG", "BATX", "BAT",
-    # generic non-equity acronyms commonly mentioned in news
-    "ETF", "ETN", "IPO", "SPAC", "REIT", "MLP",
+    # generic non-equity acronyms commonly mentioned in news.
+    # NOTE: ADP (Automatic Data Processing) and ETN (Eaton Corp) are real
+    # S&P 500 tickers that share names with macro indicators / instrument
+    # classes — leaving them out matches the BE/ON/GO tradeoff above.
+    "ETF", "IPO", "SPAC", "REIT", "MLP",
     "CEO", "CFO", "CTO", "COO", "CIO", "CMO", "CISO",
     "SEC", "FDA", "FTC", "DOJ", "FBI", "CIA", "NSA", "EPA", "IRS",
-    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM", "ADP",
+    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM",
     "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "CNY",
     # platform/sector buzzwords (lowercase tradable equivalents may exist
     # — block only when LLM emits them as if they were tickers)
@@ -128,11 +142,18 @@ JSON schema:
 {
     "type": "ticker_specific" | "macro_political" | "sector" | "noise",
     "tickers": ["AAPL", "MSFT"],
-    "category": "earnings" | "guidance" | "analyst" | "product" | "legal" | "fed" | "trade" | "regulation" | "geopolitical" | "fiscal" | "election" | "noise",
+    "category": <see "Allowed categories by type" below>,
     "sentiment": "bullish" | "bearish" | "neutral",
     "confidence": "high" | "medium" | "low",
     "affected_sectors": ["tech", "finance"]
 }
+
+Allowed categories by type (the category MUST match the type):
+- type=ticker_specific → category ∈ {"earnings", "guidance", "analyst", "product", "legal", "noise"}
+- type=macro_political → category ∈ {"fed", "trade", "regulation", "geopolitical", "fiscal", "election"}
+- type=sector or type=noise → omit "category"
+
+Do NOT use a macro category (fed, trade, regulation, geopolitical, fiscal, election) on a ticker_specific entry, or a ticker category (earnings, guidance, analyst, product, legal, noise) on a macro_political entry. If a headline doesn't fit any allowed category for its type, set type="noise".
 
 Rules:
 - ticker_specific: News about specific companies (earnings, guidance, analyst ratings, products, legal)
@@ -178,12 +199,19 @@ an "index" field matching the 1-based number from the user's headline list:
     "index": 1,
     "type": "ticker_specific" | "macro_political" | "sector" | "noise",
     "tickers": ["AAPL"],
-    "category": "earnings" | "guidance" | "analyst" | "product" | "legal" | "fed" | "trade" | "regulation" | "geopolitical" | "fiscal" | "election" | "noise",
+    "category": <see "Allowed categories by type" below>,
     "sentiment": "bullish" | "bearish" | "neutral",
     "confidence": "high" | "medium" | "low",
     "affected_sectors": ["tech"]
   }
 ]
+
+Allowed categories by type (the category MUST match the type):
+- type=ticker_specific → category ∈ {"earnings", "guidance", "analyst", "product", "legal", "noise"}
+- type=macro_political → category ∈ {"fed", "trade", "regulation", "geopolitical", "fiscal", "election"}
+- type=sector or type=noise → omit "category"
+
+Do NOT use a macro category (fed, trade, regulation, geopolitical, fiscal, election) on a ticker_specific entry, or a ticker category (earnings, guidance, analyst, product, legal, noise) on a macro_political entry. If a headline doesn't fit any allowed category for its type, set type="noise".
 
 Rules:
 - index: REQUIRED. The 1-based headline number from the user message. Used to match your output back to the right headline; do NOT rely on array order.
@@ -221,35 +249,36 @@ def _build_classification_result(
     macro_signal = None
 
     if news_type == "ticker_specific":
-        tickers = entry.get("tickers", [])
-        category = _coerce_category(
-            entry.get("category", "noise"), VALID_TICKER_CATEGORIES, "noise", "ticker",
+        category = _validate_category(
+            entry.get("category", ""), VALID_TICKER_CATEGORIES, "ticker",
         )
-        for ticker in tickers:
-            cleaned = _validate_ticker(ticker)
-            if cleaned is None:
-                continue
-            ticker_signals.append(TickerSignal(
-                ticker=cleaned,
+        if category is not None:
+            for ticker in entry.get("tickers", []):
+                cleaned = _validate_ticker(ticker)
+                if cleaned is None:
+                    continue
+                ticker_signals.append(TickerSignal(
+                    ticker=cleaned,
+                    headline=headline,
+                    category=category,
+                    sentiment=entry.get("sentiment", "neutral"),
+                    confidence=entry.get("confidence", "low"),
+                    published_at=published_at,
+                    alpaca_id=alpaca_id,
+                ))
+    elif news_type == "macro_political":
+        category = _validate_category(
+            entry.get("category", ""), VALID_MACRO_CATEGORIES, "macro",
+        )
+        if category is not None:
+            macro_signal = MacroSignal(
                 headline=headline,
                 category=category,
+                affected_sectors=entry.get("affected_sectors", ["all"]),
                 sentiment=entry.get("sentiment", "neutral"),
-                confidence=entry.get("confidence", "low"),
                 published_at=published_at,
                 alpaca_id=alpaca_id,
-            ))
-    elif news_type == "macro_political":
-        macro_signal = MacroSignal(
-            headline=headline,
-            category=_coerce_category(
-                entry.get("category", "geopolitical"),
-                VALID_MACRO_CATEGORIES, "geopolitical", "macro",
-            ),
-            affected_sectors=entry.get("affected_sectors", ["all"]),
-            sentiment=entry.get("sentiment", "neutral"),
-            published_at=published_at,
-            alpaca_id=alpaca_id,
-        )
+            )
     elif news_type == "sector":
         macro_signal = MacroSignal(
             headline=headline,
@@ -452,12 +481,16 @@ def classify_ticker_news(
     except Exception:
         result = {"category": "noise", "sentiment": "neutral", "confidence": "low"}
 
+    # Per-ticker path returns a single TickerSignal by contract — fall back
+    # to "noise" rather than dropping. The batch path drops invalid-category
+    # signals because the schema-leak case is common there; here the prompt
+    # is per-ticker and only lists ticker categories, so leaks are rare.
     return TickerSignal(
         ticker=ticker.upper(),
         headline=headline,
-        category=_coerce_category(
-            result.get("category", "noise"), VALID_TICKER_CATEGORIES, "noise", "ticker",
-        ),
+        category=_validate_category(
+            result.get("category", ""), VALID_TICKER_CATEGORIES, "ticker",
+        ) or "noise",
         sentiment=result.get("sentiment", "neutral"),
         confidence=result.get("confidence", "low"),
         published_at=published_at

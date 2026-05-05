@@ -129,15 +129,31 @@ class TestBuildClassificationResult:
         assert result.news_type == "ticker_specific"
         assert result.ticker_signals == []
 
-    def test_ticker_specific_missing_optional_fields_use_defaults(self):
+    def test_ticker_specific_missing_category_drops_signal(self):
+        """Missing category is the same shape as invalid category — drop
+        the signal. The schema lists category as required for
+        ticker_specific; if Haiku omits it, we treat the entry as
+        untrustworthy rather than fabricating a default."""
         entry = {
             "type": "ticker_specific",
             "tickers": ["TSLA"],
         }
         result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
 
+        assert result.ticker_signals == []
+
+    def test_ticker_specific_defaults_when_category_present(self):
+        """When the category is valid, sentiment/confidence default
+        cleanly without affecting the drop policy."""
+        entry = {
+            "type": "ticker_specific",
+            "tickers": ["TSLA"],
+            "category": "earnings",
+        }
+        result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
+
         signal = result.ticker_signals[0]
-        assert signal.category == "noise"
+        assert signal.category == "earnings"
         assert signal.sentiment == "neutral"
         assert signal.confidence == "low"
 
@@ -161,12 +177,24 @@ class TestBuildClassificationResult:
         assert macro.sentiment == "bearish"
         assert macro.published_at == SAMPLE_PUBLISHED_AT
 
-    def test_macro_political_defaults(self):
+    def test_macro_political_missing_category_drops_signal(self):
+        """Missing macro category drops the signal — same policy as
+        ticker_specific. Previously we coerced to 'geopolitical', which
+        polluted that bucket with phantom rows."""
         entry = {"type": "macro_political"}
         result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
 
+        assert result.macro_signal is None
+
+    def test_macro_political_defaults_when_category_present(self):
+        """affected_sectors and sentiment fall back to defaults when
+        omitted, as long as a valid category is provided."""
+        entry = {"type": "macro_political", "category": "fed"}
+        result = _build_classification_result(entry, "headline", SAMPLE_PUBLISHED_AT)
+
         macro = result.macro_signal
-        assert macro.category == "geopolitical"
+        assert macro is not None
+        assert macro.category == "fed"
         assert macro.affected_sectors == ["all"]
         assert macro.sentiment == "neutral"
 
@@ -227,37 +255,56 @@ class TestBuildClassificationResult:
         assert result.ticker_signals == []
         assert result.macro_signal is None
 
-    def test_ticker_specific_invalid_category_coerced_to_noise(self, caplog):
-        """LLM-emitted out-of-vocab category (typo or hallucination) must coerce
-        to 'noise' rather than persisting verbatim and polluting attribution
-        with junk buckets. This is the upstream of the news_signal:unknown
-        artifact patched downstream on 2026-05-02.
+    def test_ticker_specific_invalid_category_drops_signal(self, caplog):
+        """LLM-emitted out-of-vocab category (typo, hallucination, or
+        cross-type leak like 'regulation' on a ticker_specific) drops the
+        signal entirely. Coercing to 'noise' would still produce a row,
+        polluting attribution with fake-noise the same way the orphan
+        news_signal:unknown bucket did before the 2026-05-02 fix.
         """
-        entry = {
-            "type": "ticker_specific",
-            "tickers": ["AAPL"],
-            "category": "earnigns",  # typo
-            "sentiment": "bullish",
-            "confidence": "high",
-        }
-        with caplog.at_level("WARNING"):
-            result = _build_classification_result(entry, "Apple beats", SAMPLE_PUBLISHED_AT)
+        for bad_category in ("earnigns", "regulation", "geopolitical", "trade"):
+            entry = {
+                "type": "ticker_specific",
+                "tickers": ["AAPL"],
+                "category": bad_category,
+                "sentiment": "bullish",
+                "confidence": "high",
+            }
+            with caplog.at_level("WARNING"):
+                caplog.clear()
+                result = _build_classification_result(entry, "Apple beats", SAMPLE_PUBLISHED_AT)
 
-        assert result.ticker_signals[0].category == "noise"
-        assert any("earnigns" in r.message for r in caplog.records)
+            assert result.ticker_signals == [], (
+                f"Expected empty ticker_signals for category={bad_category!r}, "
+                f"got {result.ticker_signals!r}"
+            )
+            assert any(bad_category in r.message for r in caplog.records), (
+                f"Expected WARN log mentioning {bad_category!r}"
+            )
 
-    def test_macro_political_invalid_category_coerced_to_default(self, caplog):
-        entry = {
-            "type": "macro_political",
-            "category": "frobnozzle",  # hallucinated
-            "affected_sectors": ["finance"],
-            "sentiment": "bearish",
-        }
-        with caplog.at_level("WARNING"):
-            result = _build_classification_result(entry, "Fed action", SAMPLE_PUBLISHED_AT)
+    def test_macro_political_invalid_category_drops_signal(self, caplog):
+        """Same drop policy on the macro side. A macro_political entry
+        with a ticker-only category ('noise', 'earnings', etc.) is the
+        model crossing schemas — drop rather than coerce to a phantom
+        'geopolitical' macro row."""
+        for bad_category in ("frobnozzle", "noise", "earnings"):
+            entry = {
+                "type": "macro_political",
+                "category": bad_category,
+                "affected_sectors": ["finance"],
+                "sentiment": "bearish",
+            }
+            with caplog.at_level("WARNING"):
+                caplog.clear()
+                result = _build_classification_result(entry, "Fed action", SAMPLE_PUBLISHED_AT)
 
-        assert result.macro_signal.category == "geopolitical"
-        assert any("frobnozzle" in r.message for r in caplog.records)
+            assert result.macro_signal is None, (
+                f"Expected macro_signal=None for category={bad_category!r}, "
+                f"got {result.macro_signal!r}"
+            )
+            assert any(bad_category in r.message for r in caplog.records), (
+                f"Expected WARN log mentioning {bad_category!r}"
+            )
 
     def test_ticker_specific_valid_category_unchanged(self):
         for cat in ("earnings", "guidance", "analyst", "product", "legal", "noise"):
@@ -346,6 +393,25 @@ class TestTickerValidation:
         SO, GO) are real equity tickers — without an Alpaca-asset
         allowlist we must not block them."""
         for t in ["BE", "ON", "SO", "GO", "AI", "T", "V", "F"]:
+            entry = {
+                "type": "ticker_specific",
+                "tickers": [t],
+                "category": "earnings",
+                "sentiment": "neutral",
+                "confidence": "low",
+            }
+            result = _build_classification_result(entry, "h", SAMPLE_PUBLISHED_AT)
+            assert len(result.ticker_signals) == 1, (
+                f"Real ticker {t!r} should not be blocked"
+            )
+            assert result.ticker_signals[0].ticker == t
+
+    def test_does_not_block_ambiguous_real_tickers(self):
+        """ADP (Automatic Data Processing) and ETN (Eaton Corp) are real
+        S&P 500 tickers that share names with macro indicators / instrument
+        classes. Without an Alpaca-asset allowlist, blocking them silently
+        drops every news signal for those names — same tradeoff as BE/ON/GO."""
+        for t in ["ADP", "ETN"]:
             entry = {
                 "type": "ticker_specific",
                 "tickers": [t],

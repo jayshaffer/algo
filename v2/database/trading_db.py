@@ -872,20 +872,69 @@ def insert_session_stage(session_id: int, stage_name: str) -> int:
         return cur.fetchone()["id"]
 
 
-def complete_session_stage(session_id: int, stage_name: str):
+def complete_session_stage(session_id: int, stage_name: str, usage=None):
+    """Mark a session_stages row complete, optionally recording token usage.
+
+    `usage` is a v2.claude_client.UsageAccumulator. When supplied with a
+    non-None .model, the five token columns are written. When None or
+    .model is None (stage made no Claude calls), the columns stay NULL.
+    """
     with get_cursor() as cur:
-        cur.execute("""
-            UPDATE session_stages SET status = 'completed', completed_at = NOW()
-            WHERE session_id = %s AND stage_name = %s
-        """, (session_id, stage_name))
+        if usage is not None and usage.model is not None:
+            cur.execute("""
+                UPDATE session_stages
+                SET status = 'completed',
+                    completed_at = NOW(),
+                    model = %s,
+                    input_tokens = %s,
+                    output_tokens = %s,
+                    cache_creation_tokens = %s,
+                    cache_read_tokens = %s
+                WHERE session_id = %s AND stage_name = %s
+            """, (
+                usage.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_creation_tokens,
+                usage.cache_read_tokens,
+                session_id, stage_name,
+            ))
+        else:
+            cur.execute("""
+                UPDATE session_stages SET status = 'completed', completed_at = NOW()
+                WHERE session_id = %s AND stage_name = %s
+            """, (session_id, stage_name))
 
 
-def fail_session_stage(session_id: int, stage_name: str, error: str):
+def fail_session_stage(session_id: int, stage_name: str, error: str, usage=None):
+    """Mark a session_stages row failed; record any partial token usage."""
     with get_cursor() as cur:
-        cur.execute("""
-            UPDATE session_stages SET status = 'failed', completed_at = NOW(), error = %s
-            WHERE session_id = %s AND stage_name = %s
-        """, (error, session_id, stage_name))
+        if usage is not None and usage.model is not None:
+            cur.execute("""
+                UPDATE session_stages
+                SET status = 'failed',
+                    completed_at = NOW(),
+                    error = %s,
+                    model = %s,
+                    input_tokens = %s,
+                    output_tokens = %s,
+                    cache_creation_tokens = %s,
+                    cache_read_tokens = %s
+                WHERE session_id = %s AND stage_name = %s
+            """, (
+                error,
+                usage.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_creation_tokens,
+                usage.cache_read_tokens,
+                session_id, stage_name,
+            ))
+        else:
+            cur.execute("""
+                UPDATE session_stages SET status = 'failed', completed_at = NOW(), error = %s
+                WHERE session_id = %s AND stage_name = %s
+            """, (error, session_id, stage_name))
 
 
 def get_completed_stages(session_id: int) -> set[str]:
