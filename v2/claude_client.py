@@ -134,7 +134,9 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
     for attempt in range(max_retries + 1):
         try:
             with client.messages.stream(**create_kwargs) as stream:
-                return stream.get_final_message()
+                message = stream.get_final_message()
+            _record_usage(create_kwargs["model"], message.usage)
+            return message
         except RETRYABLE_ERRORS as e:
             if attempt == max_retries:
                 logger.error(
