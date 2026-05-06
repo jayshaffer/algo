@@ -77,3 +77,36 @@ class TestAuditDbHelpers:
         mock_get_cursor.return_value.__enter__.return_value = cur
         from v2.database.trading_db import try_advisory_audit_lock
         assert try_advisory_audit_lock() is True
+
+
+# --- Finding dataclass tests (Task 3) ---
+
+class TestFinding:
+    def test_finding_fingerprint_stable_across_dict_ordering(self):
+        from v2.audit import Finding
+        f1 = Finding(check_code="X", tier=1, severity="warn",
+                     title="t", body="b", affected_count=1,
+                     evidence={"a": 1, "b": 2}, auto_fix=None)
+        f2 = Finding(check_code="X", tier=1, severity="warn",
+                     title="t", body="b", affected_count=1,
+                     evidence={"b": 2, "a": 1}, auto_fix=None)
+        assert f1.fingerprint == f2.fingerprint
+
+    def test_finding_fingerprint_changes_with_evidence(self):
+        from v2.audit import Finding
+        f1 = Finding(check_code="X", tier=1, severity="warn", title="t",
+                     body="b", affected_count=1, evidence={"a": 1},
+                     auto_fix=None)
+        f2 = Finding(check_code="X", tier=1, severity="warn", title="t",
+                     body="b", affected_count=1, evidence={"a": 2},
+                     auto_fix=None)
+        assert f1.fingerprint != f2.fingerprint
+
+    def test_finding_fingerprint_handles_lists_in_evidence(self):
+        from v2.audit import Finding
+        f = Finding(check_code="X", tier=1, severity="warn", title="t",
+                    body="b", affected_count=2, evidence={"ids": [3, 1, 2]},
+                    auto_fix=None)
+        assert f.fingerprint == Finding(check_code="X", tier=1, severity="warn",
+            title="t", body="b", affected_count=2,
+            evidence={"ids": [3, 1, 2]}, auto_fix=None).fingerprint
