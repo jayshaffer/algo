@@ -391,49 +391,90 @@ def check_cost_trend(cur) -> list[Finding]:
 # --- Tier 3: decisions missing signal_refs --------------------------------
 
 def check_decisions_missing_signal_refs(cur) -> list[Finding]:
+    """Classify each recent buy/sell decision into one of five buckets and
+    flag only when `genuinely_missing` is non-zero. The other buckets are
+    legitimate gaps:
+      - excluded_off_playbook : is_off_playbook=true
+      - excluded_no_thesis    : on-playbook but playbook_action.thesis_id is null
+      - excluded_adoption     : on-playbook, thesis exists, source='adoption'
+    `genuinely_missing` is on-playbook decisions whose underlying
+    ideation thesis (source != 'adoption') has no thesis_signals.
+    Severity = critical when genuinely_missing/total > 10%.
+    """
     cur.execute("""
+        WITH classified AS (
+          SELECT
+            d.id,
+            CASE
+              WHEN ds.decision_id IS NOT NULL                       THEN 'has_refs'
+              WHEN COALESCE(d.is_off_playbook, false)               THEN 'excluded_off_playbook'
+              WHEN d.playbook_action_id IS NULL OR pa.thesis_id IS NULL
+                                                                    THEN 'excluded_no_thesis'
+              WHEN t.source = 'adoption'                            THEN 'excluded_adoption'
+              ELSE 'genuinely_missing'
+            END AS bucket
+          FROM decisions d
+          LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+            ON ds.decision_id = d.id
+          LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+          LEFT JOIN theses t            ON t.id  = pa.thesis_id
+          WHERE d.action IN ('buy','sell')
+            AND d.date > now()::date - 30
+        )
         SELECT
-          COUNT(*) FILTER (WHERE d.action IN ('buy','sell')) AS total,
-          COUNT(*) FILTER (WHERE d.action IN ('buy','sell') AND ds.decision_id IS NULL) AS missing,
-          COUNT(*) FILTER (WHERE d.action IN ('buy','sell')
-                            AND COALESCE(d.is_off_playbook,false)=false
-                            AND ds.decision_id IS NULL) AS on_pb_missing
-        FROM decisions d
-        LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
-          ON ds.decision_id = d.id
-        WHERE d.date > now()::date - 30
+          COUNT(*)                                                 AS total,
+          COUNT(*) FILTER (WHERE bucket='has_refs')                AS has_refs,
+          COUNT(*) FILTER (WHERE bucket='excluded_off_playbook')   AS excluded_off_playbook,
+          COUNT(*) FILTER (WHERE bucket='excluded_no_thesis')      AS excluded_no_thesis,
+          COUNT(*) FILTER (WHERE bucket='excluded_adoption')       AS excluded_adoption,
+          COUNT(*) FILTER (WHERE bucket='genuinely_missing')       AS genuinely_missing
+        FROM classified
     """)
     summary = cur.fetchone()
-    if not summary["missing"]:
+    if not summary["genuinely_missing"]:
         return []
 
     cur.execute("""
-        SELECT d.id FROM decisions d
-        LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
-          ON ds.decision_id = d.id
-        WHERE d.action IN ('buy','sell')
-          AND d.date > now()::date - 30
-          AND ds.decision_id IS NULL
-        ORDER BY d.id
+        SELECT d.id
+          FROM decisions d
+          LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+            ON ds.decision_id = d.id
+          LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+          LEFT JOIN theses t            ON t.id  = pa.thesis_id
+         WHERE d.action IN ('buy','sell')
+           AND d.date > now()::date - 30
+           AND ds.decision_id IS NULL
+           AND COALESCE(d.is_off_playbook, false) = false
+           AND d.playbook_action_id IS NOT NULL
+           AND pa.thesis_id IS NOT NULL
+           AND COALESCE(t.source, '') <> 'adoption'
+         ORDER BY d.id
     """)
     ids = [r["id"] for r in cur.fetchall()]
 
-    on_pb_share = (summary["on_pb_missing"] / summary["total"]) if summary["total"] else 0
-    severity = "critical" if on_pb_share > 0.10 else "warn"
+    share = (summary["genuinely_missing"] / summary["total"]) if summary["total"] else 0
+    severity = "critical" if share > 0.10 else "warn"
 
     return [Finding(
         check_code="DECISIONS_NO_SIGNAL_REFS",
         tier=3, severity=severity,
-        title=(f"{summary['missing']} of {summary['total']} recent buy/sell decisions "
-               f"have no signal_refs ({summary['on_pb_missing']} on-playbook)"),
-        body=("Strategist->playbook->executor signal_refs wiring is being honored "
-              "intermittently. Off-playbook trades may legitimately lack refs; "
-              "on-playbook gaps indicate degradation."),
-        affected_count=summary["missing"],
+        title=(f"{summary['genuinely_missing']} of {summary['total']} recent "
+               f"buy/sell decisions derived from ideation theses have no "
+               f"signal_refs ({summary['excluded_adoption']} adopted, "
+               f"{summary['excluded_no_thesis']} no-thesis excluded)"),
+        body=("Strategist created theses without citing signals via "
+              "`signal_refs`/`add_signal_refs`, so executor decisions "
+              "derived from them have nothing to attribute. Fix in "
+              "v2/ideation_claude.py prompt or the create_thesis / "
+              "update_thesis tool-call validation."),
+        affected_count=summary["genuinely_missing"],
         evidence={
             "total": summary["total"],
-            "missing": summary["missing"],
-            "on_pb_missing": summary["on_pb_missing"],
+            "has_refs": summary["has_refs"],
+            "excluded_off_playbook": summary["excluded_off_playbook"],
+            "excluded_no_thesis": summary["excluded_no_thesis"],
+            "excluded_adoption": summary["excluded_adoption"],
+            "genuinely_missing": summary["genuinely_missing"],
             "decision_ids": ids,
         },
         auto_fix=None,
