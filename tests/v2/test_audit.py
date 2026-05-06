@@ -218,3 +218,37 @@ class TestCheckMissingBackfill:
         result = finding.auto_fix(cur)
         assert mock_backfill.call_count == 2
         assert result == {"backfilled_ids": [5, 6]}
+
+
+# --- Invalid attribution category tests (Task 6) ---
+
+class TestCheckInvalidAttributionCategories:
+    def test_all_valid_returns_no_findings(self):
+        from v2.audit import check_invalid_attribution_categories
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"category": "thesis"},
+            {"category": "news_signal:earnings"},
+        ]
+        assert check_invalid_attribution_categories(cur) == []
+
+    def test_typo_category_emits_critical_finding(self):
+        from v2.audit import check_invalid_attribution_categories
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"category": "news_signal:earnigns"},   # typo
+            {"category": "macro_signal:fed"},
+        ]
+        findings = check_invalid_attribution_categories(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "INVALID_ATTRIBUTION_CATEGORY"
+        assert findings[0].severity == "critical"
+        assert findings[0].auto_fix is None
+        assert "news_signal:earnigns" in findings[0].evidence["categories"]
+
+    def test_unknown_prefix_treated_as_invalid(self):
+        from v2.audit import check_invalid_attribution_categories
+        cur = MagicMock()
+        cur.fetchall.return_value = [{"category": "weird:thing"}]
+        findings = check_invalid_attribution_categories(cur)
+        assert findings and findings[0].severity == "critical"

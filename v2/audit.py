@@ -147,3 +147,40 @@ def check_missing_backfill(cur) -> list[Finding]:
             auto_fix=_make_backfill_autofix(ids),
         ))
     return findings
+
+
+# --- Tier 1: invalid signal_attribution categories ------------------------
+
+def check_invalid_attribution_categories(cur) -> list[Finding]:
+    """Find signal_attribution.category rows whose suffix isn't in the
+    classifier's valid enums. Detects classifier regressions and direct DB
+    writes that bypass validation. No auto-fix — investigation needed."""
+    from v2.classifier import VALID_TICKER_CATEGORIES, VALID_MACRO_CATEGORIES
+    cur.execute("SELECT DISTINCT category FROM signal_attribution")
+    cats = [r["category"] for r in cur.fetchall()]
+    invalid = []
+    for c in cats:
+        if c == "thesis":
+            continue
+        if c.startswith("news_signal:"):
+            suffix = c.split(":", 1)[1]
+            if suffix not in VALID_TICKER_CATEGORIES:
+                invalid.append(c)
+        elif c.startswith("macro_signal:"):
+            suffix = c.split(":", 1)[1]
+            if suffix not in VALID_MACRO_CATEGORIES:
+                invalid.append(c)
+        else:
+            invalid.append(c)  # unknown prefix
+    if not invalid:
+        return []
+    return [Finding(
+        check_code="INVALID_ATTRIBUTION_CATEGORY",
+        tier=1, severity="critical",
+        title=f"{len(invalid)} invalid attribution category value(s)",
+        body=("`signal_attribution` contains categories outside the classifier's "
+              "valid enums. Classifier regression or direct DB write."),
+        affected_count=len(invalid),
+        evidence={"categories": sorted(invalid)},
+        auto_fix=None,
+    )]
