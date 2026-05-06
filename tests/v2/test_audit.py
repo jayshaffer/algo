@@ -252,3 +252,64 @@ class TestCheckInvalidAttributionCategories:
         cur.fetchall.return_value = [{"category": "weird:thing"}]
         findings = check_invalid_attribution_categories(cur)
         assert findings and findings[0].severity == "critical"
+
+
+# --- Snapshot gap tests (Task 7) ---
+
+class TestCheckSnapshotGaps:
+    @patch("v2.market_calendar.is_trading_day")
+    def test_no_gaps_returns_no_findings(self, mock_is_td):
+        from v2.audit import check_snapshot_gaps
+        mock_is_td.return_value = False
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_snapshot_gaps(cur) == []
+
+    @patch("v2.market_calendar.is_trading_day")
+    def test_gaps_on_trading_days_emit_finding(self, mock_is_td):
+        from v2.audit import check_snapshot_gaps
+        from datetime import date
+        missing = [date(2026, 5, 1), date(2026, 5, 2)]
+        cur = MagicMock()
+        cur.fetchall.return_value = [{"day": d} for d in missing]
+        mock_is_td.return_value = True
+        findings = check_snapshot_gaps(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "SNAPSHOT_GAP"
+        assert f.severity == "warn"
+        assert f.auto_fix is None
+        assert len(f.evidence["missing_dates"]) == 2
+
+    @patch("v2.market_calendar.is_trading_day")
+    def test_skips_holidays_and_weekends(self, mock_is_td):
+        from v2.audit import check_snapshot_gaps
+        from datetime import date
+        cur = MagicMock()
+        cur.fetchall.return_value = [{"day": date(2026, 5, 25)}]  # Memorial Day
+        mock_is_td.return_value = False
+        assert check_snapshot_gaps(cur) == []
+
+
+# --- Decision equity drift tests (Task 8) ---
+
+class TestCheckDecisionEquityDrift:
+    def test_no_drift_returns_no_findings(self):
+        from v2.audit import check_decision_equity_drift
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_decision_equity_drift(cur) == []
+
+    def test_drift_emits_critical_finding(self):
+        from v2.audit import check_decision_equity_drift
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"id": 50, "decision_equity": 100000, "snapshot_equity": 99500, "delta": -500},
+        ]
+        findings = check_decision_equity_drift(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "DECISION_EQUITY_DRIFT"
+        assert f.severity == "critical"
+        assert f.auto_fix is None
+        assert 50 in f.evidence["decision_ids"]

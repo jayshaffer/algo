@@ -184,3 +184,69 @@ def check_invalid_attribution_categories(cur) -> list[Finding]:
         evidence={"categories": sorted(invalid)},
         auto_fix=None,
     )]
+
+
+# --- Tier 1: account_snapshot trading-day gaps ----------------------------
+
+def check_snapshot_gaps(cur) -> list[Finding]:
+    """Trading days in last 30d with no account_snapshot row.
+    No auto-fix — Alpaca historical equity retrieval is unreliable."""
+    from v2.market_calendar import is_trading_day
+    cur.execute("""
+        WITH d AS (
+            SELECT generate_series(now()::date - 30, now()::date - 1, '1 day')::date AS day
+        )
+        SELECT d.day FROM d
+        LEFT JOIN account_snapshots a ON a.date=d.day
+        WHERE a.date IS NULL
+    """)
+    rows = cur.fetchall()
+    missing = sorted(r["day"] for r in rows if is_trading_day(r["day"]))
+    if not missing:
+        return []
+    return [Finding(
+        check_code="SNAPSHOT_GAP",
+        tier=1, severity="warn",
+        title=f"{len(missing)} trading day(s) missing account_snapshot in last 30d",
+        body=("`account_snapshots` has gaps on trading days, breaking equity-curve "
+              "and daily-snapshot dashboards. Investigate stage skipping."),
+        affected_count=len(missing),
+        evidence={"missing_dates": [d.isoformat() for d in missing]},
+        auto_fix=None,
+    )]
+
+
+# --- Tier 1: decision vs snapshot equity drift (P0.4 regression detector) -
+
+def check_decision_equity_drift(cur) -> list[Finding]:
+    """Same-day decisions whose account_equity differs from snapshot
+    portfolio_value by > $100. Detects P0.4-style regressions where
+    decisions are stamped with stale pre-session equity."""
+    cur.execute("""
+        SELECT d.id,
+               d.account_equity AS decision_equity,
+               a.portfolio_value AS snapshot_equity,
+               (d.account_equity - a.portfolio_value) AS delta
+        FROM decisions d
+        JOIN account_snapshots a ON a.date = d.date
+        WHERE d.action IN ('buy','sell')
+          AND d.date > now()::date - 60
+          AND ABS(COALESCE(d.account_equity, 0) - a.portfolio_value) > 100
+    """)
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    return [Finding(
+        check_code="DECISION_EQUITY_DRIFT",
+        tier=1, severity="critical",
+        title=f"{len(rows)} decision(s) with account_equity drifted from snapshot",
+        body=("Decisions in last 60 days have `account_equity` differing from "
+              "same-day `account_snapshots.portfolio_value` by > $100. "
+              "Suggests stale snapshot logging (P0.4 regression)."),
+        affected_count=len(rows),
+        evidence={
+            "decision_ids": [r["id"] for r in rows],
+            "max_delta": max(abs(r["delta"]) for r in rows),
+        },
+        auto_fix=None,
+    )]
