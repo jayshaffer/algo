@@ -110,3 +110,63 @@ class TestFinding:
         assert f.fingerprint == Finding(check_code="X", tier=1, severity="warn",
             title="t", body="b", affected_count=2,
             evidence={"ids": [3, 1, 2]}, auto_fix=None).fingerprint
+
+
+# --- Orphan FK check tests (Task 4) ---
+
+class TestCheckOrphanFks:
+    def _cur_with_results(self, results: dict[tuple, list]):
+        """Build a mock cursor that returns specific rows per SQL fragment."""
+        cur = MagicMock()
+        def execute(sql, params=None):
+            if "news_signal" in sql:
+                cur._results = results.get(("news_signal",), [])
+            elif "macro_signal" in sql:
+                cur._results = results.get(("macro_signal",), [])
+            elif "thesis" in sql:
+                cur._results = results.get(("thesis",), [])
+            else:
+                cur._results = []
+        cur.execute.side_effect = execute
+        cur.fetchall.side_effect = lambda: cur._results
+        return cur
+
+    def test_no_orphans_returns_no_findings(self):
+        from v2.audit import check_orphan_fks
+        cur = self._cur_with_results({})
+        assert check_orphan_fks(cur) == []
+
+    def test_news_signal_orphans_emit_finding(self):
+        from v2.audit import check_orphan_fks
+        cur = self._cur_with_results({
+            ("news_signal",): [{"signal_id": 0}, {"signal_id": 99}],
+        })
+        findings = check_orphan_fks(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "ORPHAN_FK_NEWS_SIGNAL"
+        assert f.tier == 1
+        assert f.severity == "warn"
+        assert f.affected_count == 2
+        assert sorted(f.evidence["signal_ids"]) == [0, 99]
+        assert f.auto_fix is not None
+
+    def test_thesis_orphans_emit_separate_finding(self):
+        from v2.audit import check_orphan_fks
+        cur = self._cur_with_results({
+            ("thesis",): [{"signal_id": 5}],
+        })
+        findings = check_orphan_fks(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "ORPHAN_FK_THESIS"
+
+    @patch("v2.database.trading_db.delete_orphan_decision_signals", return_value=2)
+    def test_auto_fix_calls_delete_helper(self, mock_delete):
+        from v2.audit import check_orphan_fks
+        cur = self._cur_with_results({
+            ("news_signal",): [{"signal_id": 1}, {"signal_id": 2}],
+        })
+        finding = check_orphan_fks(cur)[0]
+        result = finding.auto_fix(cur)
+        mock_delete.assert_called_once_with("news_signal", [1, 2])
+        assert result == {"deleted": 2}

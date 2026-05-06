@@ -53,3 +53,53 @@ class AuditRunSummary:
     auto_fixed: int = 0
     failed_checks: int = 0
     has_critical_open: bool = False
+
+
+# --- Tier 1: orphan FKs in decision_signals -------------------------------
+
+_ORPHAN_FK_QUERIES = {
+    "news_signal":  ("ORPHAN_FK_NEWS_SIGNAL",
+                     """SELECT DISTINCT signal_id FROM decision_signals
+                        WHERE signal_type='news_signal'
+                          AND signal_id NOT IN (SELECT id FROM news_signals)"""),
+    "macro_signal": ("ORPHAN_FK_MACRO_SIGNAL",
+                     """SELECT DISTINCT signal_id FROM decision_signals
+                        WHERE signal_type='macro_signal'
+                          AND signal_id NOT IN (SELECT id FROM macro_signals)"""),
+    "thesis":       ("ORPHAN_FK_THESIS",
+                     """SELECT DISTINCT signal_id FROM decision_signals
+                        WHERE signal_type='thesis'
+                          AND signal_id NOT IN (SELECT id FROM theses)"""),
+}
+
+
+def _make_orphan_autofix(signal_type: str, ids: list[int]):
+    def _fix(_cur):
+        from v2.database.trading_db import delete_orphan_decision_signals
+        deleted = delete_orphan_decision_signals(signal_type, ids)
+        return {"deleted": deleted}
+    return _fix
+
+
+def check_orphan_fks(cur) -> list[Finding]:
+    """Detect rows in decision_signals whose signal_id no longer matches a
+    real news_signals/macro_signals/theses row. Auto-fix deletes them."""
+    findings = []
+    for signal_type, (code, sql) in _ORPHAN_FK_QUERIES.items():
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if not rows:
+            continue
+        ids = sorted([r["signal_id"] for r in rows])
+        findings.append(Finding(
+            check_code=code,
+            tier=1,
+            severity="warn",
+            title=f"{len(ids)} orphan {signal_type} reference(s) in decision_signals",
+            body=(f"`decision_signals` rows reference `{signal_type}` ids that no longer "
+                  f"exist. Filtered downstream but pollute schema. Auto-fix deletes."),
+            affected_count=len(ids),
+            evidence={"signal_type": signal_type, "signal_ids": ids},
+            auto_fix=_make_orphan_autofix(signal_type, ids),
+        ))
+    return findings
