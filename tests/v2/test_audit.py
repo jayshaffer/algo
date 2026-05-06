@@ -313,3 +313,107 @@ class TestCheckDecisionEquityDrift:
         assert f.severity == "critical"
         assert f.auto_fix is None
         assert 50 in f.evidence["decision_ids"]
+
+
+# --- Attribution category coverage tests (Task 9) ---
+
+class TestCheckAttributionCategoryCoverage:
+    def test_enough_categories_returns_no_findings(self):
+        from v2.audit import check_attribution_category_coverage
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"category": f"news_signal:{i}", "sample_size_30d": 10} for i in range(6)
+        ]
+        assert check_attribution_category_coverage(cur) == []
+
+    def test_below_threshold_emits_finding(self):
+        from v2.audit import check_attribution_category_coverage
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"category": "thesis", "sample_size_30d": 30},
+            {"category": "news_signal:earnings", "sample_size_30d": 5},
+        ]
+        findings = check_attribution_category_coverage(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "ATTRIBUTION_COVERAGE_LOW"
+        assert f.severity == "warn"
+        assert f.auto_fix is None
+
+    def test_categories_below_min_n_excluded(self):
+        from v2.audit import check_attribution_category_coverage
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"category": "thesis", "sample_size_30d": 30},
+        ] + [
+            {"category": f"x:{i}", "sample_size_30d": 1} for i in range(5)
+        ]
+        findings = check_attribution_category_coverage(cur)
+        assert len(findings) == 1
+
+
+# --- Stage failure rate tests (Task 10) ---
+
+class TestCheckStageFailureRate:
+    def test_no_failures_no_stale_returns_nothing(self):
+        from v2.audit import check_stage_failure_rate
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"stage_name": "pipeline", "completed": 7, "failed": 0}],
+            [],
+        ]
+        assert check_stage_failure_rate(cur) == []
+
+    def test_failure_rate_above_20pct_warns(self):
+        from v2.audit import check_stage_failure_rate
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"stage_name": "trade_posts", "completed": 1, "failed": 2}],
+            [],
+        ]
+        findings = check_stage_failure_rate(cur)
+        codes = sorted(f.check_code for f in findings)
+        assert codes == ["STAGE_FAILURE_RATE"]
+        assert findings[0].severity == "critical"  # 2/3 = 67%
+
+    def test_running_stale_24h_emits_finding(self):
+        from v2.audit import check_stage_failure_rate
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"stage_name": "executor", "completed": 7, "failed": 0}],
+            [{"id": 99, "stage_name": "executor"}],
+        ]
+        findings = check_stage_failure_rate(cur)
+        assert any(f.check_code == "STAGE_RUNNING_STALE" for f in findings)
+
+
+# --- Cost trend tests (Task 11) ---
+
+class TestCheckCostTrend:
+    def test_flat_costs_no_finding(self):
+        from v2.audit import check_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"stage_name": "strategist", "recent_tok": 100000, "prior_tok": 100000},
+        ]
+        assert check_cost_trend(cur) == []
+
+    def test_2x_spike_emits_info(self):
+        from v2.audit import check_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"stage_name": "strategist", "recent_tok": 220000, "prior_tok": 100000},
+        ]
+        findings = check_cost_trend(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "COST_TREND_SPIKE"
+        assert f.severity == "info"
+
+    def test_zero_prior_skipped(self):
+        from v2.audit import check_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"stage_name": "x", "recent_tok": 100, "prior_tok": 0},
+        ]
+        assert check_cost_trend(cur) == []

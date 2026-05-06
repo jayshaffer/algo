@@ -250,3 +250,139 @@ def check_decision_equity_drift(cur) -> list[Finding]:
         },
         auto_fix=None,
     )]
+
+
+# --- Tier 3: attribution category coverage --------------------------------
+
+ATTRIBUTION_MIN_CATEGORIES = 5
+ATTRIBUTION_MIN_N_PER_CATEGORY = 3
+
+
+def check_attribution_category_coverage(cur) -> list[Finding]:
+    """Wiring-degradation early warning. Memory: 'if no new categories appear
+    after several sessions, the wiring has regressed.'"""
+    cur.execute("SELECT category, COALESCE(sample_size_30d,0) AS sample_size_30d "
+                "FROM signal_attribution")
+    rows = cur.fetchall()
+    qualifying = [r for r in rows if r["sample_size_30d"] >= ATTRIBUTION_MIN_N_PER_CATEGORY]
+    if len(qualifying) >= ATTRIBUTION_MIN_CATEGORIES:
+        return []
+    return [Finding(
+        check_code="ATTRIBUTION_COVERAGE_LOW",
+        tier=3, severity="warn",
+        title=f"Only {len(qualifying)} attribution categories with n_30d>={ATTRIBUTION_MIN_N_PER_CATEGORY}",
+        body=("`signal_attribution` has fewer than the expected number of populated "
+              f"categories. Threshold: >= {ATTRIBUTION_MIN_CATEGORIES} with "
+              f"sample_size_30d >= {ATTRIBUTION_MIN_N_PER_CATEGORY}. Likely cause: "
+              "signal_refs wiring (strategist->playbook->executor) has regressed."),
+        affected_count=len(qualifying),
+        evidence={
+            "qualifying_categories": [r["category"] for r in qualifying],
+            "all_categories": [r["category"] for r in rows],
+        },
+        auto_fix=None,
+    )]
+
+
+# --- Tier 3: stage failure rate + stale running --------------------------
+
+def check_stage_failure_rate(cur) -> list[Finding]:
+    """Per-stage failure rate (last 30d) and stale 'running' rows (>24h)."""
+    findings = []
+
+    cur.execute("""
+        SELECT stage_name,
+               COUNT(*) FILTER (WHERE status='completed') AS completed,
+               COUNT(*) FILTER (WHERE status='failed') AS failed
+        FROM session_stages
+        WHERE started_at > now() - interval '30 days'
+        GROUP BY stage_name
+    """)
+    flagged = []
+    for r in cur.fetchall():
+        total = r["completed"] + r["failed"]
+        if total < 3:
+            continue
+        rate = r["failed"] / total
+        if rate >= 0.20:
+            flagged.append({"stage_name": r["stage_name"], "completed": r["completed"],
+                            "failed": r["failed"], "rate": round(rate, 3)})
+    if flagged:
+        worst = max(f["rate"] for f in flagged)
+        sev = "critical" if worst >= 0.50 else "warn"
+        findings.append(Finding(
+            check_code="STAGE_FAILURE_RATE", tier=3, severity=sev,
+            title=f"{len(flagged)} stage(s) with failure rate >= 20% in last 30d",
+            body="See evidence for per-stage rates.",
+            affected_count=len(flagged),
+            evidence={"stages": flagged},
+            auto_fix=None,
+        ))
+
+    cur.execute("""
+        SELECT id, stage_name FROM session_stages
+        WHERE status='running' AND started_at < now() - interval '24 hours'
+    """)
+    stale = cur.fetchall()
+    if stale:
+        findings.append(Finding(
+            check_code="STAGE_RUNNING_STALE", tier=3, severity="warn",
+            title=f"{len(stale)} session_stage row(s) stuck in 'running' >24h",
+            body="Stages never marked completed/failed; orphan from interrupted runs.",
+            affected_count=len(stale),
+            evidence={"stage_ids": [r["id"] for r in stale],
+                      "stage_names": sorted({r["stage_name"] for r in stale})},
+            auto_fix=None,
+        ))
+    return findings
+
+
+# --- Tier 3: per-stage cost trend (info) ---------------------------------
+
+def check_cost_trend(cur) -> list[Finding]:
+    """7d-vs-prior-7d total token usage by stage. Flag stages with >=2x growth."""
+    cur.execute("""
+        WITH recent AS (
+            SELECT stage_name,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM session_stages
+            WHERE started_at > now() - interval '7 days' AND status='completed'
+            GROUP BY stage_name
+        ),
+        prior AS (
+            SELECT stage_name,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM session_stages
+            WHERE started_at > now() - interval '14 days'
+              AND started_at <= now() - interval '7 days'
+              AND status='completed'
+            GROUP BY stage_name
+        )
+        SELECT COALESCE(r.stage_name, p.stage_name) AS stage_name,
+               COALESCE(r.tok, 0) AS recent_tok,
+               COALESCE(p.tok, 0) AS prior_tok
+        FROM recent r FULL OUTER JOIN prior p ON r.stage_name = p.stage_name
+    """)
+    spikes = []
+    for r in cur.fetchall():
+        if not r["prior_tok"]:
+            continue
+        if r["recent_tok"] >= 2 * r["prior_tok"]:
+            spikes.append({"stage_name": r["stage_name"],
+                           "recent_tok": r["recent_tok"],
+                           "prior_tok": r["prior_tok"],
+                           "ratio": round(r["recent_tok"] / r["prior_tok"], 2)})
+    if not spikes:
+        return []
+    return [Finding(
+        check_code="COST_TREND_SPIKE", tier=3, severity="info",
+        title=f"{len(spikes)} stage(s) with token usage >=2x prior 7-day window",
+        body="Per-stage 7-day-rolling token totals doubled vs. prior 7-day window.",
+        affected_count=len(spikes),
+        evidence={"stages": spikes},
+        auto_fix=None,
+    )]
