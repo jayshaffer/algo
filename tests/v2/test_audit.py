@@ -417,3 +417,58 @@ class TestCheckCostTrend:
             {"stage_name": "x", "recent_tok": 100, "prior_tok": 0},
         ]
         assert check_cost_trend(cur) == []
+
+
+# --- Decisions missing signal_refs tests (Task 12) ---
+
+class TestCheckDecisionsMissingSignalRefs:
+    def test_all_have_refs_no_finding(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 20, "missing": 0, "on_pb_missing": 0}
+        cur.fetchall.return_value = []
+        assert check_decisions_missing_signal_refs(cur) == []
+
+    def test_warn_below_critical_threshold(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 100, "missing": 8, "on_pb_missing": 5}
+        cur.fetchall.return_value = [{"id": 1}]
+        findings = check_decisions_missing_signal_refs(cur)
+        assert findings[0].severity == "warn"
+
+    def test_critical_when_on_pb_missing_above_10pct(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 29, "missing": 13, "on_pb_missing": 13}
+        cur.fetchall.return_value = [{"id": i} for i in range(13)]
+        findings = check_decisions_missing_signal_refs(cur)
+        assert findings[0].severity == "critical"
+        assert findings[0].evidence["on_pb_missing"] == 13
+
+
+# --- Theses missing signal_refs tests (Task 13) ---
+
+class TestCheckThesesMissingSignalRefs:
+    def test_no_recent_theses_no_finding(self):
+        from v2.audit import check_theses_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 0, "missing": 0}
+        cur.fetchall.return_value = []
+        assert check_theses_missing_signal_refs(cur) == []
+
+    def test_below_25pct_missing_no_finding(self):
+        from v2.audit import check_theses_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 20, "missing": 4}  # 20%
+        cur.fetchall.return_value = [{"id": i} for i in range(4)]
+        assert check_theses_missing_signal_refs(cur) == []
+
+    def test_above_threshold_warns(self):
+        from v2.audit import check_theses_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 69, "missing": 56}
+        cur.fetchall.return_value = [{"id": i} for i in range(56)]
+        findings = check_theses_missing_signal_refs(cur)
+        assert findings[0].check_code == "THESES_NO_SIGNAL_REFS"
+        assert findings[0].severity == "warn"

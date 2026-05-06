@@ -386,3 +386,92 @@ def check_cost_trend(cur) -> list[Finding]:
         evidence={"stages": spikes},
         auto_fix=None,
     )]
+
+
+# --- Tier 3: decisions missing signal_refs --------------------------------
+
+def check_decisions_missing_signal_refs(cur) -> list[Finding]:
+    cur.execute("""
+        SELECT
+          COUNT(*) FILTER (WHERE d.action IN ('buy','sell')) AS total,
+          COUNT(*) FILTER (WHERE d.action IN ('buy','sell') AND ds.decision_id IS NULL) AS missing,
+          COUNT(*) FILTER (WHERE d.action IN ('buy','sell')
+                            AND COALESCE(d.is_off_playbook,false)=false
+                            AND ds.decision_id IS NULL) AS on_pb_missing
+        FROM decisions d
+        LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+          ON ds.decision_id = d.id
+        WHERE d.date > now()::date - 30
+    """)
+    summary = cur.fetchone()
+    if not summary["missing"]:
+        return []
+
+    cur.execute("""
+        SELECT d.id FROM decisions d
+        LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+          ON ds.decision_id = d.id
+        WHERE d.action IN ('buy','sell')
+          AND d.date > now()::date - 30
+          AND ds.decision_id IS NULL
+        ORDER BY d.id
+    """)
+    ids = [r["id"] for r in cur.fetchall()]
+
+    on_pb_share = (summary["on_pb_missing"] / summary["total"]) if summary["total"] else 0
+    severity = "critical" if on_pb_share > 0.10 else "warn"
+
+    return [Finding(
+        check_code="DECISIONS_NO_SIGNAL_REFS",
+        tier=3, severity=severity,
+        title=(f"{summary['missing']} of {summary['total']} recent buy/sell decisions "
+               f"have no signal_refs ({summary['on_pb_missing']} on-playbook)"),
+        body=("Strategist->playbook->executor signal_refs wiring is being honored "
+              "intermittently. Off-playbook trades may legitimately lack refs; "
+              "on-playbook gaps indicate degradation."),
+        affected_count=summary["missing"],
+        evidence={
+            "total": summary["total"],
+            "missing": summary["missing"],
+            "on_pb_missing": summary["on_pb_missing"],
+            "decision_ids": ids,
+        },
+        auto_fix=None,
+    )]
+
+
+# --- Tier 3: theses missing signal_refs (Rule #6 drift) -------------------
+
+def check_theses_missing_signal_refs(cur) -> list[Finding]:
+    cur.execute("""
+        SELECT
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE ts.thesis_id IS NULL) AS missing
+        FROM theses t
+        LEFT JOIN (SELECT DISTINCT thesis_id FROM thesis_signals) ts
+          ON ts.thesis_id = t.id
+        WHERE t.created_at > now() - interval '30 days'
+    """)
+    s = cur.fetchone()
+    if not s["total"] or s["missing"] / s["total"] <= 0.25:
+        return []
+
+    cur.execute("""
+        SELECT t.id FROM theses t
+        LEFT JOIN (SELECT DISTINCT thesis_id FROM thesis_signals) ts
+          ON ts.thesis_id = t.id
+        WHERE t.created_at > now() - interval '30 days' AND ts.thesis_id IS NULL
+        ORDER BY t.id
+    """)
+    ids = [r["id"] for r in cur.fetchall()]
+    return [Finding(
+        check_code="THESES_NO_SIGNAL_REFS",
+        tier=3, severity="warn",
+        title=f"{s['missing']} of {s['total']} recent theses have no signal_refs",
+        body=("Strategist is creating theses without citing signals, violating "
+              "Rule #6 from the 2026-05-02 wiring fix. Without citations, "
+              "downstream attribution receives nothing to score."),
+        affected_count=s["missing"],
+        evidence={"total": s["total"], "missing": s["missing"], "thesis_ids": ids},
+        auto_fix=None,
+    )]
