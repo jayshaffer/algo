@@ -103,3 +103,47 @@ def check_orphan_fks(cur) -> list[Finding]:
             auto_fix=_make_orphan_autofix(signal_type, ids),
         ))
     return findings
+
+
+# --- Tier 1: missing 7d/30d outcome/benchmark backfill --------------------
+
+def _make_backfill_autofix(decision_ids: list[int]):
+    def _fix(_cur):
+        from v2.backfill import backfill_decision_outcomes
+        for did in decision_ids:
+            backfill_decision_outcomes(did)
+        return {"backfilled_ids": decision_ids}
+    return _fix
+
+
+def check_missing_backfill(cur) -> list[Finding]:
+    """Decisions past the 7d/30d window with NULL outcome_*/benchmark_*.
+    Each missing row drops a learning signal; auto-fix re-runs the existing
+    backfill function."""
+    findings = []
+    for window, code in (("7d", "BACKFILL_GAP_7D"), ("30d", "BACKFILL_GAP_30D")):
+        days = 7 if window == "7d" else 30
+        cur.execute(f"""
+            SELECT id FROM decisions
+            WHERE action IN ('buy','sell')
+              AND date <= now()::date - %s
+              AND (outcome_{window} IS NULL OR benchmark_{window} IS NULL)
+            ORDER BY id
+        """, (days,))
+        ids = [r["id"] for r in cur.fetchall()]
+        if not ids:
+            continue
+        severity = "critical" if len(ids) > 25 else "warn"
+        findings.append(Finding(
+            check_code=code,
+            tier=1,
+            severity=severity,
+            title=f"{len(ids)} decision(s) missing {window} outcome/benchmark backfill",
+            body=(f"Decisions older than {window} have NULL outcome_{window} or "
+                  f"benchmark_{window}. Auto-fix invokes backfill_decision_outcomes "
+                  f"for each."),
+            affected_count=len(ids),
+            evidence={"decision_ids": ids, "window": window},
+            auto_fix=_make_backfill_autofix(ids),
+        ))
+    return findings

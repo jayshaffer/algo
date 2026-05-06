@@ -170,3 +170,51 @@ class TestCheckOrphanFks:
         result = finding.auto_fix(cur)
         mock_delete.assert_called_once_with("news_signal", [1, 2])
         assert result == {"deleted": 2}
+
+
+# --- Missing-backfill check tests (Task 5) ---
+
+class TestCheckMissingBackfill:
+    def test_no_missing_rows_returns_no_findings(self):
+        from v2.audit import check_missing_backfill
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_missing_backfill(cur) == []
+
+    def test_missing_7d_emits_warn_finding(self):
+        from v2.audit import check_missing_backfill
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"id": 11}, {"id": 12}],  # 7d missing
+            [],                         # 30d missing
+        ]
+        findings = check_missing_backfill(cur)
+        codes = sorted(f.check_code for f in findings)
+        assert codes == ["BACKFILL_GAP_7D"]
+        f = findings[0]
+        assert f.severity == "warn"
+        assert f.affected_count == 2
+        assert sorted(f.evidence["decision_ids"]) == [11, 12]
+
+    def test_more_than_25_rows_escalates_to_critical(self):
+        from v2.audit import check_missing_backfill
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"id": i} for i in range(30)],
+            [],
+        ]
+        findings = check_missing_backfill(cur)
+        assert findings[0].severity == "critical"
+
+    @patch("v2.backfill.backfill_decision_outcomes")
+    def test_auto_fix_invokes_backfill_per_decision(self, mock_backfill):
+        from v2.audit import check_missing_backfill
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"id": 5}, {"id": 6}],
+            [],
+        ]
+        finding = check_missing_backfill(cur)[0]
+        result = finding.auto_fix(cur)
+        assert mock_backfill.call_count == 2
+        assert result == {"backfilled_ids": [5, 6]}
