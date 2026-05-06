@@ -475,3 +475,188 @@ def check_theses_missing_signal_refs(cur) -> list[Finding]:
         evidence={"total": s["total"], "missing": s["missing"], "thesis_ids": ids},
         auto_fix=None,
     )]
+
+
+# --- Tier 2: LLM-judgment check (single Haiku call) ----------------------
+
+VALID_RULE_CHECK_CODES = {
+    "RULE_UNFALSIFIABLE_LIFT", "RULE_LOW_N_BACKING", "RULE_RETIRED_BUCKET",
+    "RULE_CONTRADICTION", "RULE_DEAD",
+}
+
+RULE_JUDGE_SYSTEM = """\
+You are an auditor reviewing a trading system's active strategy rules. You
+will be given (1) the full text of all active rules, (2) the current
+signal_attribution table, (3) per-rule citation counts in recent decisions,
+and (4) a summary of recent decision-data anomalies.
+
+Emit findings in JSON. Be conservative — if unsure, omit. Each finding must
+include a `check_code` from this fixed set:
+
+  RULE_UNFALSIFIABLE_LIFT — rule's "lift" / "deactivate" / "expires when"
+    clause has no numeric criterion (e.g. "markets confirm direction" with no
+    defined threshold).
+  RULE_LOW_N_BACKING — rule cites attribution data with sample_size < 10, or
+    cites a category whose evidence does not support the claim.
+  RULE_RETIRED_BUCKET — rule references an attribution category that no
+    longer exists in the snapshot.
+  RULE_CONTRADICTION — two active rules contradict each other, OR a rule is
+    contradicted by observed decision data (e.g., rule says "X must always
+    happen" but stats show X happens only 50% of the time).
+  RULE_DEAD — rule has zero citations in last 30 days AND its conditions
+    appear satisfiable in current state.
+
+Output format:
+{
+  "findings": [
+    {"check_code": "...", "rule_id": <int>, "title": "...",
+     "explanation": "...", "evidence_quote": "...",
+     "contradicts_rule_id": <int or null>}
+  ]
+}
+
+Maximum 20 findings. If you cannot find any defensible finding, return
+{"findings": []}.
+"""
+
+
+def _build_rule_judgment_prompt(rules, attribution, citation_counts, summary) -> str:
+    parts = ["## Active rules\n"]
+    for r in rules:
+        parts.append(f"### Rule {r['id']}\n{r['rule_text']}\n")
+    parts.append("\n## signal_attribution snapshot\n")
+    for a in attribution:
+        parts.append(
+            f"- {a['category']}: n={a['sample_size']} n_30d={a['sample_size_30d']} "
+            f"out7={a['avg_outcome_7d']} win7={a['win_rate_7d']} "
+            f"out30={a['avg_outcome_30d']} win30={a['win_rate_30d']}"
+        )
+    parts.append("\n\n## Per-rule citation counts (last 30d)\n")
+    for c in citation_counts:
+        parts.append(f"- rule {c['rule_id']}: {c['n']} citations")
+    parts.append("\n\n## Decision-data summary\n")
+    parts.append(json.dumps(summary, indent=2, default=str))
+    return "\n".join(parts)
+
+
+def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
+    """Returns (parsed_json, usage_dict). Separate function for easy stubbing."""
+    from anthropic import Anthropic
+    import os
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = client.messages.create(
+        model=RULE_JUDGMENT_MODEL,
+        max_tokens=RULE_JUDGMENT_MAX_TOKENS,
+        system=RULE_JUDGE_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in response.content if hasattr(b, "text"))
+    parsed = _extract_json(text)
+    usage = {
+        "input_tokens": getattr(response.usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+    }
+    return parsed, usage
+
+
+def _extract_json(text: str) -> dict:
+    """Find the first JSON object in text and parse it. Returns {} on failure."""
+    try:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+        log.warning("Could not extract JSON from LLM response: %s", text[:200])
+        return {}
+
+
+_LAST_RULE_JUDGMENT_USAGE: dict = {}
+
+
+def get_last_rule_judgment_usage() -> dict:
+    return _LAST_RULE_JUDGMENT_USAGE.copy()
+
+
+def _reset_rule_judgment_usage() -> None:
+    _LAST_RULE_JUDGMENT_USAGE.clear()
+
+
+def check_rule_judgment(cur) -> list[Finding]:
+    """Single LLM call surveying active rules for the 5 overfitting patterns."""
+    cur.execute("SELECT id, rule_text, created_at FROM strategy_rules WHERE status='active'")
+    rules = cur.fetchall()
+    if not rules:
+        return []
+    active_rule_ids = {r["id"] for r in rules}
+
+    cur.execute("SELECT category, sample_size, sample_size_30d, "
+                "avg_outcome_7d, win_rate_7d, avg_outcome_30d, win_rate_30d "
+                "FROM signal_attribution")
+    attribution = cur.fetchall()
+    attribution_categories = {a["category"] for a in attribution}
+
+    cur.execute(r"""
+        WITH r AS (SELECT id FROM strategy_rules WHERE status='active')
+        SELECT r.id AS rule_id,
+               COUNT(*) FILTER (
+                 WHERE d.reasoning ~* ('\mrule\s*#?\s*' || r.id || '\M')
+                   AND d.date > now()::date - 30
+               ) AS n
+        FROM r LEFT JOIN decisions d ON true
+        GROUP BY r.id
+    """)
+    citation_counts = cur.fetchall()
+    citation_map = {c["rule_id"]: c["n"] for c in citation_counts}
+
+    cur.execute("""
+        SELECT
+          COUNT(*) FILTER (WHERE d.action IN ('buy','sell')
+                            AND d.date > now()::date - 30
+                            AND ds.decision_id IS NULL) AS recent_buys_with_empty_signal_refs,
+          0 AS recent_thesis_only_decisions,
+          COUNT(*) FILTER (WHERE d.action='buy'
+                            AND d.date > now()::date - 30
+                            AND COALESCE(d.is_off_playbook,false)=true) AS recent_off_playbook_buys
+        FROM decisions d
+        LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+          ON ds.decision_id = d.id
+    """)
+    summary = cur.fetchone()
+
+    prompt = _build_rule_judgment_prompt(rules, attribution, citation_counts, summary)
+    parsed, usage = _call_rule_judgment_llm(prompt)
+
+    _reset_rule_judgment_usage()
+    _LAST_RULE_JUDGMENT_USAGE.update(usage)
+
+    findings: list[Finding] = []
+    for item in parsed.get("findings", [])[:20]:
+        code = item.get("check_code")
+        rid = item.get("rule_id")
+        if code not in VALID_RULE_CHECK_CODES:
+            continue
+        if rid not in active_rule_ids:
+            continue
+        if code == "RULE_DEAD" and citation_map.get(rid, 0) > 0:
+            log.warning("Dropping unverifiable RULE_DEAD for rule_id=%d", rid)
+            continue
+        if code == "RULE_RETIRED_BUCKET":
+            cited = item.get("evidence_quote", "")
+            if any(cat in cited for cat in attribution_categories):
+                continue
+        findings.append(Finding(
+            check_code=code, tier=2, severity="warn",
+            title=item.get("title", "")[:160],
+            body=item.get("explanation", "")[:1200],
+            affected_count=1,
+            evidence={
+                "rule_id": rid,
+                "evidence_quote": item.get("evidence_quote", "")[:400],
+                "contradicts_rule_id": item.get("contradicts_rule_id"),
+            },
+            auto_fix=None,
+        ))
+    return findings

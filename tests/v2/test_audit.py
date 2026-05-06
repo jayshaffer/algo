@@ -472,3 +472,104 @@ class TestCheckThesesMissingSignalRefs:
         findings = check_theses_missing_signal_refs(cur)
         assert findings[0].check_code == "THESES_NO_SIGNAL_REFS"
         assert findings[0].severity == "warn"
+
+
+# --- Rule judgment LLM tests (Task 14) ---
+
+class TestCheckRuleJudgment:
+    def _stub_inputs(self, cur):
+        rules = [
+            {"id": 27, "rule_text": "During fragile macro windows cap deployment "
+                                    "at $500/day. Lifts when binary event resolves "
+                                    "and markets confirm direction.",
+             "created_at": None},
+            {"id": 39, "rule_text": "When attribution shows thesis beat-rate <55% "
+                                    "over 20+ samples, require corroboration.",
+             "created_at": None},
+        ]
+        attribution = [
+            {"category": "thesis", "sample_size": 30, "sample_size_30d": 23,
+             "avg_outcome_7d": -0.4, "win_rate_7d": 0.47,
+             "avg_outcome_30d": -0.5, "win_rate_30d": 0.45},
+        ]
+        citations = [{"rule_id": 27, "n": 12}, {"rule_id": 39, "n": 0}]
+        summary = {"recent_buys_with_empty_signal_refs": 13,
+                   "recent_thesis_only_decisions": 5,
+                   "recent_off_playbook_buys": 2}
+        cur.fetchall.side_effect = [rules, attribution, citations]
+        cur.fetchone.return_value = summary
+        return rules, attribution, citations, summary
+
+    @patch("v2.audit._call_rule_judgment_llm")
+    def test_drops_dead_rule_when_citations_disagree(self, mock_llm):
+        from v2.audit import check_rule_judgment
+        cur = MagicMock()
+        self._stub_inputs(cur)
+        mock_llm.return_value = ({
+            "findings": [
+                {"check_code": "RULE_DEAD", "rule_id": 27,
+                 "title": "Rule 27 not cited", "explanation": "..."},
+            ]
+        }, {"input_tokens": 800, "output_tokens": 100,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0})
+        findings = check_rule_judgment(cur)
+        assert findings == []
+
+    @patch("v2.audit._call_rule_judgment_llm")
+    def test_accepts_unfalsifiable_lift_finding(self, mock_llm):
+        from v2.audit import check_rule_judgment
+        cur = MagicMock()
+        self._stub_inputs(cur)
+        mock_llm.return_value = ({
+            "findings": [
+                {"check_code": "RULE_UNFALSIFIABLE_LIFT", "rule_id": 27,
+                 "title": "Rule 27 lift condition has no numeric threshold",
+                 "explanation": "Lift clause says 'markets confirm direction "
+                                "for 2+ days' with no defined threshold."},
+            ]
+        }, {"input_tokens": 800, "output_tokens": 100,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0})
+        findings = check_rule_judgment(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "RULE_UNFALSIFIABLE_LIFT"
+        assert findings[0].evidence["rule_id"] == 27
+
+    @patch("v2.audit._call_rule_judgment_llm")
+    def test_drops_unknown_rule_id(self, mock_llm):
+        from v2.audit import check_rule_judgment
+        cur = MagicMock()
+        self._stub_inputs(cur)
+        mock_llm.return_value = ({
+            "findings": [
+                {"check_code": "RULE_LOW_N_BACKING", "rule_id": 999,
+                 "title": "x", "explanation": "y"},
+            ]
+        }, {"input_tokens": 0, "output_tokens": 0,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0})
+        findings = check_rule_judgment(cur)
+        assert findings == []
+
+    @patch("v2.audit._call_rule_judgment_llm")
+    def test_drops_invalid_check_code(self, mock_llm):
+        from v2.audit import check_rule_judgment
+        cur = MagicMock()
+        self._stub_inputs(cur)
+        mock_llm.return_value = ({
+            "findings": [{"check_code": "RULE_NOT_VALID", "rule_id": 27,
+                          "title": "x", "explanation": "y"}]
+        }, {"input_tokens": 0, "output_tokens": 0,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0})
+        assert check_rule_judgment(cur) == []
+
+    @patch("v2.audit._call_rule_judgment_llm")
+    def test_truncates_runaway_output(self, mock_llm):
+        from v2.audit import check_rule_judgment
+        cur = MagicMock()
+        self._stub_inputs(cur)
+        many = [{"check_code": "RULE_DEAD", "rule_id": 39,
+                 "title": f"t{i}", "explanation": "..."} for i in range(50)]
+        mock_llm.return_value = ({"findings": many},
+            {"input_tokens": 0, "output_tokens": 0,
+             "cache_creation_tokens": 0, "cache_read_tokens": 0})
+        findings = check_rule_judgment(cur)
+        assert len(findings) == 20
