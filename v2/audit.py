@@ -660,3 +660,153 @@ def check_rule_judgment(cur) -> list[Finding]:
             auto_fix=None,
         ))
     return findings
+
+
+# --- Runner ---------------------------------------------------------------
+
+from v2.database.connection import get_cursor
+from v2.database.trading_db import (
+    insert_audit_run,
+    insert_audit_finding,
+    finalize_audit_run,
+    supersede_stale_open_findings,
+    try_advisory_audit_lock,
+    release_advisory_audit_lock,
+)
+
+
+CHECKS: list = [
+    "check_orphan_fks",
+    "check_missing_backfill",
+    "check_invalid_attribution_categories",
+    "check_snapshot_gaps",
+    "check_decision_equity_drift",
+    "check_attribution_category_coverage",
+    "check_stage_failure_rate",
+    "check_cost_trend",
+    "check_decisions_missing_signal_refs",
+    "check_theses_missing_signal_refs",
+    "check_rule_judgment",
+]
+
+
+def _resolve_checks() -> list:
+    import sys
+    mod = sys.modules[__name__]
+    if not CHECKS:
+        return []
+    return [getattr(mod, name) for name in CHECKS] if isinstance(CHECKS[0], str) else list(CHECKS)
+
+
+def _emit_check_failure(*, run_id: int, check_name: str, exc: Exception):
+    import traceback
+    insert_audit_finding(
+        audit_run_id=run_id,
+        check_code="CHECK_FAILED",
+        tier=3, severity="warn",
+        title=f"Audit check {check_name} raised {type(exc).__name__}",
+        body=str(exc)[:1000],
+        affected_count=0,
+        evidence={"check": check_name, "exception": str(exc),
+                  "traceback": traceback.format_exc()[:2000]},
+        fingerprint=hashlib.sha256(
+            (check_name + str(exc)[:200]).encode("utf-8")
+        ).hexdigest(),
+    )
+
+
+def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> AuditRunSummary:
+    if not try_advisory_audit_lock():
+        log.warning("Audit already running (advisory lock contention); exiting cleanly")
+        return AuditRunSummary(run_id=None)
+
+    summary = AuditRunSummary(run_id=None)
+    rule_judgment_usage: dict = {}
+    try:
+        run_id = insert_audit_run(mode="apply" if apply else "check")
+        summary.run_id = run_id
+        log.info("Audit run #%d started (mode=%s)", run_id, "apply" if apply else "check")
+
+        current_fingerprints: set[str] = set()
+        emitted = auto_fixed = failed_checks = 0
+
+        with get_cursor() as cur:
+            for check in _resolve_checks():
+                cur.execute("SAVEPOINT audit_check")
+                try:
+                    findings = check(cur)
+                    cur.execute("RELEASE SAVEPOINT audit_check")
+                except Exception as e:
+                    cur.execute("ROLLBACK TO SAVEPOINT audit_check")
+                    cur.execute("RELEASE SAVEPOINT audit_check")
+                    log.exception("Audit check %s failed", check.__name__)
+                    _emit_check_failure(run_id=run_id, check_name=check.__name__, exc=e)
+                    failed_checks += 1
+                    continue
+
+                if check.__name__ == "check_rule_judgment":
+                    rule_judgment_usage = get_last_rule_judgment_usage()
+
+                for f in findings:
+                    current_fingerprints.add(f.fingerprint)
+                    inserted_id = insert_audit_finding(
+                        audit_run_id=run_id,
+                        check_code=f.check_code, tier=f.tier, severity=f.severity,
+                        title=f.title, body=f.body,
+                        affected_count=f.affected_count, evidence=f.evidence,
+                        fingerprint=f.fingerprint,
+                    )
+                    if inserted_id is not None:
+                        emitted += 1
+                    if f.severity == "critical":
+                        summary.has_critical_open = True
+
+                    if apply and f.auto_fix is not None:
+                        if auto_fixed >= max_auto_fix:
+                            log.error("Auto-fix ceiling %d reached; escalating "
+                                      "%s to critical without applying", max_auto_fix, f.check_code)
+                            continue
+                        cur.execute("SAVEPOINT audit_fix")
+                        try:
+                            fix_evidence = f.auto_fix(cur)
+                            cur.execute("RELEASE SAVEPOINT audit_fix")
+                            insert_audit_finding(
+                                audit_run_id=run_id,
+                                check_code=f.check_code + "_FIXED",
+                                tier=f.tier, severity="info",
+                                title=f"Auto-fixed: {f.title}",
+                                body=f"Applied auto-fix for {f.check_code}.",
+                                affected_count=f.affected_count,
+                                evidence={**f.evidence, "fix": fix_evidence},
+                                fingerprint=f.fingerprint + ":fixed",
+                                status="auto_fixed",
+                            )
+                            auto_fixed += 1
+                        except Exception:
+                            cur.execute("ROLLBACK TO SAVEPOINT audit_fix")
+                            cur.execute("RELEASE SAVEPOINT audit_fix")
+                            log.exception("Auto-fix failed for %s", f.check_code)
+
+            supersede_stale_open_findings(run_id=run_id,
+                                          current_fingerprints=current_fingerprints)
+
+        finalize_audit_run(
+            run_id=run_id,
+            total_findings=emitted,
+            auto_fixed=auto_fixed,
+            failed_checks=failed_checks,
+            model=RULE_JUDGMENT_MODEL if rule_judgment_usage else None,
+            input_tokens=rule_judgment_usage.get("input_tokens"),
+            output_tokens=rule_judgment_usage.get("output_tokens"),
+            cache_creation_tokens=rule_judgment_usage.get("cache_creation_tokens"),
+            cache_read_tokens=rule_judgment_usage.get("cache_read_tokens"),
+        )
+
+        summary.findings_emitted = emitted
+        summary.auto_fixed = auto_fixed
+        summary.failed_checks = failed_checks
+        log.info("Audit run #%d complete: emitted=%d auto_fixed=%d failed_checks=%d",
+                 run_id, emitted, auto_fixed, failed_checks)
+        return summary
+    finally:
+        release_advisory_audit_lock()

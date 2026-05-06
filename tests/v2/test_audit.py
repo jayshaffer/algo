@@ -573,3 +573,93 @@ class TestCheckRuleJudgment:
              "cache_creation_tokens": 0, "cache_read_tokens": 0})
         findings = check_rule_judgment(cur)
         assert len(findings) == 20
+
+
+# --- Runner tests (Task 15) ---
+
+class TestRunner:
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_per_check_isolation(self, mock_cur, mock_run, mock_finding,
+                                 mock_supersede, mock_finalize, mock_unlock,
+                                 mock_lock):
+        from v2.audit import run_audit, Finding
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        good_check = MagicMock(__name__="good_check",
+                               return_value=[Finding("OK", 1, "warn",
+                                                     "t", "b", 1, {"x":1}, None)])
+        bad_check = MagicMock(__name__="bad_check",
+                              side_effect=RuntimeError("boom"))
+
+        with patch("v2.audit.CHECKS", [bad_check, good_check]):
+            summary = run_audit(apply=False)
+
+        assert summary.failed_checks == 1
+        good_call_count = sum(
+            1 for c in mock_finding.call_args_list
+            if c.kwargs.get("check_code") == "OK"
+        )
+        assert good_call_count == 1
+
+    @patch("v2.audit.try_advisory_audit_lock", return_value=False)
+    def test_advisory_lock_contention_exits_cleanly(self, mock_lock):
+        from v2.audit import run_audit
+        summary = run_audit(apply=False)
+        assert summary.run_id is None
+        assert summary.findings_emitted == 0
+
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_apply_invokes_auto_fix(self, mock_cur, mock_run, mock_finding,
+                                    mock_supersede, mock_finalize, mock_unlock,
+                                    mock_lock):
+        from v2.audit import run_audit, Finding
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+        fix_calls = []
+        def fix(c):
+            fix_calls.append("ran")
+            return {"deleted": 3}
+        check = MagicMock(__name__="c",
+                          return_value=[Finding("X", 1, "warn", "t", "b", 1,
+                                                {"a":1}, fix)])
+        with patch("v2.audit.CHECKS", [check]):
+            summary = run_audit(apply=True)
+        assert summary.auto_fixed == 1
+        assert fix_calls == ["ran"]
+
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_max_auto_fix_ceiling_escalates(self, mock_cur, mock_run, mock_finding,
+                                            mock_supersede, mock_finalize, mock_unlock,
+                                            mock_lock):
+        from v2.audit import run_audit, Finding
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+        n_fixes = []
+        def fix(c):
+            n_fixes.append(1)
+            return {}
+        many = [Finding("X", 1, "warn", "t", "b", 1, {"i": i}, fix) for i in range(5)]
+        check = MagicMock(__name__="c", return_value=many)
+        with patch("v2.audit.CHECKS", [check]):
+            summary = run_audit(apply=True, max_auto_fix=3)
+        assert summary.auto_fixed == 3
+        assert len(n_fixes) == 3
