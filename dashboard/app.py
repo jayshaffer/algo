@@ -6,18 +6,21 @@ from benchmark import (
     get_deposit_history,
     get_spy_benchmark,
 )
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 from queries import (
     close_thesis,
+    get_audit_finding,
     get_current_strategy,
     get_decision_signal_refs_batch,
     get_decision_stats,
     get_equity_curve,
     get_latest_snapshot,
+    get_open_audit_findings,
     get_open_orders,
     get_performance_metrics,
     get_playbook_actions,
     get_positions,
+    get_recent_audit_runs,
     get_recent_decisions,
     get_recent_macro_signals,
     get_recent_ticker_signals,
@@ -29,6 +32,7 @@ from queries import (
     get_theses,
     get_thesis_stats,
     get_today_playbook,
+    update_audit_finding_status,
 )
 
 app = Flask(__name__)
@@ -241,6 +245,29 @@ def api_signals():
         "ticker_signals": [dict(s) for s in ticker_signals] if ticker_signals else [],
         "macro_signals": [dict(s) for s in macro_signals] if macro_signals else [],
     })
+
+
+@app.route("/audit")
+def audit_page():
+    findings = get_open_audit_findings()
+    runs = get_recent_audit_runs()
+    return render_template("audit.html", findings=findings, runs=runs)
+
+
+@app.route("/audit/findings/<int:finding_id>")
+def audit_finding_page(finding_id):
+    f = get_audit_finding(finding_id)
+    if not f:
+        return "Not found", 404
+    return render_template("audit_finding.html", finding=f)
+
+
+@app.route("/audit/findings/<int:finding_id>/status", methods=["POST"])
+def audit_finding_status(finding_id):
+    status = request.form.get("status")
+    note = request.form.get("note")
+    update_audit_finding_status(finding_id, status, note)
+    return redirect(url_for("audit_page"))
 
 
 if __name__ == "__main__":
