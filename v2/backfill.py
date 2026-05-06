@@ -226,6 +226,53 @@ def backfill_outcomes(days: int = 7, dry_run: bool = False) -> dict:
     return stats
 
 
+def backfill_decision_outcomes(decision_id: int) -> dict:
+    """Re-run 7d and 30d outcome+benchmark backfill for a single decision.
+
+    Used by the audit auto-fix path when a decision past the window still
+    has NULL outcome/benchmark. Always queries Alpaca; skips writes only
+    when no exit price is available.
+    """
+    stats = {"decision_id": decision_id, "windows_filled": []}
+
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, date, ticker, action, price FROM decisions WHERE id=%s",
+            (decision_id,),
+        )
+        row = cur.fetchone()
+    if not row or row["action"] not in ("buy", "sell") or row["price"] is None:
+        return stats
+
+    ticker = row["ticker"]
+    action = row["action"]
+    entry_price = Decimal(str(row["price"]))
+    decision_date = row["date"]
+
+    client = get_data_client()
+    spy_entry = get_price_on_date(client, BENCHMARK_TICKER, decision_date)
+
+    for days in (7, 30):
+        exit_date = trading_day_offset(decision_date, days)
+        exit_price = get_price_on_date(client, ticker, exit_date)
+        if exit_price is None:
+            continue
+
+        outcome = calculate_outcome(action, entry_price, exit_price)
+
+        benchmark = None
+        spy_exit = get_price_on_date(client, BENCHMARK_TICKER, exit_date)
+        if spy_entry and spy_exit and spy_entry > 0 and spy_exit > 0:
+            benchmark = ((spy_exit - spy_entry) / spy_entry) * 100
+            if action == "sell":
+                benchmark = -benchmark
+
+        update_outcome(decision_id, days, outcome, benchmark)
+        stats["windows_filled"].append(days)
+
+    return stats
+
+
 def run_backfill(dry_run: bool = False) -> dict:
     """Run full backfill for both 7d and 30d outcomes."""
     print(f"[{datetime.now().isoformat()}] Starting outcome backfill")
