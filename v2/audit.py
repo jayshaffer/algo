@@ -484,6 +484,10 @@ def check_decisions_missing_signal_refs(cur) -> list[Finding]:
 # --- Tier 3: theses missing signal_refs (Rule #6 drift) -------------------
 
 def check_theses_missing_signal_refs(cur) -> list[Finding]:
+    """Adopted theses (`source='adoption'`) legitimately lack signal_refs;
+    only count strategist-created theses (typically `source='claude_ideation'`)
+    against the citation rate.
+    """
     cur.execute("""
         SELECT
           COUNT(*) AS total,
@@ -492,6 +496,7 @@ def check_theses_missing_signal_refs(cur) -> list[Finding]:
         LEFT JOIN (SELECT DISTINCT thesis_id FROM thesis_signals) ts
           ON ts.thesis_id = t.id
         WHERE t.created_at > now() - interval '30 days'
+          AND COALESCE(t.source, '') <> 'adoption'
     """)
     s = cur.fetchone()
     if not s["total"] or s["missing"] / s["total"] <= 0.25:
@@ -501,17 +506,20 @@ def check_theses_missing_signal_refs(cur) -> list[Finding]:
         SELECT t.id FROM theses t
         LEFT JOIN (SELECT DISTINCT thesis_id FROM thesis_signals) ts
           ON ts.thesis_id = t.id
-        WHERE t.created_at > now() - interval '30 days' AND ts.thesis_id IS NULL
+        WHERE t.created_at > now() - interval '30 days'
+          AND COALESCE(t.source, '') <> 'adoption'
+          AND ts.thesis_id IS NULL
         ORDER BY t.id
     """)
     ids = [r["id"] for r in cur.fetchall()]
     return [Finding(
         check_code="THESES_NO_SIGNAL_REFS",
         tier=3, severity="warn",
-        title=f"{s['missing']} of {s['total']} recent theses have no signal_refs",
+        title=f"{s['missing']} of {s['total']} recent ideation theses have no signal_refs",
         body=("Strategist is creating theses without citing signals, violating "
               "Rule #6 from the 2026-05-02 wiring fix. Without citations, "
-              "downstream attribution receives nothing to score."),
+              "downstream attribution receives nothing to score. Adopted "
+              "theses are excluded from this count by design."),
         affected_count=s["missing"],
         evidence={"total": s["total"], "missing": s["missing"], "thesis_ids": ids},
         auto_fix=None,
