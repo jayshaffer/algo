@@ -663,3 +663,30 @@ class TestRunner:
             summary = run_audit(apply=True, max_auto_fix=3)
         assert summary.auto_fixed == 3
         assert len(n_fixes) == 3
+
+
+# --- CLI tests (Task 16) ---
+
+class TestCli:
+    @patch("v2.audit.run_audit")
+    def test_default_is_check_mode(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        rc = main(argv=[])
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["apply"] is False
+        assert rc == 0
+
+    @patch("v2.audit.run_audit")
+    def test_apply_flag_passed_through(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        main(argv=["--apply"])
+        assert mock_run.call_args.kwargs["apply"] is True
+
+    @patch("v2.audit.run_audit")
+    def test_critical_finding_exit_1(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=True)
+        rc = main(argv=[])
+        assert rc == 1

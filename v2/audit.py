@@ -810,3 +810,34 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
         return summary
     finally:
         release_advisory_audit_lock()
+
+
+# --- CLI ------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="python -m v2.audit",
+                                     description="Self-healing audit runner")
+    parser.add_argument("--apply", action="store_true",
+                        help="Apply Tier-1 auto-fixes (default: propose-only)")
+    parser.add_argument("--max-auto-fix", type=int, default=MAX_AUTO_FIX_DEFAULT,
+                        help=f"Cap on auto-fixes per run (default {MAX_AUTO_FIX_DEFAULT})")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    try:
+        summary = run_audit(apply=args.apply, max_auto_fix=args.max_auto_fix)
+    except Exception:
+        log.exception("Audit run failed unrecoverably")
+        return 2
+
+    if summary.has_critical_open:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
