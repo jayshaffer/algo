@@ -499,6 +499,47 @@ docker compose up -d
 docker compose exec ollama ollama list
 ```
 
+## Self-healing audit
+
+A daily auditor (`v2/audit.py`) detects metadata integrity issues, proposes
+rule-overfitting / contradictions via a single Haiku call, and surfaces
+application-level regressions. Findings appear at
+[http://127.0.0.1:3000/audit](http://127.0.0.1:3000/audit). They never feed
+the strategist.
+
+### Manual run
+
+```bash
+task audit              # propose-only (recommended default)
+task audit:apply        # apply Tier-1 auto-fixes (orphan FK delete, backfill re-run)
+task paper:audit        # same against paper stack
+```
+
+### Daily cron
+
+Runs propose-only. Add to host crontab (`crontab -e`):
+
+```
+MAILTO=you@example.com
+30 22 * * * cd /home/jay/dev/algo && /usr/local/bin/task audit >> logs/cron-audit.log 2>&1
+```
+
+The auditor exits 0 (clean), 1 (>=1 critical finding open — MAILTO fires), or
+2 (run itself failed — MAILTO fires). Advisory-lock contention exits 0.
+
+### Enabling auto-fix in cron
+
+Once you've reviewed propose-only runs for a week and trust the auto-fix
+behavior, replace `task audit` with `task audit:apply` in the cron entry.
+
+### CLI options
+
+```
+python -m v2.audit                    # propose-only
+python -m v2.audit --apply            # apply Tier-1 auto-fixes
+python -m v2.audit --max-auto-fix N   # override ceiling (default 100)
+```
+
 ## License
 
 MIT
