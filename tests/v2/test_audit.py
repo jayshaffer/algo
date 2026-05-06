@@ -564,6 +564,22 @@ class TestCheckThesesMissingSignalRefs:
         assert findings[0].check_code == "THESES_NO_SIGNAL_REFS"
         assert findings[0].severity == "warn"
 
+    def test_sql_filters_out_adoption_source(self):
+        """The check must exclude theses with source='adoption' so
+        adopted positions don't count against strategist citations."""
+        from v2.audit import check_theses_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 0, "missing": 0}
+        cur.fetchall.return_value = []
+        check_theses_missing_signal_refs(cur)
+        # Both the count query and (if reached) the id query must filter adoption.
+        executed_sqls = [call.args[0] for call in cur.execute.call_args_list]
+        assert any("source" in sql.lower() and "adoption" in sql.lower()
+                   for sql in executed_sqls), (
+            f"Expected at least one SQL to filter source='adoption'. "
+            f"Got: {executed_sqls!r}"
+        )
+
 
 # --- Rule judgment LLM tests (Task 14) ---
 
