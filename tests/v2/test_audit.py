@@ -419,32 +419,123 @@ class TestCheckCostTrend:
         assert check_cost_trend(cur) == []
 
 
-# --- Decisions missing signal_refs tests (Task 12) ---
+# --- Decisions missing signal_refs tests (refined: bucket by source) ---
 
 class TestCheckDecisionsMissingSignalRefs:
+    def _row(self, **overrides):
+        """Default fetchone shape for the refined check. All buckets present."""
+        base = {
+            "total": 0,
+            "has_refs": 0,
+            "excluded_off_playbook": 0,
+            "excluded_no_thesis": 0,
+            "excluded_adoption": 0,
+            "genuinely_missing": 0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_no_recent_decisions_no_finding(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row()
+        cur.fetchall.return_value = []
+        assert check_decisions_missing_signal_refs(cur) == []
+
     def test_all_have_refs_no_finding(self):
         from v2.audit import check_decisions_missing_signal_refs
         cur = MagicMock()
-        cur.fetchone.return_value = {"total": 20, "missing": 0, "on_pb_missing": 0}
+        cur.fetchone.return_value = self._row(total=20, has_refs=20)
+        cur.fetchall.return_value = []
+        assert check_decisions_missing_signal_refs(cur) == []
+
+    def test_all_missing_explained_by_adoption_no_finding(self):
+        """13 missing, all adopted theses → fully explained → no finding."""
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row(
+            total=29, has_refs=16, excluded_adoption=13, genuinely_missing=0,
+        )
+        cur.fetchall.return_value = []
+        assert check_decisions_missing_signal_refs(cur) == []
+
+    def test_all_missing_explained_by_no_thesis_no_finding(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row(
+            total=29, has_refs=16, excluded_no_thesis=13, genuinely_missing=0,
+        )
         cur.fetchall.return_value = []
         assert check_decisions_missing_signal_refs(cur) == []
 
     def test_warn_below_critical_threshold(self):
+        """genuinely_missing/total = 5/100 = 5% → below 10% → warn."""
         from v2.audit import check_decisions_missing_signal_refs
         cur = MagicMock()
-        cur.fetchone.return_value = {"total": 100, "missing": 8, "on_pb_missing": 5}
-        cur.fetchall.return_value = [{"id": 1}]
+        cur.fetchone.return_value = self._row(
+            total=100, has_refs=90, excluded_adoption=3, excluded_no_thesis=2,
+            genuinely_missing=5,
+        )
+        cur.fetchall.return_value = [{"id": i} for i in range(5)]
         findings = check_decisions_missing_signal_refs(cur)
+        assert len(findings) == 1
         assert findings[0].severity == "warn"
+        assert findings[0].evidence["genuinely_missing"] == 5
 
-    def test_critical_when_on_pb_missing_above_10pct(self):
+    def test_critical_when_genuinely_missing_above_10pct(self):
+        """genuinely_missing/total = 15/100 = 15% → critical."""
         from v2.audit import check_decisions_missing_signal_refs
         cur = MagicMock()
-        cur.fetchone.return_value = {"total": 29, "missing": 13, "on_pb_missing": 13}
-        cur.fetchall.return_value = [{"id": i} for i in range(13)]
+        cur.fetchone.return_value = self._row(
+            total=100, has_refs=80, excluded_adoption=3, excluded_no_thesis=2,
+            genuinely_missing=15,
+        )
+        cur.fetchall.return_value = [{"id": i} for i in range(15)]
         findings = check_decisions_missing_signal_refs(cur)
         assert findings[0].severity == "critical"
-        assert findings[0].evidence["on_pb_missing"] == 13
+        assert findings[0].evidence["genuinely_missing"] == 15
+
+    def test_evidence_buckets_all_present(self):
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row(
+            total=29, has_refs=16, excluded_off_playbook=2,
+            excluded_no_thesis=4, excluded_adoption=4, genuinely_missing=3,
+        )
+        cur.fetchall.return_value = [{"id": 100}, {"id": 101}, {"id": 102}]
+        findings = check_decisions_missing_signal_refs(cur)
+        ev = findings[0].evidence
+        assert ev["total"] == 29
+        assert ev["has_refs"] == 16
+        assert ev["excluded_off_playbook"] == 2
+        assert ev["excluded_no_thesis"] == 4
+        assert ev["excluded_adoption"] == 4
+        assert ev["genuinely_missing"] == 3
+        assert ev["decision_ids"] == [100, 101, 102]
+
+    def test_decision_ids_are_genuinely_missing_only(self):
+        """The id list query should return only the genuinely_missing bucket."""
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row(
+            total=29, has_refs=16, excluded_adoption=10, genuinely_missing=3,
+        )
+        cur.fetchall.return_value = [{"id": 270}, {"id": 271}, {"id": 290}]
+        findings = check_decisions_missing_signal_refs(cur)
+        # The check must run a second query to fetch ids; assert we got 3, not 13.
+        assert findings[0].evidence["decision_ids"] == [270, 271, 290]
+        assert len(findings[0].evidence["decision_ids"]) == 3
+
+    def test_check_code_unchanged(self):
+        """Same check_code preserves fingerprint history & supersession."""
+        from v2.audit import check_decisions_missing_signal_refs
+        cur = MagicMock()
+        cur.fetchone.return_value = self._row(
+            total=10, has_refs=5, genuinely_missing=5,
+        )
+        cur.fetchall.return_value = [{"id": i} for i in range(5)]
+        findings = check_decisions_missing_signal_refs(cur)
+        assert findings[0].check_code == "DECISIONS_NO_SIGNAL_REFS"
 
 
 # --- Theses missing signal_refs tests (Task 13) ---
