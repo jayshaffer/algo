@@ -425,6 +425,89 @@ class TestToolGetSessionSummary:
             "Orphan thesis label leaked through to reflection text"
         )
 
+    @patch("v2.strategy.analyze_round_trips")
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_renders_round_trips_when_present(
+        self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
+    ):
+        from datetime import date
+        from v2.strategy import tool_get_session_summary
+        from v2.patterns import RoundTrip
+        mock_decisions.return_value = [make_decision_row()]
+        mock_attr.return_value = "Attribution data here"
+        mock_cursor.fetchall.return_value = []
+        mock_round_trips.return_value = [
+            RoundTrip("GOOGL", 11, date(2026, 4, 15), date(2026, 5, 6)),
+            RoundTrip("CRM", 9, date(2026, 3, 10), date(2026, 5, 5)),
+        ]
+
+        result = tool_get_session_summary()
+
+        assert "Round-Trips" in result
+        assert "GOOGL: 11 pairs" in result
+        assert "CRM: 9 pairs" in result
+        assert "2026-04-15" in result
+        assert "2026-05-06" in result
+
+    @patch("v2.strategy.analyze_round_trips")
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_renders_round_trips_none_marker_when_empty(
+        self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
+    ):
+        from v2.strategy import tool_get_session_summary
+        mock_decisions.return_value = [make_decision_row()]
+        mock_attr.return_value = "Attribution data here"
+        mock_cursor.fetchall.return_value = []
+        mock_round_trips.return_value = []
+
+        result = tool_get_session_summary()
+
+        assert "Round-Trips" in result
+        assert "none" in result.lower()
+
+    @patch("v2.strategy.analyze_round_trips")
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_round_trips_uses_30d_window_7d_gap_min_2(
+        self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
+    ):
+        from v2.strategy import tool_get_session_summary
+        mock_decisions.return_value = []
+        mock_attr.return_value = ""
+        mock_cursor.fetchall.return_value = []
+        mock_round_trips.return_value = []
+
+        tool_get_session_summary()
+
+        mock_round_trips.assert_called_once_with(days=30, gap_days=7, min_pairs=2)
+
+    @patch("v2.strategy.analyze_round_trips")
+    @patch("v2.strategy.get_attribution_summary")
+    @patch("v2.strategy.get_recent_decisions")
+    def test_round_trips_caps_display_at_5(
+        self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
+    ):
+        from datetime import date
+        from v2.strategy import tool_get_session_summary
+        from v2.patterns import RoundTrip
+        mock_decisions.return_value = []
+        mock_attr.return_value = ""
+        mock_cursor.fetchall.return_value = []
+        mock_round_trips.return_value = [
+            RoundTrip(f"T{i}", 10 - i, date(2026, 4, 1), date(2026, 5, 1))
+            for i in range(7)
+        ]
+
+        result = tool_get_session_summary()
+
+        for i in range(5):
+            assert f"T{i}: {10-i} pairs" in result
+        assert "T5:" not in result
+        assert "T6:" not in result
+        assert "7 total" in result or "(7 tickers)" in result
+
 
 class TestStrategyToolDefinitions:
     def test_all_tools_defined(self):
