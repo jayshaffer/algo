@@ -1227,3 +1227,54 @@ class TestGetRetiredRules:
         assert "ORDER BY retired_at DESC" in sql
         params = mock_cursor.execute.call_args[0][1]
         assert params == (date(2026, 5, 4), 10)
+
+class TestGetRecentPlaybooksWithActions:
+    """Surface recent playbook history for the strategist's reversal check."""
+
+    def test_returns_empty_when_no_playbooks(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_recent_playbooks_with_actions
+        mock_cursor.fetchall.return_value = []
+
+        result = get_recent_playbooks_with_actions(n=3)
+
+        assert result == []
+
+    def test_returns_playbooks_with_nested_actions(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_recent_playbooks_with_actions
+        mock_cursor.fetchall.return_value = [
+            {"pb_id": 87, "pb_date": date(2026, 5, 4), "pb_market_outlook": "fragile",
+             "action_id": 401, "ticker": "ANET", "action": "sell",
+             "intent_type": "exit_partial_pct", "intent_magnitude": 50,
+             "reasoning": "trim pre-earnings"},
+            {"pb_id": 87, "pb_date": date(2026, 5, 4), "pb_market_outlook": "fragile",
+             "action_id": 402, "ticker": "AMZN", "action": "buy",
+             "intent_type": "invest_dollar", "intent_magnitude": 300,
+             "reasoning": "multi-catalyst"},
+            {"pb_id": 84, "pb_date": date(2026, 5, 1), "pb_market_outlook": "rotational",
+             "action_id": 390, "ticker": "CRM", "action": "sell",
+             "intent_type": "exit_full", "intent_magnitude": None,
+             "reasoning": "exit trigger reached"},
+        ]
+
+        result = get_recent_playbooks_with_actions(n=3)
+
+        assert len(result) == 2
+        assert result[0]["pb_id"] == 87
+        assert result[0]["pb_date"] == date(2026, 5, 4)
+        assert len(result[0]["actions"]) == 2
+        assert result[0]["actions"][0]["ticker"] == "ANET"
+        assert result[1]["pb_id"] == 84
+        assert len(result[1]["actions"]) == 1
+
+    def test_sql_orders_descending_and_limits(self, mock_db, mock_cursor):
+        from v2.database.trading_db import get_recent_playbooks_with_actions
+        mock_cursor.fetchall.return_value = []
+
+        get_recent_playbooks_with_actions(n=5)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "ORDER BY" in sql.upper()
+        assert "DESC" in sql.upper()
+        assert 5 in params
+

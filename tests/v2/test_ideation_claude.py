@@ -229,6 +229,20 @@ class TestSystemPrompts:
         assert "get_strategy_rules" in CLAUDE_STRATEGIST_SYSTEM
         assert "get_strategy_history" in CLAUDE_STRATEGIST_SYSTEM
 
+    def test_strategist_prompt_mentions_get_recent_playbooks(self):
+        assert "get_recent_playbooks" in CLAUDE_STRATEGIST_SYSTEM
+        assert "get_recent_playbooks" in CLAUDE_SESSION_STRATEGIST_SYSTEM
+
+    def test_strategist_prompt_has_reversal_justification_rule(self):
+        for prompt in (CLAUDE_STRATEGIST_SYSTEM, CLAUDE_SESSION_STRATEGIST_SYSTEM):
+            text = prompt.lower()
+            assert "reversal" in text, (
+                "strategist must be told to justify reversals against recent playbooks"
+            )
+            assert "new evidence" in text, (
+                "rule must require new evidence, not re-narration"
+            )
+
 
 class TestStrategistPreSeedMemos:
     def test_strategy_history_in_preseed(self):
