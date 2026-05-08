@@ -72,6 +72,31 @@ class TestExecutorContracts:
         assert a.signal_refs == []
 
 
+class TestExecutorInput:
+    def test_executor_input_has_recent_ticker_decisions(self):
+        from v2.agent import ExecutorInput
+        ei = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+            recent_ticker_decisions=[
+                {"ticker": "GOOGL", "date": "2026-05-04", "action": "sell",
+                 "quantity": 0.17, "price": 383.02, "reasoning": "near PT"},
+            ],
+        )
+        assert len(ei.recent_ticker_decisions) == 1
+        assert ei.recent_ticker_decisions[0]["ticker"] == "GOOGL"
+
+    def test_executor_input_defaults_empty_recent_ticker_decisions(self):
+        from v2.agent import ExecutorInput
+        ei = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+        assert ei.recent_ticker_decisions == []
+
+
 class TestTradingSystemPrompt:
     """Phase 4: the executor prompt must instruct the LLM to copy signal_refs
     verbatim from the playbook action, not invent them."""
@@ -94,6 +119,49 @@ class TestTradingSystemPrompt:
             is_off_playbook=False,
         )
         assert d.signal_refs == []
+
+
+class TestExecutorPromptReversalGuidance:
+    def test_prompt_describes_recent_ticker_decisions_input(self):
+        from v2.agent import TRADING_SYSTEM_PROMPT
+        assert "recent_ticker_decisions" in TRADING_SYSTEM_PROMPT
+        assert "past 7 days" in TRADING_SYSTEM_PROMPT.lower() or \
+               "7 days" in TRADING_SYSTEM_PROMPT
+
+    def test_prompt_has_reversal_justification_rule(self):
+        from v2.agent import TRADING_SYSTEM_PROMPT
+        text = TRADING_SYSTEM_PROMPT.lower()
+        assert "reversal" in text, "executor must be told to justify reversals"
+        assert "new evidence" in text, "rule must require new evidence, not re-narration"
+
+    def test_input_json_includes_recent_ticker_decisions(self):
+        from v2.agent import ExecutorInput, get_trading_decisions
+        ei = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+            recent_ticker_decisions=[
+                {"ticker": "GOOGL", "date": "2026-05-04", "action": "sell",
+                 "quantity": 0.17, "price": 383.02, "reasoning": "trim"},
+            ],
+        )
+
+        captured = {}
+        def fake_call(client, **kwargs):
+            captured["messages"] = kwargs["messages"]
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions": [], "thesis_invalidations": [], "market_summary": "", "risk_assessment": ""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=1, output_tokens=1)
+            return resp
+
+        with patch("v2.agent._call_with_retry", side_effect=fake_call), \
+             patch("v2.agent.get_claude_client"):
+            get_trading_decisions(ei)
+
+        sent_json = captured["messages"][0]["content"]
+        assert "recent_ticker_decisions" in sent_json
+        assert "GOOGL" in sent_json
 
 
 class TestGetTradingDecisions:

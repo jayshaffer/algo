@@ -1,7 +1,7 @@
 """Context builder for trading agent - aggregates signals into compressed format."""
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from .agent import ExecutorInput, PlaybookAction
 from .attribution import get_attribution_summary
@@ -511,6 +511,33 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         for d in recent if d["date"] == today
     ]
 
+    # Closes the 1-6 day blind spot — `recent_outcomes` filters to ≥7d-old
+    # (outcome_7d IS NOT NULL) and `todays_decisions` is today-only, leaving
+    # yesterday's sell invisible when deciding whether to buy back today.
+    playbook_tickers = {a.ticker for a in actions}
+    seven_days_ago = today - timedelta(days=7)
+    recent_ticker_decisions: list[dict] = []
+    per_ticker_count: dict[str, int] = {}
+    for d in recent:
+        if d["ticker"] not in playbook_tickers:
+            continue
+        if d["date"] < seven_days_ago or d["date"] > today:
+            continue
+        if d["action"] not in ("buy", "sell"):
+            continue
+        if per_ticker_count.get(d["ticker"], 0) >= 5:
+            continue
+        recent_ticker_decisions.append({
+            "id": d["id"],
+            "ticker": d["ticker"],
+            "date": str(d["date"]),
+            "action": d["action"],
+            "quantity": float(d["quantity"]) if d.get("quantity") is not None else None,
+            "price": float(d["price"]) if d.get("price") is not None else None,
+            "reasoning": d.get("reasoning") or "",
+        })
+        per_ticker_count[d["ticker"]] = per_ticker_count.get(d["ticker"], 0) + 1
+
     return ExecutorInput(
         playbook_actions=actions,
         positions=[dict(p) for p in positions],
@@ -524,4 +551,5 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         strategy_rules=strategy_rules,
         equity_summary=equity_summary,
         todays_decisions=todays_decisions,
+        recent_ticker_decisions=recent_ticker_decisions,
     )
