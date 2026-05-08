@@ -52,6 +52,20 @@ class ConfidenceCorrelation:
     win_rate_7d: float | None
 
 
+@dataclass
+class RoundTrip:
+    """Same-ticker opposing-action pair count over a window.
+
+    A round-trip is any pair of decisions (a, b) on the same ticker where
+    a is earlier than b, b.action != a.action, and they're within
+    gap_days of each other. We count all such pairs per ticker.
+    """
+    ticker: str
+    pair_count: int
+    first_date: object
+    last_date: object
+
+
 def analyze_signal_categories(days: int = 90) -> list[SignalPerformance]:
     """Analyze which signal categories lead to profitable trades.
     Uses decision_signals FK as single source of truth.
@@ -224,6 +238,52 @@ def analyze_confidence_correlation(days: int = 90) -> list[ConfidenceCorrelation
                 win_rate_7d=float(row["win_rate_7d"]) if row["win_rate_7d"] is not None else None,
             ))
         return results
+
+
+def analyze_round_trips(
+    days: int = 30,
+    gap_days: int = 7,
+    min_pairs: int = 2,
+) -> list[RoundTrip]:
+    """Find tickers that flip-flopped (opposing actions within gap_days).
+
+    Self-joins `decisions` to itself on same ticker, opposite action,
+    later date within gap_days. Returns one row per ticker that had at
+    least min_pairs such pairs in the lookback window, sorted by
+    pair_count descending.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            WITH bs AS (
+                SELECT id, date, ticker, action
+                FROM decisions
+                WHERE date > CURRENT_DATE - INTERVAL '1 day' * %s
+                  AND action IN ('buy', 'sell')
+            )
+            SELECT a.ticker,
+                   COUNT(*) AS pair_count,
+                   MIN(a.date) AS first_date,
+                   MAX(b.date) AS last_date
+            FROM bs a
+            JOIN bs b
+              ON a.ticker = b.ticker
+             AND b.id > a.id
+             AND b.action <> a.action
+             AND (b.date - a.date) <= %s
+            GROUP BY a.ticker
+            HAVING COUNT(*) >= %s
+            ORDER BY pair_count DESC
+        """, (days, gap_days, min_pairs))
+
+        return [
+            RoundTrip(
+                ticker=row["ticker"],
+                pair_count=row["pair_count"],
+                first_date=row["first_date"],
+                last_date=row["last_date"],
+            )
+            for row in cur.fetchall()
+        ]
 
 
 def get_best_performing_signals(days: int = 90, min_occurrences: int = 3) -> list[dict]:

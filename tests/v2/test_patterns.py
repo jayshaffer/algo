@@ -458,3 +458,63 @@ class TestGeneratePatternReport:
         ]
         report = generate_pattern_report(days=90)
         assert "news_signal:nodata: N/A" in report
+
+
+class TestAnalyzeRoundTrips:
+    """Tests for analyze_round_trips() — surfaces flip-flop patterns."""
+
+    def test_returns_empty_list_when_no_pairs(self, mock_db):
+        from v2.patterns import analyze_round_trips
+        mock_db.fetchall.return_value = []
+        assert analyze_round_trips(days=30, gap_days=7, min_pairs=2) == []
+
+    def test_returns_round_trip_objects(self, mock_db):
+        from datetime import date
+        from v2.patterns import RoundTrip, analyze_round_trips
+        mock_db.fetchall.return_value = [
+            {"ticker": "GOOGL", "pair_count": 11,
+             "first_date": date(2026, 4, 15), "last_date": date(2026, 5, 6)},
+            {"ticker": "CRM", "pair_count": 9,
+             "first_date": date(2026, 3, 10), "last_date": date(2026, 5, 5)},
+        ]
+
+        result = analyze_round_trips(days=60, gap_days=14, min_pairs=2)
+
+        assert len(result) == 2
+        assert result[0] == RoundTrip(
+            ticker="GOOGL", pair_count=11,
+            first_date=date(2026, 4, 15), last_date=date(2026, 5, 6),
+        )
+        assert result[1].ticker == "CRM"
+
+    def test_sql_self_joins_decisions_on_opposite_action(self, mock_db):
+        from v2.patterns import analyze_round_trips
+        mock_db.fetchall.return_value = []
+        analyze_round_trips(days=30, gap_days=7, min_pairs=2)
+
+        sql = mock_db.execute.call_args[0][0]
+        assert "decisions" in sql.lower()
+        assert "b.action <> a.action" in sql
+        assert "action IN ('buy', 'sell')" in sql or "action in ('buy','sell')" in sql.lower()
+        assert "GROUP BY" in sql.upper()
+        assert "HAVING" in sql.upper()
+
+    def test_passes_window_and_gap_parameters(self, mock_db):
+        from v2.patterns import analyze_round_trips
+        mock_db.fetchall.return_value = []
+        analyze_round_trips(days=45, gap_days=10, min_pairs=3)
+
+        params = mock_db.execute.call_args[0][1]
+        assert 45 in params
+        assert 10 in params
+        assert 3 in params
+
+    def test_default_parameters(self, mock_db):
+        from v2.patterns import analyze_round_trips
+        mock_db.fetchall.return_value = []
+        analyze_round_trips()
+
+        params = mock_db.execute.call_args[0][1]
+        assert 30 in params
+        assert 7 in params
+        assert 2 in params
