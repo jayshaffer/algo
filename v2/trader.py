@@ -727,10 +727,10 @@ def _build_final_result(
     )
 
 
-def _get_decisions(executor_input, model: str, errors: list[str]):
+def _get_decisions(executor_input, model: str, errors: list[str], session_id: int | None = None):
     """Call the executor LLM; return response or None on failure."""
     try:
-        response = get_trading_decisions(executor_input, model=model)
+        response = get_trading_decisions(executor_input, model=model, session_id=session_id)
         logger.info("Received %d decisions", len(response.decisions))
         logger.info("Market summary: %s...", response.market_summary[:100])
         return response
@@ -1013,7 +1013,7 @@ def run_trading_session(
 
     # Step 4: Get LLM decisions
     logger.info("[Step 4] Getting trading decisions from executor")
-    response = _get_decisions(executor_input, model, errors)
+    response = _get_decisions(executor_input, model, errors, session_id=session_id)
     if response is None:
         return _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors)
 

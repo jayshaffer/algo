@@ -580,11 +580,11 @@ class TestRunAgenticLoopTelemetry:
             stage_name="ideation",
         )
 
-        assert len(recorded) == 1
-        ev = recorded[0]
+        tool_events = [r for r in recorded if r["event_type"] == "tool_invocation"]
+        assert len(tool_events) == 1
+        ev = tool_events[0]
         assert ev["session_id"] == 99
         assert ev["stage_name"] == "ideation"
-        assert ev["event_type"] == "tool_invocation"
         assert ev["payload"]["tool_name"] == "my_tool"
         assert ev["payload"]["success"] is True
         assert ev["payload"]["error"] is None
@@ -622,8 +622,9 @@ class TestRunAgenticLoopTelemetry:
             stage_name="reflection",
         )
 
-        assert len(recorded) == 1
-        ev = recorded[0]
+        tool_events = [r for r in recorded if r["event_type"] == "tool_invocation"]
+        assert len(tool_events) == 1
+        ev = tool_events[0]
         assert ev["payload"]["success"] is False
         assert "boom" in (ev["payload"]["error"] or "")
 
@@ -656,6 +657,277 @@ class TestRunAgenticLoopTelemetry:
             max_turns=3,
         )
 
+        tool_events = [r for r in recorded if r["event_type"] == "tool_invocation"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["session_id"] is None
+        assert tool_events[0]["stage_name"] == "unknown"
+
+
+class TestCallWithRetryTelemetry:
+    """`_call_with_retry` must emit one `agent_call` event per logical call
+    (retries collapse into a single event with the final outcome) capturing
+    model/purpose/stop_reason/duration_ms/token totals/success/error."""
+
+    def test_emits_agent_call_event_on_success(self, monkeypatch):
+        from v2.claude_client import _call_with_retry
+
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        response = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+            input_tokens=120,
+            output_tokens=45,
+            cache_creation=10,
+            cache_read=80,
+        )
+        client = _make_stream_mock(response)
+
+        _call_with_retry(
+            client,
+            model="claude-haiku-4-5",
+            max_tokens=4096,
+            system=[],
+            messages=[{"role": "user", "content": "hi"}],
+            session_id=42,
+            stage_name="trading",
+            purpose="executor",
+        )
+        assert len(recorded) == 1
+        ev = recorded[0]
+        assert ev["session_id"] == 42
+        assert ev["stage_name"] == "trading"
+        assert ev["event_type"] == "agent_call"
+        p = ev["payload"]
+        assert p["purpose"] == "executor"
+        assert p["model"] == "claude-haiku-4-5"
+        assert p["success"] is True
+        assert p["error"] is None
+        assert p["stop_reason"] == "end_turn"
+        assert p["input_tokens"] == 120
+        assert p["output_tokens"] == 45
+        assert p["cache_creation_tokens"] == 10
+        assert p["cache_read_tokens"] == 80
+        assert "duration_ms" in p
+
+    def test_emits_agent_call_event_on_failure(self, monkeypatch):
+        from v2.claude_client import _call_with_retry
+
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        # Use a non-retryable error so we get a single event with the
+        # final failure (retryable would emit only after retries).
+        client = _make_stream_mock(_make_bad_request_error("nope"))
+
+        with pytest.raises(anthropic.BadRequestError):
+            _call_with_retry(
+                client,
+                model="m",
+                max_tokens=10,
+                system=[],
+                messages=[{"role": "user", "content": "hi"}],
+                session_id=7,
+                stage_name="pipeline",
+                purpose="classifier_news",
+            )
+        assert len(recorded) == 1
+        p = recorded[0]["payload"]
+        assert p["success"] is False
+        assert p["error"] is not None
+        assert "stop_reason" not in p  # no response object available
+
+    def test_no_session_id_still_records(self, monkeypatch):
+        """Default kwargs → session_id=None → record_event no-ops at the
+        recorder layer; the call still happens so existing callers work."""
+        from v2.claude_client import _call_with_retry
+
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        response = _make_response(content=[_text_block("ok")], stop_reason="end_turn")
+        client = _make_stream_mock(response)
+
+        _call_with_retry(
+            client,
+            model="m",
+            max_tokens=10,
+            system=[],
+            messages=[{"role": "user", "content": "hi"}],
+        )
         assert len(recorded) == 1
         assert recorded[0]["session_id"] is None
-        assert recorded[0]["stage_name"] == "unknown"
+        assert recorded[0]["payload"]["purpose"] == "unknown"
+
+
+class TestLoopRecoveryTelemetry:
+    """`run_agentic_loop` recovers from `max_tokens` and context-length
+    errors by pruning + retrying. Each recovery branch fires at most once
+    per loop, so we expect 1 event per recovery."""
+
+    def test_emits_loop_recovery_on_max_tokens(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        truncated = _make_response(
+            content=[_text_block("partial...")],
+            stop_reason="max_tokens",
+        )
+        recovered = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([truncated, recovered])
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi", tools=[], tool_handlers={},
+            max_turns=3,
+            session_id=11, stage_name="ideation",
+        )
+
+        recovery = [r for r in recorded if r["event_type"] == "loop_recovery"]
+        assert len(recovery) == 1
+        ev = recovery[0]
+        assert ev["payload"]["reason"] == "max_tokens"
+        assert ev["payload"]["turn"] == 1
+        assert ev["payload"]["model"] == "m"
+
+    def test_emits_loop_recovery_on_context_length_error(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        ctx_err = _make_bad_request_error("prompt is too long: 250000 tokens > 200000 maximum")
+        recovered = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([ctx_err, recovered])
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi", tools=[], tool_handlers={},
+            max_turns=3,
+            session_id=11, stage_name="ideation",
+        )
+
+        recovery = [r for r in recorded if r["event_type"] == "loop_recovery"]
+        assert len(recovery) == 1
+        assert recovery[0]["payload"]["reason"] == "context_length"
+
+    def test_no_recovery_events_on_clean_run(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        end = _make_response(content=[_text_block("Done")], stop_reason="end_turn")
+        client = _make_stream_mock(end)
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi", tools=[], tool_handlers={},
+            max_turns=3,
+            session_id=11, stage_name="ideation",
+        )
+
+        recovery = [r for r in recorded if r["event_type"] == "loop_recovery"]
+        assert recovery == []
+
+
+class TestLoopCompletionTelemetry:
+    """`run_agentic_loop` emits exactly one `loop_completion` event per call,
+    on every terminal path (clean exit, max_turns, unexpected stop_reason)."""
+
+    def test_emits_loop_completion_on_clean_exit(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        end = _make_response(content=[_text_block("Done")], stop_reason="end_turn")
+        client = _make_stream_mock(end)
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi", tools=[], tool_handlers={},
+            max_turns=3,
+            session_id=99, stage_name="ideation",
+        )
+
+        completions = [r for r in recorded if r["event_type"] == "loop_completion"]
+        assert len(completions) == 1
+        p = completions[0]["payload"]
+        assert p["stop_reason"] == "end_turn"
+        assert p["turns_used"] == 1
+        assert p["model"] == "m"
+
+    def test_emits_loop_completion_on_max_turns(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        # Two tool_use turns without end_turn → loop hits max_turns=2.
+        tu1 = _make_response(
+            content=[_tool_use_block("t1", "fetch", {})],
+            stop_reason="tool_use",
+        )
+        tu2 = _make_response(
+            content=[_tool_use_block("t2", "fetch", {})],
+            stop_reason="tool_use",
+        )
+        client = _make_stream_mock([tu1, tu2])
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi",
+            tools=[{"name": "fetch"}],
+            tool_handlers={"fetch": lambda **k: "ok"},
+            max_turns=2,
+            session_id=99, stage_name="reflection",
+        )
+
+        completions = [r for r in recorded if r["event_type"] == "loop_completion"]
+        assert len(completions) == 1
+        p = completions[0]["payload"]
+        assert p["stop_reason"] == "max_turns"
+        assert p["turns_used"] == 2
+
+    def test_loop_completion_includes_token_totals(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        end = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+            input_tokens=200,
+            output_tokens=80,
+        )
+        client = _make_stream_mock(end)
+
+        run_agentic_loop(
+            client=client, model="m", system="sys",
+            initial_message="hi", tools=[], tool_handlers={},
+            max_turns=3,
+            session_id=99, stage_name="ideation",
+        )
+
+        completions = [r for r in recorded if r["event_type"] == "loop_completion"]
+        assert len(completions) == 1
+        p = completions[0]["payload"]
+        assert p["input_tokens"] == 200
+        assert p["output_tokens"] == 80

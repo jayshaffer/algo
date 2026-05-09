@@ -2,6 +2,8 @@
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from v2.agent import (
     AgentResponse,
     ExecutorDecision,
@@ -427,3 +429,159 @@ class TestValidateSignalRefsBatch:
         result = validate_signal_refs(refs)
         assert result == []
         assert mock_db.execute.call_count == 0
+
+
+class TestExecutorResponseTelemetry:
+    """`executor_response` event captures parse outcome + schema-drift
+    canary. Emitted on every parse path: success, max_tokens truncation,
+    and JSONDecodeError. `unknown_*_keys` flags fields the LLM produced
+    that we silently drop."""
+
+    @staticmethod
+    def _empty_executor_input():
+        return ExecutorInput(
+            playbook_actions=[], positions=[], account={"cash": "0"},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+    def test_emits_event_on_successful_parse(self):
+        recorded = []
+        json_resp = '{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_resp)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        events = [r for r in recorded if r["event_type"] == "executor_response"]
+        assert len(events) == 1
+        p = events[0]["payload"]
+        assert p["parse_succeeded"] is True
+        assert p["stop_reason"] == "end_turn"
+        assert p["decision_count"] == 0
+        assert p["unknown_top_level_keys"] == []
+        assert p["unknown_decision_keys"] == []
+        assert p["error"] is None
+
+    def test_captures_unknown_top_level_key(self):
+        recorded = []
+        json_resp = '{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":"","experimental_score":0.5}'
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_resp)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
+        assert ev["payload"]["unknown_top_level_keys"] == ["experimental_score"]
+
+    def test_captures_unknown_decision_key(self):
+        recorded = []
+        json_resp = (
+            '{"decisions":[{"ticker":"AAPL","action":"hold","reasoning":"x",'
+            '"confidence":"low","confidence_calibration":0.7}],'
+            '"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_resp)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
+        assert "confidence_calibration" in ev["payload"]["unknown_decision_keys"]
+
+    def test_emits_event_on_max_tokens(self):
+        recorded = []
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="partial...")]
+        mock_response.stop_reason = "max_tokens"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=4096)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            with pytest.raises(ValueError):
+                get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
+        assert ev["payload"]["parse_succeeded"] is False
+        assert ev["payload"]["error"] == "max_tokens_truncation"
+
+    def test_emits_event_on_parse_failure(self):
+        recorded = []
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="not valid json {{{")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            with pytest.raises(ValueError):
+                get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
+        assert ev["payload"]["parse_succeeded"] is False
+        assert ev["payload"]["error"].startswith("JSONDecodeError")
+
+    def test_truncates_raw_response_text_to_4kb(self):
+        recorded = []
+        big = "x" * 10000
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=big)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
+            with pytest.raises(ValueError):
+                get_trading_decisions(self._empty_executor_input(), session_id=42)
+
+        ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
+        assert len(ev["payload"]["raw_response_text_truncated"]) <= 4096
+
+
+class TestExecutorTelemetryWiring:
+    """`get_trading_decisions` must pass session_id/stage_name/purpose to
+    `_call_with_retry` so Phase 2's `agent_call` event carries the right
+    context. `purpose='executor'` is the auditor's filter for executor-level
+    truncation, parse, and latency checks."""
+
+    def test_passes_telemetry_kwargs_to_call_with_retry(self):
+        captured = {}
+
+        def fake_call(client, **kw):
+            captured.update(kw)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions": [], "thesis_invalidations": [], "market_summary": "", "risk_assessment": ""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=1, output_tokens=1)
+            return resp
+
+        ei = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+        with patch("v2.agent._call_with_retry", side_effect=fake_call), \
+             patch("v2.agent.get_claude_client"):
+            get_trading_decisions(ei, session_id=42)
+
+        assert captured.get("session_id") == 42
+        assert captured.get("stage_name") == "trading"
+        assert captured.get("purpose") == "executor"

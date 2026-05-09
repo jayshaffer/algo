@@ -20,7 +20,7 @@ class PipelineStats:
     errors: int
 
 
-def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False) -> PipelineStats:
+def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False, session_id: int | None = None) -> PipelineStats:
     """Run the news pipeline: fetch -> classify -> store."""
     stats = PipelineStats(news_fetched=0, ticker_signals_stored=0,
                           macro_signals_stored=0, noise_dropped=0, errors=0)
@@ -36,7 +36,7 @@ def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False) -> Pi
     headlines = [item.headline for item in news_items]
     published_ats = [item.published_at for item in news_items]
     alpaca_ids = [item.id for item in news_items]
-    results = classify_news_batch(headlines, published_ats, alpaca_ids=alpaca_ids)
+    results = classify_news_batch(headlines, published_ats, alpaca_ids=alpaca_ids, session_id=session_id)
 
     # Step 3: Store signals
     ticker_signals_batch = []

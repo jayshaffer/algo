@@ -906,6 +906,443 @@ def check_ideation_tool_drought(cur) -> list[Finding]:
     )]
 
 
+# --- Phase 2: agent_call / loop / executor_response checks ---------------
+
+EXECUTOR_TRUNC_WARN_PCT = 0.10
+EXECUTOR_TRUNC_CRITICAL_PCT = 0.25
+EXECUTOR_TRUNC_MIN_N = 5
+
+
+def check_executor_truncation_rate(cur) -> list[Finding]:
+    """Executor calls hitting max_tokens. Indicates input context too large
+    or max_tokens budget set too low. Both are silent quality regressions."""
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (
+                 WHERE payload->>'stop_reason' = 'max_tokens'
+               ) AS truncated
+        FROM agent_events
+        WHERE event_type = 'agent_call'
+          AND payload->>'purpose' = 'executor'
+          AND occurred_at > now() - interval '14 days'
+        """
+    )
+    r = cur.fetchone() or {"total": 0, "truncated": 0}
+    if r["total"] < EXECUTOR_TRUNC_MIN_N or not r["truncated"]:
+        return []
+    rate = r["truncated"] / r["total"]
+    if rate < EXECUTOR_TRUNC_WARN_PCT:
+        return []
+    sev = "critical" if rate >= EXECUTOR_TRUNC_CRITICAL_PCT else "warn"
+    return [Finding(
+        check_code="EXECUTOR_TRUNCATION_RATE",
+        tier=3, severity=sev,
+        title=f"Executor truncated on {r['truncated']}/{r['total']} calls (last 14d)",
+        body=("Executor responses hit max_tokens. Input context may be too "
+              "large; check ExecutorInput field sizes. Or model max_tokens "
+              "budget needs raising."),
+        affected_count=r["truncated"],
+        evidence={"total": r["total"], "truncated": r["truncated"], "rate": round(rate, 3)},
+        auto_fix=None,
+    )]
+
+
+SCHEMA_DRIFT_MIN_OCCURRENCES = 3
+
+
+def check_executor_schema_drift(cur) -> list[Finding]:
+    """LLM emitting JSON keys we don't parse. Canary for executor schema
+    drift across model versions or prompt changes."""
+    cur.execute(
+        """
+        SELECT key, COUNT(*) AS n
+        FROM agent_events,
+             LATERAL jsonb_array_elements_text(payload->'unknown_top_level_keys') AS t(key)
+        WHERE event_type = 'executor_response'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        """,
+        (SCHEMA_DRIFT_MIN_OCCURRENCES,),
+    )
+    top_drift = cur.fetchall()
+
+    cur.execute(
+        """
+        SELECT key, COUNT(*) AS n
+        FROM agent_events,
+             LATERAL jsonb_array_elements_text(payload->'unknown_decision_keys') AS t(key)
+        WHERE event_type = 'executor_response'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        """,
+        (SCHEMA_DRIFT_MIN_OCCURRENCES,),
+    )
+    dec_drift = cur.fetchall()
+
+    if not top_drift and not dec_drift:
+        return []
+    return [Finding(
+        check_code="EXECUTOR_SCHEMA_DRIFT",
+        tier=3, severity="warn",
+        title=f"Executor LLM emitting unknown JSON keys (top:{len(top_drift)}, decision:{len(dec_drift)})",
+        body=("Executor response contains JSON fields not in our canonical "
+              "key sets. Either the prompt is requesting new fields the "
+              "parser doesn't handle, or the LLM is emitting drift we should "
+              "either consume or suppress. Update EXECUTOR_KNOWN_*_KEYS or "
+              "the parser in v2/agent.py."),
+        affected_count=len(top_drift) + len(dec_drift),
+        evidence={
+            "top_level_drift": [{"key": r["key"], "n": r["n"]} for r in top_drift],
+            "decision_drift": [{"key": r["key"], "n": r["n"]} for r in dec_drift],
+        },
+        auto_fix=None,
+    )]
+
+
+PARSE_FAIL_WARN_PCT = 0.05
+PARSE_FAIL_CRITICAL_PCT = 0.15
+PARSE_FAIL_MIN_N = 5
+
+
+def check_executor_parse_failure_rate(cur) -> list[Finding]:
+    """Executor responses failing to parse for reasons OTHER than truncation.
+    Distinct from EXECUTOR_TRUNCATION_RATE: this catches malformed JSON."""
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (
+                 WHERE (payload->>'parse_succeeded')::boolean = false
+                   AND payload->>'error' NOT LIKE 'max_tokens%%'
+               ) AS parse_failed
+        FROM agent_events
+        WHERE event_type = 'executor_response'
+          AND occurred_at > now() - interval '14 days'
+        """
+    )
+    r = cur.fetchone() or {"total": 0, "parse_failed": 0}
+    if r["total"] < PARSE_FAIL_MIN_N or not r["parse_failed"]:
+        return []
+    rate = r["parse_failed"] / r["total"]
+    if rate < PARSE_FAIL_WARN_PCT:
+        return []
+    sev = "critical" if rate >= PARSE_FAIL_CRITICAL_PCT else "warn"
+    return [Finding(
+        check_code="EXECUTOR_PARSE_FAILURE_RATE",
+        tier=3, severity=sev,
+        title=f"Executor JSON parse failed on {r['parse_failed']}/{r['total']} non-truncated calls (last 14d)",
+        body=("Executor responses are failing JSON parse for reasons other "
+              "than max_tokens truncation. Likely causes: prompt regression "
+              "causing prose responses, fenced-code-block edge cases the "
+              "stripper misses, or the LLM returning structured output in a "
+              "different shape. Inspect raw_response_text_truncated on "
+              "recent failures."),
+        affected_count=r["parse_failed"],
+        evidence={"total": r["total"], "parse_failed": r["parse_failed"], "rate": round(rate, 3)},
+        auto_fix=None,
+    )]
+
+
+CLASSIFIER_WARN_PCT = 0.10
+CLASSIFIER_CRITICAL_PCT = 0.25
+CLASSIFIER_MIN_N = 10
+
+
+def check_classifier_error_rate(cur) -> list[Finding]:
+    """News/macro/relevance classifier failing on items in pipeline stage."""
+    cur.execute(
+        """
+        SELECT payload->>'purpose' AS purpose,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE COALESCE((payload->>'success')::boolean, true) = false) AS errors
+        FROM agent_events
+        WHERE event_type = 'agent_call'
+          AND payload->>'purpose' LIKE 'classifier_%%'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        """,
+        (CLASSIFIER_MIN_N,),
+    )
+    flagged = []
+    for r in cur.fetchall():
+        rate = r["errors"] / r["total"] if r["total"] else 0
+        if rate >= CLASSIFIER_WARN_PCT:
+            flagged.append({"purpose": r["purpose"], "total": r["total"],
+                            "errors": r["errors"], "rate": round(rate, 3)})
+    if not flagged:
+        return []
+    worst = max(f["rate"] for f in flagged)
+    sev = "critical" if worst >= CLASSIFIER_CRITICAL_PCT else "warn"
+    return [Finding(
+        check_code="CLASSIFIER_ERROR_RATE",
+        tier=3, severity=sev,
+        title=f"{len(flagged)} classifier purpose(s) with error rate >= {int(CLASSIFIER_WARN_PCT*100)}% in last 7d",
+        body="Classifier calls failing in the pipeline stage. Investigate handler exceptions or API errors.",
+        affected_count=len(flagged),
+        evidence={"classifiers": flagged},
+        auto_fix=None,
+    )]
+
+
+GENERAL_CALL_ERROR_WARN_PCT = 0.10
+GENERAL_CALL_ERROR_CRITICAL_PCT = 0.25
+GENERAL_CALL_ERROR_MIN_N = 10
+
+
+def check_agent_call_error_rate_by_purpose(cur) -> list[Finding]:
+    """Catch-all error rate by purpose. Excludes `classifier_*` (covered by
+    its own check with tighter thresholds and distinct remediation)."""
+    cur.execute(
+        """
+        SELECT payload->>'purpose' AS purpose,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE COALESCE((payload->>'success')::boolean, true) = false) AS errors
+        FROM agent_events
+        WHERE event_type = 'agent_call'
+          AND occurred_at > now() - interval '7 days'
+          AND COALESCE(payload->>'purpose', '') NOT LIKE 'classifier_%%'
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        """,
+        (GENERAL_CALL_ERROR_MIN_N,),
+    )
+    flagged = []
+    for r in cur.fetchall():
+        rate = r["errors"] / r["total"] if r["total"] else 0
+        if rate >= GENERAL_CALL_ERROR_WARN_PCT:
+            flagged.append({"purpose": r["purpose"], "total": r["total"],
+                            "errors": r["errors"], "rate": round(rate, 3)})
+    if not flagged:
+        return []
+    worst = max(f["rate"] for f in flagged)
+    sev = "critical" if worst >= GENERAL_CALL_ERROR_CRITICAL_PCT else "warn"
+    return [Finding(
+        check_code="AGENT_CALL_ERROR_RATE_BY_PURPOSE",
+        tier=3, severity=sev,
+        title=f"{len(flagged)} agent purpose(s) with error rate >= {int(GENERAL_CALL_ERROR_WARN_PCT*100)}% in last 7d",
+        body=("Generic per-purpose error tracking. Investigate the specific "
+              "purpose's call site for handler exceptions or upstream API errors."),
+        affected_count=len(flagged),
+        evidence={"purposes": flagged},
+        auto_fix=None,
+    )]
+
+
+RECOVERY_BURST_MIN = 3
+
+
+def check_loop_recovery_burst(cur) -> list[Finding]:
+    """Agentic-loop recovery branches firing often. Either prompts are
+    generating responses that exceed max_tokens or message history is
+    bloating to context-length limits."""
+    cur.execute(
+        """
+        SELECT payload->>'reason' AS reason, COUNT(*) AS n
+        FROM agent_events
+        WHERE event_type = 'loop_recovery'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        """,
+        (RECOVERY_BURST_MIN,),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    return [Finding(
+        check_code="LOOP_RECOVERY_BURST",
+        tier=3, severity="warn",
+        title=f"{len(rows)} loop-recovery reason(s) firing >= {RECOVERY_BURST_MIN} times in 7d",
+        body=("`run_agentic_loop` recovery branches (max_tokens retry / "
+              "context-length aggressive prune) firing often. Investigate "
+              "prompt size, message history pruning, or model max_tokens."),
+        affected_count=sum(r["n"] for r in rows),
+        evidence={"recoveries": [{"reason": r["reason"], "n": r["n"]} for r in rows]},
+        auto_fix=None,
+    )]
+
+
+MAX_TURNS_WARN_N = 1
+MAX_TURNS_CRITICAL_N = 3
+
+
+def check_loop_max_turns_hit(cur) -> list[Finding]:
+    """Agentic loops terminating because they hit max_turns rather than
+    end_turn. Means strategist or reflection ran out of turn budget mid-task,
+    leaving incomplete work."""
+    cur.execute(
+        """
+        SELECT stage_name, COUNT(*) AS n,
+               array_agg(DISTINCT session_id ORDER BY session_id DESC) AS session_ids
+        FROM agent_events
+        WHERE event_type = 'loop_completion'
+          AND payload->>'stop_reason' = 'max_turns'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        """
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    total = sum(r["n"] for r in rows)
+    if total < MAX_TURNS_WARN_N:
+        return []
+    sev = "critical" if total >= MAX_TURNS_CRITICAL_N else "warn"
+    return [Finding(
+        check_code="LOOP_MAX_TURNS_HIT",
+        tier=3, severity=sev,
+        title=f"{total} agentic-loop run(s) terminated by max_turns in last 7d",
+        body=("`run_agentic_loop` exited because it hit max_turns, not "
+              "because Claude returned end_turn. Strategist or reflection "
+              "didn't finish its task — playbook may be partial, rules may "
+              "not have been proposed/retired. Either the prompt is asking "
+              "for too much, the tool surface is too noisy, or max_turns "
+              "needs raising."),
+        affected_count=total,
+        evidence={"by_stage": [
+            {"stage_name": r["stage_name"], "n": r["n"],
+             "recent_session_ids": list(r["session_ids"] or [])[:5]}
+            for r in rows
+        ]},
+        auto_fix=None,
+    )]
+
+
+CACHE_RATIO_DROP_PCT_POINTS = 0.30
+CACHE_RATIO_MIN_N = 10
+
+
+def check_cache_hit_ratio_degradation(cur) -> list[Finding]:
+    """Cache breakpoint placement broken — silent cost regression. The
+    Anthropic prompt cache halves API costs; if a refactor moves cache
+    breakpoints or breaks ephemeral cache markers, costs silently double."""
+    cur.execute(
+        """
+        WITH recent AS (
+            SELECT payload->>'purpose' AS purpose,
+                   SUM((payload->>'cache_read_tokens')::int) AS cache_read,
+                   SUM((payload->>'cache_creation_tokens')::int) AS cache_creation,
+                   SUM((payload->>'input_tokens')::int) AS input_tok,
+                   COUNT(*) AS n
+            FROM agent_events
+            WHERE event_type = 'agent_call'
+              AND occurred_at > now() - interval '7 days'
+              AND COALESCE((payload->>'success')::boolean, true) = true
+            GROUP BY 1
+        ),
+        prior AS (
+            SELECT payload->>'purpose' AS purpose,
+                   SUM((payload->>'cache_read_tokens')::int) AS cache_read,
+                   SUM((payload->>'cache_creation_tokens')::int) AS cache_creation,
+                   SUM((payload->>'input_tokens')::int) AS input_tok,
+                   COUNT(*) AS n
+            FROM agent_events
+            WHERE event_type = 'agent_call'
+              AND occurred_at > now() - interval '14 days'
+              AND occurred_at <= now() - interval '7 days'
+              AND COALESCE((payload->>'success')::boolean, true) = true
+            GROUP BY 1
+        )
+        SELECT r.purpose,
+               r.cache_read::float / NULLIF(r.cache_read + r.cache_creation + r.input_tok, 0) AS recent_ratio,
+               p.cache_read::float / NULLIF(p.cache_read + p.cache_creation + p.input_tok, 0) AS prior_ratio,
+               r.n AS recent_n,
+               p.n AS prior_n
+        FROM recent r JOIN prior p ON p.purpose = r.purpose
+        WHERE r.n >= %s AND p.n >= %s
+        """,
+        (CACHE_RATIO_MIN_N, CACHE_RATIO_MIN_N),
+    )
+    flagged = []
+    for r in cur.fetchall():
+        recent = r["recent_ratio"] or 0
+        prior = r["prior_ratio"] or 0
+        if prior - recent >= CACHE_RATIO_DROP_PCT_POINTS:
+            flagged.append({
+                "purpose": r["purpose"],
+                "recent_ratio": round(recent, 3),
+                "prior_ratio": round(prior, 3),
+                "drop_pct_points": round(prior - recent, 3),
+            })
+    if not flagged:
+        return []
+    return [Finding(
+        check_code="CACHE_HIT_RATIO_DEGRADATION",
+        tier=3, severity="info",
+        title=f"{len(flagged)} agent purpose(s) with cache_read share dropped >= {int(CACHE_RATIO_DROP_PCT_POINTS*100)}pp vs prior 7d",
+        body=("Cache-read token share dropped sharply for one or more "
+              "purposes. Likely cause: a refactor moved/removed an "
+              "`ephemeral` cache breakpoint in `cached_system` or tool "
+              "definitions. This silently doubles API cost. Inspect recent "
+              "changes to system prompts and tool registration."),
+        affected_count=len(flagged),
+        evidence={"degradations": flagged},
+        auto_fix=None,
+    )]
+
+
+LATENCY_DRIFT_RATIO = 2.0
+LATENCY_MIN_N = 10
+
+
+def check_agent_call_latency_drift(cur) -> list[Finding]:
+    """p95 duration_ms by purpose — spike detector."""
+    cur.execute(
+        """
+        WITH recent AS (
+            SELECT payload->>'purpose' AS purpose,
+                   percentile_cont(0.95) WITHIN GROUP
+                       (ORDER BY (payload->>'duration_ms')::int) AS p95,
+                   COUNT(*) AS n
+            FROM agent_events
+            WHERE event_type = 'agent_call'
+              AND occurred_at > now() - interval '7 days'
+              AND payload ? 'duration_ms'
+            GROUP BY 1
+        ),
+        prior AS (
+            SELECT payload->>'purpose' AS purpose,
+                   percentile_cont(0.95) WITHIN GROUP
+                       (ORDER BY (payload->>'duration_ms')::int) AS p95,
+                   COUNT(*) AS n
+            FROM agent_events
+            WHERE event_type = 'agent_call'
+              AND occurred_at > now() - interval '14 days'
+              AND occurred_at <= now() - interval '7 days'
+              AND payload ? 'duration_ms'
+            GROUP BY 1
+        )
+        SELECT r.purpose, r.p95 AS recent_p95, p.p95 AS prior_p95
+        FROM recent r JOIN prior p ON p.purpose = r.purpose
+        WHERE r.n >= %s AND p.n >= %s
+          AND p.p95 > 0
+          AND r.p95 >= %s * p.p95
+        """,
+        (LATENCY_MIN_N, LATENCY_MIN_N, LATENCY_DRIFT_RATIO),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    return [Finding(
+        check_code="AGENT_CALL_LATENCY_DRIFT",
+        tier=3, severity="info",
+        title=f"{len(rows)} agent purpose(s) with p95 latency >= {LATENCY_DRIFT_RATIO}x prior 7-day window",
+        body="Per-purpose p95 latency in last 7d is significantly elevated vs prior 7d.",
+        affected_count=len(rows),
+        evidence={"drifts": [
+            {"purpose": r["purpose"],
+             "recent_p95_ms": int(r["recent_p95"]),
+             "prior_p95_ms": int(r["prior_p95"]),
+             "ratio": round(r["recent_p95"] / r["prior_p95"], 2)}
+            for r in rows
+        ]},
+        auto_fix=None,
+    )]
+
+
 def check_rule_judgment(cur) -> list[Finding]:
     """Single LLM call surveying active rules for the 5 overfitting patterns."""
     cur.execute("SELECT id, rule_text, created_at FROM strategy_rules WHERE status='active'")
@@ -1014,6 +1451,15 @@ CHECKS: list = [
     "check_risk_block_hotspot",
     "check_risk_block_burst",
     "check_ideation_tool_drought",
+    "check_executor_truncation_rate",
+    "check_executor_schema_drift",
+    "check_executor_parse_failure_rate",
+    "check_classifier_error_rate",
+    "check_agent_call_error_rate_by_purpose",
+    "check_loop_recovery_burst",
+    "check_loop_max_turns_hit",
+    "check_cache_hit_ratio_degradation",
+    "check_agent_call_latency_drift",
     "check_rule_judgment",
 ]
 

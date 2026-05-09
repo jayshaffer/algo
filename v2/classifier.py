@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from .claude_client import _call_with_retry, get_claude_client
+from .claude_client import AgentPurpose, _call_with_retry, get_claude_client
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +297,8 @@ def _build_classification_result(
 
 
 def classify_news(
-    headline: str, published_at: datetime, client=None, alpaca_id: str | None = None
+    headline: str, published_at: datetime, client=None, alpaca_id: str | None = None,
+    *, session_id: int | None = None,
 ) -> ClassificationResult:
     """
     Classify a single news headline using Claude Haiku.
@@ -322,6 +323,9 @@ def classify_news(
             max_tokens=256,
             system=_CACHED_CLASSIFICATION_SYSTEM,
             messages=[{"role": "user", "content": _sanitize_headline(headline)}],
+            session_id=session_id,
+            stage_name="pipeline",
+            purpose=AgentPurpose.CLASSIFIER_NEWS,
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)
@@ -340,6 +344,8 @@ def classify_news_batch(
     published_ats: list[datetime],
     batch_size: int = 50,
     alpaca_ids: list[str | None] | None = None,
+    *,
+    session_id: int | None = None,
 ) -> list[ClassificationResult]:
     """
     Classify multiple headlines in batched Claude Haiku calls.
@@ -369,7 +375,7 @@ def classify_news_batch(
         batch_ids = alpaca_ids[start:start + batch_size]
 
         try:
-            batch_results = _classify_batch(batch_headlines, batch_dates, batch_ids)
+            batch_results = _classify_batch(batch_headlines, batch_dates, batch_ids, session_id=session_id)
             results.extend(batch_results)
         except _anthropic.RateLimitError as e:
             # P2.20: don't fan out N per-call retries on rate limit — the batch
@@ -383,7 +389,7 @@ def classify_news_batch(
             logger.warning("Batch classification failed (%s), falling back to individual", e)
             for headline, pub_date, aid in zip(batch_headlines, batch_dates, batch_ids, strict=True):
                 try:
-                    results.append(classify_news(headline, pub_date, alpaca_id=aid))
+                    results.append(classify_news(headline, pub_date, alpaca_id=aid, session_id=session_id))
                 except Exception:
                     results.append(ClassificationResult(
                         news_type="noise", ticker_signals=[], macro_signal=None
@@ -395,6 +401,7 @@ def classify_news_batch(
 def _classify_batch(
     headlines: list[str], published_ats: list[datetime],
     alpaca_ids: list[str | None] | None = None,
+    *, session_id: int | None = None,
 ) -> list[ClassificationResult]:
     """Classify a single batch of headlines in one Claude Haiku call."""
     headlines_block = "\n".join(
@@ -411,6 +418,9 @@ def _classify_batch(
         max_tokens=4096,
         system=_CACHED_BATCH_CLASSIFICATION_SYSTEM,
         messages=[{"role": "user", "content": headlines_block}],
+        session_id=session_id,
+        stage_name="pipeline",
+        purpose=AgentPurpose.CLASSIFIER_NEWS,
     )
 
     # Parse JSON array from response
@@ -452,7 +462,8 @@ def _classify_batch(
 
 
 def classify_ticker_news(
-    ticker: str, headline: str, published_at: datetime, client=None
+    ticker: str, headline: str, published_at: datetime, client=None,
+    *, session_id: int | None = None,
 ) -> TickerSignal:
     """
     Classify news for a specific ticker (when ticker is already known).
@@ -475,6 +486,9 @@ def classify_ticker_news(
             max_tokens=256,
             system=_CACHED_TICKER_CLASSIFICATION_SYSTEM,
             messages=[{"role": "user", "content": f"Ticker: {ticker}\nHeadline: {_sanitize_headline(headline)}"}],
+            session_id=session_id,
+            stage_name="pipeline",
+            purpose=AgentPurpose.CLASSIFIER_RELEVANCE,
         )
         text = _strip_code_fences(response.content[0].text)
         result = json.loads(text)
