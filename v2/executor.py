@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 
 # Alpaca documents fractional-share precision at 9 decimals. Quantize ROUND_DOWN
@@ -542,7 +542,7 @@ def get_latest_price(
 
         # Staleness check
         if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
-            age = (datetime.now(UTC) - quote.timestamp).total_seconds()
+            age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
             if age > max_age_seconds:
                 logger.warning("%s: quote is %.0fs old (max %ds) — rejecting", ticker, age, max_age_seconds)
                 return None
