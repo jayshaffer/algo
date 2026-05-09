@@ -1128,6 +1128,64 @@ class TestSectorCapHardGate:
         assert "sector" in d3.reasoning.lower()
 
 
+class TestRiskBlockTelemetry:
+    """When the sector-cap gate rejects a buy, the trader must emit a
+    `risk_block` event so the auditor can detect ticker hotspots and bursts
+    (RISK_BLOCK_HOTSPOT, RISK_BLOCK_BURST). No event when the gate doesn't trip."""
+
+    def test_emits_risk_block_event_on_sector_cap_breach(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="MSFT", action="buy",
+            intent_type="invest_dollar",
+            intent_magnitude=Decimal("2000"),
+        )
+        with ExitStack() as stack:
+            mock_rec = stack.enter_context(patch("v2.trader.record_event"))
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "AAPL", "shares": Decimal("260")},
+                ]),
+            })
+            run_trading_session(dry_run=False)
+
+        risk_events = [
+            c for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "risk_block"
+        ]
+        assert len(risk_events) == 1
+        ev = risk_events[0].kwargs
+        assert ev["stage_name"] == "trading"
+        payload = ev["payload"]
+        assert payload["ticker"] == "MSFT"
+        assert payload["sector"] == "tech"
+        assert payload["proposed_qty"] is not None
+        assert payload["price"] is not None
+        assert payload["sector_pct_after"] is not None
+        assert payload["cap"] is not None
+        assert "sector" in payload["reason_text"].lower()
+
+    def test_no_risk_block_event_when_under_cap(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="MSFT", action="buy",
+            intent_type="invest_dollar",
+            intent_magnitude=Decimal("2000"),
+        )
+        with ExitStack() as stack:
+            mock_rec = stack.enter_context(patch("v2.trader.record_event"))
+            _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[
+                    {"ticker": "AAPL", "shares": Decimal("200")},
+                ]),
+            })
+            run_trading_session(dry_run=False)
+
+        risk_events = [
+            c for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "risk_block"
+        ]
+        assert risk_events == []
+
+
 class TestZeroResolvedQty:
     def test_sell_resolves_to_zero_when_no_holdings(self, mock_db, mock_cursor):
         """exit_full on a ticker with 0 shares → resolved_qty=0 → skip path."""

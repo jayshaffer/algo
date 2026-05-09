@@ -205,6 +205,8 @@ def _run_claude_loop(
     model: str,
     max_turns: int,
     label: str,
+    session_id: int | None = None,
+    stage_name: str | None = None,
 ) -> ClaudeIdeationResult:
     """Run a Claude agentic loop and return a standardized result.
 
@@ -224,6 +226,8 @@ def _run_claude_loop(
         tools=TOOL_DEFINITIONS,
         tool_handlers=TOOL_HANDLERS,
         max_turns=max_turns,
+        session_id=session_id,
+        stage_name=stage_name,
     )
 
     created, updated, closed, adopted = count_actions(result.messages)
@@ -288,6 +292,7 @@ def _print_cost_summary(label, result, model, created, updated, closed, summary,
 def run_ideation_claude(
     model: str = "claude-opus-4-6",
     max_turns: int = 20,
+    session_id: int | None = None,
 ) -> ClaudeIdeationResult:
     """Run an agentic ideation session with Claude.
 
@@ -307,6 +312,8 @@ When you've completed your research, provide a summary of your findings and acti
         model=model,
         max_turns=max_turns,
         label="Claude Ideation Session",
+        session_id=session_id,
+        stage_name="ideation",
     )
 
 
@@ -379,6 +386,7 @@ def run_strategist_loop(
     max_turns: int = 25,
     system_prompt: str = None,
     attribution_constraints: str = "",
+    session_id: int | None = None,
 ) -> ClaudeIdeationResult:
     """Run the strategist agentic loop.
 
@@ -424,6 +432,8 @@ When you've completed your work, provide a summary of your findings and actions.
         model=model,
         max_turns=max_turns,
         label="Strategist Loop",
+        session_id=session_id,
+        stage_name="ideation",
     )
 
 

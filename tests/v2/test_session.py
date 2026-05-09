@@ -1566,3 +1566,37 @@ class TestLogSessionCosts:
         assert "$1.32" in log_text  # Total
         # Stages with NULL cost are omitted from the breakdown
         assert "dashboard" not in log_text
+
+
+class TestSessionEndTelemetryLog:
+    """`_finalize_session` should emit a `[telemetry]` summary line keyed
+    on the live session_id so per-session tool-usage rolls up at one
+    grep-able location."""
+
+    def test_session_summary_line_called_with_session_id(self):
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.insert_session_record", return_value=77), \
+             patch("v2.session.session_summary_line",
+                   return_value="[telemetry] session=77 tools={}") as mock_summary:
+            run_session(dry_run=False)
+
+        mock_summary.assert_called_once_with(77)
+
+    def test_session_summary_failure_does_not_break_session(self):
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.insert_session_record", return_value=77), \
+             patch("v2.session.session_summary_line", side_effect=RuntimeError("DB down")):
+            # Should not raise — telemetry never breaks a session.
+            result = run_session(dry_run=False)
+
+        assert result is not None

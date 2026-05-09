@@ -652,7 +652,14 @@ class TestRunStrategyReflection:
         call_kwargs = mock_loop.call_args
         assert call_kwargs.kwargs["system"] == STRATEGY_REFLECTION_SYSTEM
         assert call_kwargs.kwargs["tools"] == STRATEGY_TOOL_DEFINITIONS
-        assert call_kwargs.kwargs["tool_handlers"] == STRATEGY_TOOL_HANDLERS
+        # `get_session_summary` is wrapped by the telemetry partial; check the
+        # remaining handlers identity-match and the wrapped slot is present.
+        passed_handlers = call_kwargs.kwargs["tool_handlers"]
+        assert "get_session_summary" in passed_handlers
+        for name, fn in STRATEGY_TOOL_HANDLERS.items():
+            if name == "get_session_summary":
+                continue
+            assert passed_handlers[name] is fn
         assert call_kwargs.kwargs["max_turns"] == 5
         assert call_kwargs.kwargs["model"] == "claude-opus-4-6"
 
@@ -684,6 +691,105 @@ class TestRunStrategyReflection:
         assert result.rules_retired == 1
         assert result.identity_updated is True
         assert result.memo_written is True
+
+    @patch("v2.strategy.get_claude_client")
+    @patch("v2.strategy.run_agentic_loop")
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_passes_session_id_and_stage_name_to_loop(self, mock_formation, mock_loop, mock_client):
+        """`run_strategy_reflection` must thread session_id + stage_name='reflection'
+        to the agentic loop so tool_invocation events carry session context."""
+        from v2.claude_client import AgenticLoopResult
+        from v2.strategy import run_strategy_reflection
+
+        mock_loop.return_value = AgenticLoopResult(
+            messages=[],
+            turns_used=1,
+            stop_reason="end_turn",
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        run_strategy_reflection(session_id=42)
+
+        call_kwargs = mock_loop.call_args.kwargs
+        assert call_kwargs["session_id"] == 42
+        assert call_kwargs["stage_name"] == "reflection"
+
+
+class TestEvidenceShownEvent:
+    """`tool_get_session_summary_with_telemetry` is a session-aware wrapper
+    around the real session-summary tool. It emits an `evidence_shown` event
+    keyed on the session so the auditor can check whether reflection actually
+    *saw* round-trip evidence — currently invisible because round-trip data
+    is computed inline and never persisted."""
+
+    def test_emits_evidence_shown_with_round_trips(self, mock_db):
+        from datetime import date
+        from v2.patterns import RoundTrip
+        from v2.strategy import tool_get_session_summary_with_telemetry
+
+        with patch("v2.strategy.tool_get_session_summary", return_value="summary"), \
+             patch("v2.strategy.analyze_round_trips") as mock_rt, \
+             patch("v2.strategy.record_event") as mock_rec:
+            mock_rt.return_value = [
+                RoundTrip(
+                    ticker="GOOGL",
+                    pair_count=7,
+                    first_date=date(2026, 4, 17),
+                    last_date=date(2026, 5, 8),
+                ),
+            ]
+            tool_get_session_summary_with_telemetry(days=30, session_id=42)
+
+        evidence_calls = [
+            c for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "evidence_shown"
+        ]
+        assert len(evidence_calls) == 1
+        ev = evidence_calls[0].kwargs
+        assert ev["session_id"] == 42
+        assert ev["stage_name"] == "reflection"
+        assert ev["payload"]["evidence_kind"] == "round_trips"
+        assert ev["payload"]["items"][0]["ticker"] == "GOOGL"
+        assert ev["payload"]["items"][0]["pair_count"] == 7
+        assert ev["payload"]["summary"]["n_tickers"] == 1
+
+    def test_emits_evidence_shown_when_no_round_trips(self, mock_db):
+        """Auditor needs the explicit empty event to distinguish 'reflection
+        was shown nothing' from 'wrapper never ran'."""
+        from v2.strategy import tool_get_session_summary_with_telemetry
+
+        with patch("v2.strategy.tool_get_session_summary", return_value="summary"), \
+             patch("v2.strategy.analyze_round_trips", return_value=[]), \
+             patch("v2.strategy.record_event") as mock_rec:
+            tool_get_session_summary_with_telemetry(days=30, session_id=42)
+
+        evidence_calls = [
+            c for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "evidence_shown"
+        ]
+        assert len(evidence_calls) == 1
+        ev = evidence_calls[0].kwargs
+        assert ev["payload"]["items"] == []
+        assert ev["payload"]["summary"]["n_tickers"] == 0
+
+    def test_no_event_when_session_id_none(self, mock_db):
+        from v2.strategy import tool_get_session_summary_with_telemetry
+
+        with patch("v2.strategy.tool_get_session_summary", return_value="summary"), \
+             patch("v2.strategy.analyze_round_trips", return_value=[]), \
+             patch("v2.strategy.record_event") as mock_rec:
+            tool_get_session_summary_with_telemetry(days=30, session_id=None)
+
+        # record_event called with session_id=None is itself a no-op, but the
+        # call must still happen so the wrapper's contract stays simple.
+        # Auditor relies on session_id being non-null for any persisted row.
+        evidence_calls = [
+            c for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "evidence_shown"
+        ]
+        assert len(evidence_calls) == 1
+        assert evidence_calls[0].kwargs["session_id"] is None
 
 
 class TestRuleTenureGuard:

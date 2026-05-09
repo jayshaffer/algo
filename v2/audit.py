@@ -633,6 +633,279 @@ def _reset_rule_judgment_usage() -> None:
     _LAST_RULE_JUDGMENT_USAGE.clear()
 
 
+# --- Phase 1: agent_events-driven checks ---------------------------------
+
+# Tools the strategist should be using on a typical ideation run. A persistent
+# zero across the last 7 sessions for any of these is a drought. Kept narrow
+# on purpose: don't include narrow rare-call tools (close_thesis, adopt_thesis)
+# whose absence is normal for many sessions.
+EXPECTED_IDEATION_TOOLS = (
+    "get_portfolio_state",
+    "get_active_theses",
+    "get_news_signals",
+    "get_signal_attribution",
+    "get_recent_playbooks",
+    "write_playbook",
+)
+
+
+def check_strategist_using_reversal_tool(cur) -> list[Finding]:
+    """Warn when 3 consecutive sessions had round-trip evidence shown but the
+    ideation stage never called `get_recent_playbooks`. The reversal tool
+    exists specifically so the strategist can sanity-check its own flip-flops
+    against prior plays — silence here means the loop isn't using the
+    feedback we wired up."""
+    cur.execute(
+        """
+        WITH recent_sessions AS (
+            SELECT DISTINCT session_id
+            FROM agent_events
+            WHERE session_id IS NOT NULL
+              AND occurred_at > now() - interval '14 days'
+            ORDER BY session_id DESC
+            LIMIT 3
+        )
+        SELECT s.session_id,
+               SUM(CASE
+                     WHEN e.event_type='evidence_shown'
+                      AND e.payload->>'evidence_kind'='round_trips'
+                      AND COALESCE(jsonb_array_length(e.payload->'items'), 0) > 0
+                     THEN 1 ELSE 0 END) AS reversal_evidence,
+               SUM(CASE
+                     WHEN e.event_type='tool_invocation'
+                      AND e.payload->>'tool_name'='get_recent_playbooks'
+                      AND e.stage_name='ideation'
+                     THEN 1 ELSE 0 END) AS lookup_calls
+        FROM recent_sessions s
+        LEFT JOIN agent_events e ON e.session_id = s.session_id
+        GROUP BY s.session_id
+        ORDER BY s.session_id DESC
+        """
+    )
+    rows = cur.fetchall()
+    if len(rows) < 3:
+        return []
+    if not all(r["reversal_evidence"] >= 1 and r["lookup_calls"] == 0 for r in rows):
+        return []
+    return [Finding(
+        check_code="STRATEGIST_NOT_USING_REVERSAL_TOOL",
+        tier=3, severity="warn",
+        title="Strategist not consulting prior playbooks despite round-trip evidence",
+        body=(
+            "3 consecutive sessions showed round-trip evidence to reflection, but the "
+            "ideation stage never called `get_recent_playbooks` to compare against prior "
+            "plays. The reversal-lookup tool exists for this exact case."
+        ),
+        affected_count=len(rows),
+        evidence={"sessions": [dict(r) for r in rows]},
+        auto_fix=None,
+    )]
+
+
+def check_reflection_inert_on_round_trips(cur) -> list[Finding]:
+    """Warn when 5 consecutive sessions had round-trip evidence shown to
+    reflection AND zero rule actions (propose_rule / retire_rule) from
+    reflection in those sessions. Reflection is supposed to convert
+    repeated-flip-flop signal into rule changes."""
+    cur.execute(
+        """
+        WITH recent_sessions AS (
+            SELECT DISTINCT session_id
+            FROM agent_events
+            WHERE session_id IS NOT NULL
+              AND occurred_at > now() - interval '21 days'
+            ORDER BY session_id DESC
+            LIMIT 5
+        )
+        SELECT s.session_id,
+               SUM(CASE
+                     WHEN e.event_type='evidence_shown'
+                      AND e.payload->>'evidence_kind'='round_trips'
+                      AND COALESCE(jsonb_array_length(e.payload->'items'), 0) > 0
+                     THEN 1 ELSE 0 END) AS reversal_evidence,
+               SUM(CASE
+                     WHEN e.event_type='tool_invocation'
+                      AND e.stage_name='reflection'
+                      AND e.payload->>'tool_name' IN ('propose_rule', 'retire_rule')
+                     THEN 1 ELSE 0 END) AS rule_actions
+        FROM recent_sessions s
+        LEFT JOIN agent_events e ON e.session_id = s.session_id
+        GROUP BY s.session_id
+        ORDER BY s.session_id DESC
+        """
+    )
+    rows = cur.fetchall()
+    if len(rows) < 5:
+        return []
+    if not all(r["reversal_evidence"] >= 1 and r["rule_actions"] == 0 for r in rows):
+        return []
+    return [Finding(
+        check_code="REFLECTION_INERT_ON_ROUND_TRIPS",
+        tier=3, severity="warn",
+        title="Reflection not acting on round-trip evidence",
+        body=(
+            "5 consecutive sessions surfaced round-trip evidence to reflection, but no "
+            "rules were proposed or retired in any of them. Either the rules already "
+            "cover the pattern (and reflection should retire dead rules), or reflection "
+            "is ignoring the signal."
+        ),
+        affected_count=len(rows),
+        evidence={"sessions": [dict(r) for r in rows]},
+        auto_fix=None,
+    )]
+
+
+def check_tool_error_rate(cur) -> list[Finding]:
+    """Warn when any tool's 7-day error rate ≥20% (critical at ≥50%).
+    Skips tools with fewer than 5 invocations to avoid small-N noise."""
+    cur.execute(
+        """
+        SELECT payload->>'tool_name' AS tool_name,
+               COUNT(*) AS n,
+               COUNT(*) FILTER (
+                   WHERE COALESCE((payload->>'success')::boolean, true) = false
+               ) AS errors
+        FROM agent_events
+        WHERE event_type = 'tool_invocation'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        """
+    )
+    rows = cur.fetchall()
+    flagged = []
+    for r in rows:
+        if r["n"] < 5:
+            continue
+        rate = (r["errors"] or 0) / r["n"]
+        if rate >= 0.20:
+            flagged.append({
+                "tool_name": r["tool_name"], "n": r["n"],
+                "errors": r["errors"], "rate": round(rate, 3),
+            })
+    if not flagged:
+        return []
+    worst = max(f["rate"] for f in flagged)
+    sev = "critical" if worst >= 0.50 else "warn"
+    return [Finding(
+        check_code="TOOL_ERROR_RATE",
+        tier=3, severity=sev,
+        title=f"{len(flagged)} tool(s) with error rate >= 20% in last 7d",
+        body="Tool handlers are raising exceptions. See evidence for per-tool rates.",
+        affected_count=len(flagged),
+        evidence={"tools": flagged},
+        auto_fix=None,
+    )]
+
+
+def check_risk_block_hotspot(cur) -> list[Finding]:
+    """Warn when the same ticker has been blocked by the sector-cap gate
+    ≥3 times in 7 days. Indicates the strategist keeps proposing the same
+    blocked buy without adapting."""
+    cur.execute(
+        """
+        SELECT payload->>'ticker' AS ticker, COUNT(*) AS n
+        FROM agent_events
+        WHERE event_type = 'risk_block'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        ORDER BY n DESC
+        """
+    )
+    rows = [r for r in cur.fetchall() if r["n"] >= 3]
+    if not rows:
+        return []
+    return [Finding(
+        check_code="RISK_BLOCK_HOTSPOT",
+        tier=3, severity="warn",
+        title=f"{len(rows)} ticker(s) blocked by sector-cap >= 3x in 7d",
+        body=(
+            "The same ticker is being repeatedly proposed and blocked by the sector-cap "
+            "gate. The strategist isn't reacting to the rejection — review whether the "
+            "cap or the thesis needs to change."
+        ),
+        affected_count=len(rows),
+        evidence={"tickers": [{"ticker": r["ticker"], "n": r["n"]} for r in rows]},
+        auto_fix=None,
+    )]
+
+
+def check_risk_block_burst(cur) -> list[Finding]:
+    """Warn when ≥5 risk_blocks fired on a single calendar date in 14 days.
+    A single bad session that hammered the gate."""
+    cur.execute(
+        """
+        SELECT date_trunc('day', occurred_at)::date AS d, COUNT(*) AS n
+        FROM agent_events
+        WHERE event_type = 'risk_block'
+          AND occurred_at > now() - interval '14 days'
+        GROUP BY 1
+        ORDER BY d DESC
+        """
+    )
+    rows = [r for r in cur.fetchall() if r["n"] >= 5]
+    if not rows:
+        return []
+    return [Finding(
+        check_code="RISK_BLOCK_BURST",
+        tier=3, severity="warn",
+        title=f"{len(rows)} day(s) with >= 5 sector-cap rejections",
+        body=(
+            "A single session generated 5+ sector-cap rejections. Either the strategist "
+            "ignored advisory text, or the cap is wrong for current portfolio shape."
+        ),
+        affected_count=len(rows),
+        evidence={"dates": [{"date": r["d"].isoformat(), "n": r["n"]} for r in rows]},
+        auto_fix=None,
+    )]
+
+
+def check_ideation_tool_drought(cur) -> list[Finding]:
+    """Warn when any tool in EXPECTED_IDEATION_TOOLS has zero invocations
+    across the last 7 ideation sessions. Catches the strategist silently
+    dropping a tool — rare and almost always a regression."""
+    cur.execute(
+        """
+        SELECT COUNT(DISTINCT session_id) AS n_sessions
+        FROM agent_events
+        WHERE event_type = 'tool_invocation'
+          AND stage_name = 'ideation'
+          AND session_id IS NOT NULL
+          AND occurred_at > now() - interval '7 days'
+        """
+    )
+    row = cur.fetchone() or {"n_sessions": 0}
+    if (row["n_sessions"] or 0) < 3:
+        return []
+
+    cur.execute(
+        """
+        SELECT payload->>'tool_name' AS tool_name, COUNT(*) AS n
+        FROM agent_events
+        WHERE event_type = 'tool_invocation'
+          AND stage_name = 'ideation'
+          AND occurred_at > now() - interval '7 days'
+        GROUP BY 1
+        """
+    )
+    seen = {r["tool_name"]: r["n"] for r in cur.fetchall()}
+    missing = [t for t in EXPECTED_IDEATION_TOOLS if seen.get(t, 0) == 0]
+    if not missing:
+        return []
+    return [Finding(
+        check_code="IDEATION_TOOL_DROUGHT",
+        tier=3, severity="warn",
+        title=f"{len(missing)} expected ideation tool(s) unused in last 7d",
+        body=(
+            "One or more tools in the expected ideation toolset went unused across the "
+            "last 7 days of ideation sessions. Either prompt drift dropped them or the "
+            "loop is silently skipping them — both are regressions."
+        ),
+        affected_count=len(missing),
+        evidence={"missing_tools": missing, "observed_counts": seen},
+        auto_fix=None,
+    )]
+
+
 def check_rule_judgment(cur) -> list[Finding]:
     """Single LLM call surveying active rules for the 5 overfitting patterns."""
     cur.execute("SELECT id, rule_text, created_at FROM strategy_rules WHERE status='active'")
@@ -735,6 +1008,12 @@ CHECKS: list = [
     "check_cost_trend",
     "check_decisions_missing_signal_refs",
     "check_theses_missing_signal_refs",
+    "check_strategist_using_reversal_tool",
+    "check_reflection_inert_on_round_trips",
+    "check_tool_error_rate",
+    "check_risk_block_hotspot",
+    "check_risk_block_burst",
+    "check_ideation_tool_drought",
     "check_rule_judgment",
 ]
 

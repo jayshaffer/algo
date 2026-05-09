@@ -545,3 +545,117 @@ class TestExtractFinalText:
         assert "Part one." in result and "Part two." in result, (
             f"Expected both text blocks concatenated, got: {result!r}"
         )
+
+
+class TestRunAgenticLoopTelemetry:
+    """`run_agentic_loop` must emit a `tool_invocation` event after each tool
+    dispatch, capturing tool name, args, success, error, and duration_ms.
+    `session_id=None` is a no-op (handled inside `record_event`)."""
+
+    def test_emits_tool_invocation_event_on_success(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        tool_resp = _make_response(
+            content=[_tool_use_block("t1", "my_tool", {"x": 1})],
+            stop_reason="tool_use",
+        )
+        end_resp = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([tool_resp, end_resp])
+
+        run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="hi",
+            tools=[{"name": "my_tool"}],
+            tool_handlers={"my_tool": lambda **k: "ok"},
+            max_turns=3,
+            session_id=99,
+            stage_name="ideation",
+        )
+
+        assert len(recorded) == 1
+        ev = recorded[0]
+        assert ev["session_id"] == 99
+        assert ev["stage_name"] == "ideation"
+        assert ev["event_type"] == "tool_invocation"
+        assert ev["payload"]["tool_name"] == "my_tool"
+        assert ev["payload"]["success"] is True
+        assert ev["payload"]["error"] is None
+        assert "duration_ms" in ev["payload"]
+
+    def test_emits_tool_invocation_event_on_handler_error(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+
+        def bad_handler(**_):
+            raise RuntimeError("boom")
+
+        tool_resp = _make_response(
+            content=[_tool_use_block("t1", "my_tool", {})],
+            stop_reason="tool_use",
+        )
+        end_resp = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([tool_resp, end_resp])
+
+        run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="hi",
+            tools=[{"name": "my_tool"}],
+            tool_handlers={"my_tool": bad_handler},
+            max_turns=3,
+            session_id=42,
+            stage_name="reflection",
+        )
+
+        assert len(recorded) == 1
+        ev = recorded[0]
+        assert ev["payload"]["success"] is False
+        assert "boom" in (ev["payload"]["error"] or "")
+
+    def test_no_session_id_still_calls_record_event_as_noop(self, monkeypatch):
+        """Without session_id the loop still calls record_event; record_event
+        itself no-ops on session_id=None. We only need to confirm the call
+        path is unchanged."""
+        recorded = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kw: recorded.append(kw),
+        )
+        tool_resp = _make_response(
+            content=[_tool_use_block("t1", "my_tool", {})],
+            stop_reason="tool_use",
+        )
+        end_resp = _make_response(
+            content=[_text_block("Done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([tool_resp, end_resp])
+
+        run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="hi",
+            tools=[{"name": "my_tool"}],
+            tool_handlers={"my_tool": lambda **k: "ok"},
+            max_turns=3,
+        )
+
+        assert len(recorded) == 1
+        assert recorded[0]["session_id"] is None
+        assert recorded[0]["stage_name"] == "unknown"
