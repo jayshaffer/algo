@@ -889,6 +889,249 @@ class TestCheckIdeationToolDrought:
         assert check_ideation_tool_drought(cur) == []
 
 
+# --- Phase 2 telemetry-driven checks ---
+
+
+class TestCheckExecutorTruncationRate:
+    """Executor calls hitting max_tokens. Warn ≥10%, critical ≥25% in 14d."""
+
+    def test_no_calls_returns_nothing(self):
+        from v2.audit import check_executor_truncation_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 0, "truncated": 0}
+        assert check_executor_truncation_rate(cur) == []
+
+    def test_high_truncation_rate_critical(self):
+        from v2.audit import check_executor_truncation_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 10, "truncated": 4}  # 40%
+        findings = check_executor_truncation_rate(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "EXECUTOR_TRUNCATION_RATE"
+        assert findings[0].severity == "critical"
+
+    def test_low_volume_skipped(self):
+        from v2.audit import check_executor_truncation_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 4, "truncated": 4}  # n<5
+        assert check_executor_truncation_rate(cur) == []
+
+
+class TestCheckExecutorSchemaDrift:
+    def test_no_drift_returns_nothing(self):
+        from v2.audit import check_executor_schema_drift
+        cur = MagicMock()
+        cur.fetchall.side_effect = [[], []]
+        assert check_executor_schema_drift(cur) == []
+
+    def test_top_level_drift_emits_warning(self):
+        from v2.audit import check_executor_schema_drift
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [{"key": "experimental_score", "n": 5}],
+            [],
+        ]
+        findings = check_executor_schema_drift(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "EXECUTOR_SCHEMA_DRIFT"
+        assert findings[0].severity == "warn"
+        assert findings[0].evidence["top_level_drift"][0]["key"] == "experimental_score"
+
+    def test_decision_drift_emits_warning(self):
+        from v2.audit import check_executor_schema_drift
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [],
+            [{"key": "confidence_calibration", "n": 4}],
+        ]
+        findings = check_executor_schema_drift(cur)
+        assert len(findings) == 1
+        assert "confidence_calibration" in [
+            d["key"] for d in findings[0].evidence["decision_drift"]
+        ]
+
+
+class TestCheckExecutorParseFailureRate:
+    def test_no_calls_returns_nothing(self):
+        from v2.audit import check_executor_parse_failure_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 0, "parse_failed": 0}
+        assert check_executor_parse_failure_rate(cur) == []
+
+    def test_high_parse_failure_critical(self):
+        from v2.audit import check_executor_parse_failure_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 10, "parse_failed": 2}  # 20%
+        findings = check_executor_parse_failure_rate(cur)
+        assert len(findings) == 1
+        assert findings[0].severity == "critical"
+        assert findings[0].check_code == "EXECUTOR_PARSE_FAILURE_RATE"
+
+    def test_below_warn_threshold_skipped(self):
+        from v2.audit import check_executor_parse_failure_rate
+        cur = MagicMock()
+        cur.fetchone.return_value = {"total": 50, "parse_failed": 1}  # 2%
+        assert check_executor_parse_failure_rate(cur) == []
+
+
+class TestCheckClassifierErrorRate:
+    def test_no_calls_returns_nothing(self):
+        from v2.audit import check_classifier_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_classifier_error_rate(cur) == []
+
+    def test_high_error_rate_critical(self):
+        from v2.audit import check_classifier_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "classifier_news", "total": 20, "errors": 6},
+        ]
+        findings = check_classifier_error_rate(cur)
+        assert len(findings) == 1
+        assert findings[0].severity == "critical"
+
+    def test_below_min_n_skipped(self):
+        """SQL HAVING filters n < 10 — defensively also handled in Python."""
+        from v2.audit import check_classifier_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = []  # SQL HAVING filtered
+        assert check_classifier_error_rate(cur) == []
+
+
+class TestCheckAgentCallErrorRateByPurpose:
+    def test_no_calls_returns_nothing(self):
+        from v2.audit import check_agent_call_error_rate_by_purpose
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_agent_call_error_rate_by_purpose(cur) == []
+
+    def test_high_error_rate_critical(self):
+        from v2.audit import check_agent_call_error_rate_by_purpose
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "executor", "total": 20, "errors": 6},
+        ]
+        findings = check_agent_call_error_rate_by_purpose(cur)
+        assert len(findings) == 1
+        assert findings[0].severity == "critical"
+
+    def test_below_threshold_skipped(self):
+        from v2.audit import check_agent_call_error_rate_by_purpose
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "executor", "total": 20, "errors": 1},  # 5%
+        ]
+        assert check_agent_call_error_rate_by_purpose(cur) == []
+
+
+class TestCheckLoopRecoveryBurst:
+    def test_no_recoveries_returns_nothing(self):
+        from v2.audit import check_loop_recovery_burst
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_loop_recovery_burst(cur) == []
+
+    def test_burst_emits_warning(self):
+        from v2.audit import check_loop_recovery_burst
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"reason": "max_tokens", "n": 5},
+        ]
+        findings = check_loop_recovery_burst(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "LOOP_RECOVERY_BURST"
+
+    def test_below_threshold_skipped(self):
+        from v2.audit import check_loop_recovery_burst
+        cur = MagicMock()
+        cur.fetchall.return_value = []  # SQL HAVING filtered n<3
+        assert check_loop_recovery_burst(cur) == []
+
+
+class TestCheckLoopMaxTurnsHit:
+    def test_no_max_turns_returns_nothing(self):
+        from v2.audit import check_loop_max_turns_hit
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_loop_max_turns_hit(cur) == []
+
+    def test_three_or_more_critical(self):
+        from v2.audit import check_loop_max_turns_hit
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"stage_name": "ideation", "n": 3, "session_ids": [101, 102, 103]},
+        ]
+        findings = check_loop_max_turns_hit(cur)
+        assert len(findings) == 1
+        assert findings[0].severity == "critical"
+
+    def test_one_emits_warning(self):
+        from v2.audit import check_loop_max_turns_hit
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"stage_name": "reflection", "n": 1, "session_ids": [101]},
+        ]
+        findings = check_loop_max_turns_hit(cur)
+        assert len(findings) == 1
+        assert findings[0].severity == "warn"
+
+
+class TestCheckCacheHitRatioDegradation:
+    def test_no_data_returns_nothing(self):
+        from v2.audit import check_cache_hit_ratio_degradation
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_cache_hit_ratio_degradation(cur) == []
+
+    def test_degradation_emits_info(self):
+        from v2.audit import check_cache_hit_ratio_degradation
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "executor", "recent_ratio": 0.10, "prior_ratio": 0.60,
+             "recent_n": 50, "prior_n": 50},
+        ]
+        findings = check_cache_hit_ratio_degradation(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "CACHE_HIT_RATIO_DEGRADATION"
+        assert findings[0].severity == "info"
+
+    def test_small_drop_skipped(self):
+        from v2.audit import check_cache_hit_ratio_degradation
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "executor", "recent_ratio": 0.55, "prior_ratio": 0.60,
+             "recent_n": 50, "prior_n": 50},
+        ]
+        assert check_cache_hit_ratio_degradation(cur) == []
+
+
+class TestCheckAgentCallLatencyDrift:
+    def test_no_drift_returns_nothing(self):
+        from v2.audit import check_agent_call_latency_drift
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_agent_call_latency_drift(cur) == []
+
+    def test_drift_emits_info(self):
+        from v2.audit import check_agent_call_latency_drift
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "executor", "recent_p95": 8000, "prior_p95": 3000},
+        ]
+        findings = check_agent_call_latency_drift(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "AGENT_CALL_LATENCY_DRIFT"
+        assert findings[0].severity == "info"
+
+    def test_small_drift_skipped(self):
+        """SQL filters out r.p95 < 2x p.p95 — defensively returns [] here."""
+        from v2.audit import check_agent_call_latency_drift
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_agent_call_latency_drift(cur) == []
+
+
 # --- Runner tests (Task 15) ---
 
 class TestRunner:

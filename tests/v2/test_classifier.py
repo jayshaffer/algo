@@ -1055,3 +1055,68 @@ class TestDataclasses:
         assert result.news_type == "ticker_specific"
         assert result.ticker_signals == []
         assert result.macro_signal is None
+
+
+class TestClassifierTelemetryWiring:
+    """Each classifier call site must pass the right `purpose` to
+    `_call_with_retry` so the auditor's CLASSIFIER_ERROR_RATE check can
+    filter on `payload->>'purpose' LIKE 'classifier_%'`."""
+
+    def test_classify_news_uses_classifier_news_purpose(self):
+        captured = {}
+
+        def fake_call(client, **kw):
+            captured.update(kw)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"type": "noise"}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=1, output_tokens=1)
+            return resp
+
+        with patch("v2.classifier._call_with_retry", side_effect=fake_call), \
+             patch("v2.classifier.get_claude_client"):
+            classify_news("headline", SAMPLE_PUBLISHED_AT, session_id=42)
+
+        assert captured["session_id"] == 42
+        assert captured["stage_name"] == "pipeline"
+        assert captured["purpose"] == "classifier_news"
+
+    def test_classify_batch_uses_classifier_news_purpose(self):
+        from v2.classifier import _classify_batch
+
+        captured = {}
+
+        def fake_call(client, **kw):
+            captured.update(kw)
+            resp = MagicMock()
+            resp.content = [MagicMock(text="[]")]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=1, output_tokens=1)
+            return resp
+
+        with patch("v2.classifier._call_with_retry", side_effect=fake_call), \
+             patch("v2.classifier.get_claude_client"):
+            _classify_batch(["H1"], [SAMPLE_PUBLISHED_AT], [None], session_id=42)
+
+        assert captured["session_id"] == 42
+        assert captured["stage_name"] == "pipeline"
+        assert captured["purpose"] == "classifier_news"
+
+    def test_classify_ticker_news_uses_classifier_relevance_purpose(self):
+        captured = {}
+
+        def fake_call(client, **kw):
+            captured.update(kw)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"category": "earnings", "sentiment": "bullish", "confidence": "high"}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=1, output_tokens=1)
+            return resp
+
+        with patch("v2.classifier._call_with_retry", side_effect=fake_call), \
+             patch("v2.classifier.get_claude_client"):
+            classify_ticker_news("AAPL", "headline", SAMPLE_PUBLISHED_AT, session_id=42)
+
+        assert captured["session_id"] == 42
+        assert captured["stage_name"] == "pipeline"
+        assert captured["purpose"] == "classifier_relevance"

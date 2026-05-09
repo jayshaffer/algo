@@ -240,7 +240,7 @@ def _run_pipeline_stage(
     _start_stage(session_id, "pipeline")
     with capture_usage() as usage:
         try:
-            result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit)
+            result.pipeline_result = run_pipeline(hours=pipeline_hours, limit=pipeline_limit, session_id=session_id)
             _complete_stage(session_id, "pipeline", usage=usage)
         except Exception as e:
             result.pipeline_error = str(e)

@@ -29,6 +29,17 @@ RETRYABLE_ERRORS = (
 )
 
 
+class AgentPurpose:
+    """Canonical `purpose` values for `agent_call` telemetry. Use these
+    constants at call sites to keep auditor SQL filter values stable."""
+    EXECUTOR = "executor"
+    CLASSIFIER_NEWS = "classifier_news"
+    CLASSIFIER_MACRO = "classifier_macro"
+    CLASSIFIER_RELEVANCE = "classifier_relevance"
+    STRATEGIST_LOOP = "strategist_loop"
+    REFLECTION_LOOP = "reflection_loop"
+
+
 @dataclass
 class ToolResult:
     """Result from executing a tool."""
@@ -132,34 +143,78 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
     time-per-token exceeds 10 minutes; with max_tokens=32000 (Opus 4.x
     model max) the heuristic trips on the first turn. See:
     https://github.com/anthropics/anthropic-sdk-python#long-requests
+
+    Telemetry kwargs (`session_id`, `stage_name`, `purpose`) are popped
+    out of `create_kwargs` before forwarding to the SDK. Retries collapse
+    into a single `agent_call` event with the final outcome.
     """
-    for attempt in range(max_retries + 1):
-        try:
-            with client.messages.stream(**create_kwargs) as stream:
-                message = stream.get_final_message()
-            _record_usage(create_kwargs["model"], message.usage)
-            return message
-        except RETRYABLE_ERRORS as e:
-            if attempt == max_retries:
-                logger.error(
-                    "API call failed after %d retries: %s", max_retries, e
+    session_id = create_kwargs.pop("session_id", None)
+    stage_name = create_kwargs.pop("stage_name", None)
+    purpose = create_kwargs.pop("purpose", None)
+
+    started = time.monotonic()
+    success = False
+    error_msg: str | None = None
+    message = None
+    try:
+        for attempt in range(max_retries + 1):
+            try:
+                with client.messages.stream(**create_kwargs) as stream:
+                    message = stream.get_final_message()
+                _record_usage(create_kwargs["model"], message.usage)
+                success = True
+                return message
+            except RETRYABLE_ERRORS as e:
+                if attempt == max_retries:
+                    logger.error(
+                        "API call failed after %d retries: %s", max_retries, e
+                    )
+                    error_msg = f"{type(e).__name__}: {str(e)[:500]}"
+                    raise
+                if isinstance(e, anthropic.RateLimitError):
+                    delay = API_RATE_LIMIT_DELAY + random.uniform(0, API_RETRY_JITTER_MAX)
+                else:
+                    delay = (
+                        API_RETRY_BASE_DELAY * (API_RETRY_BACKOFF_FACTOR ** attempt)
+                        + random.uniform(0, API_RETRY_JITTER_MAX)
+                    )
+                logger.warning(
+                    "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                    delay,
                 )
-                raise
-            if isinstance(e, anthropic.RateLimitError):
-                delay = API_RATE_LIMIT_DELAY + random.uniform(0, API_RETRY_JITTER_MAX)
-            else:
-                delay = (
-                    API_RETRY_BASE_DELAY * (API_RETRY_BACKOFF_FACTOR ** attempt)
-                    + random.uniform(0, API_RETRY_JITTER_MAX)
-                )
-            logger.warning(
-                "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                attempt + 1,
-                max_retries + 1,
-                e,
-                delay,
+                time.sleep(delay)
+    except Exception as e:
+        if error_msg is None:
+            error_msg = f"{type(e).__name__}: {str(e)[:500]}"
+        raise
+    finally:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        payload = {
+            "model": create_kwargs.get("model"),
+            "purpose": purpose or "unknown",
+            "duration_ms": duration_ms,
+            "success": success,
+            "error": error_msg,
+        }
+        if message is not None:
+            payload["stop_reason"] = message.stop_reason
+            payload["input_tokens"] = getattr(message.usage, "input_tokens", 0) or 0
+            payload["output_tokens"] = getattr(message.usage, "output_tokens", 0) or 0
+            payload["cache_creation_tokens"] = (
+                getattr(message.usage, "cache_creation_input_tokens", 0) or 0
             )
-            time.sleep(delay)
+            payload["cache_read_tokens"] = (
+                getattr(message.usage, "cache_read_input_tokens", 0) or 0
+            )
+        record_event(
+            session_id=session_id,
+            stage_name=stage_name or "unknown",
+            event_type="agent_call",
+            payload=payload,
+        )
 
 
 def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
@@ -332,6 +387,16 @@ def run_agentic_loop(
                     "pruning message history and retrying once",
                     turn + 1, e,
                 )
+                record_event(
+                    session_id=session_id,
+                    stage_name=stage_name or "unknown",
+                    event_type="loop_recovery",
+                    payload={
+                        "reason": "context_length",
+                        "turn": turn + 1,
+                        "model": model,
+                    },
+                )
                 messages = _aggressive_prune(messages)
                 continue
             raise
@@ -349,6 +414,16 @@ def run_agentic_loop(
                 "max_tokens hit on turn %d; discarding truncated response and "
                 "retrying with concision instruction",
                 turn + 1,
+            )
+            record_event(
+                session_id=session_id,
+                stage_name=stage_name or "unknown",
+                event_type="loop_recovery",
+                payload={
+                    "reason": "max_tokens",
+                    "turn": turn + 1,
+                    "model": model,
+                },
             )
             # Bug fix: the prior turn already ended with a `user` message
             # (initial prompt on turn 1, tool_results on later turns).
@@ -449,6 +524,19 @@ def run_agentic_loop(
         logger.warning(f"Agentic loop hit max turns ({max_turns})")
 
     turns_used = len([m for m in messages if m["role"] == "assistant"])
+
+    record_event(
+        session_id=session_id,
+        stage_name=stage_name or "unknown",
+        event_type="loop_completion",
+        payload={
+            "stop_reason": stop_reason,
+            "turns_used": turns_used,
+            "model": model,
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+        },
+    )
 
     return AgenticLoopResult(
         messages=messages,

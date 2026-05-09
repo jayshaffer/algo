@@ -5,7 +5,23 @@ import logging
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
-from .claude_client import _call_with_retry, get_claude_client
+from .claude_client import AgentPurpose, _call_with_retry, get_claude_client
+from .telemetry import record_event
+
+EXECUTOR_KNOWN_TOP_KEYS = {
+    "decisions", "thesis_invalidations", "market_summary", "risk_assessment",
+}
+EXECUTOR_KNOWN_DECISION_KEYS = {
+    "playbook_action_id", "ticker", "action", "intent_type",
+    "intent_magnitude", "reasoning", "confidence",
+    "is_off_playbook", "signal_refs", "thesis_id",
+    # Legacy "quantity" field still appears in some test fixtures and
+    # historical responses; tolerated by the parser, listed here so the
+    # schema-drift canary doesn't flag it as new.
+    "quantity",
+}
+
+EXECUTOR_RAW_TEXT_CAP = 4096
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +190,7 @@ If no trades: empty decisions array, explain in market_summary."""
 def get_trading_decisions(
     executor_input: ExecutorInput,
     model: str = DEFAULT_EXECUTOR_MODEL,
+    session_id: int | None = None,
 ) -> AgentResponse:
     """
     Get trading decisions from Claude Haiku.
@@ -220,6 +237,9 @@ def get_trading_decisions(
                 "content": input_json,
             }
         ],
+        session_id=session_id,
+        stage_name="trading",
+        purpose=AgentPurpose.EXECUTOR,
     )
 
     # Extract text response
@@ -236,6 +256,21 @@ def get_trading_decisions(
     )
 
     if response.stop_reason == "max_tokens":
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="executor_response",
+            payload={
+                "parse_succeeded": False,
+                "stop_reason": response.stop_reason,
+                "decision_count": 0,
+                "thesis_invalidation_count": 0,
+                "unknown_top_level_keys": [],
+                "unknown_decision_keys": [],
+                "raw_response_text_truncated": response_text[:EXECUTOR_RAW_TEXT_CAP],
+                "error": "max_tokens_truncation",
+            },
+        )
         raise ValueError(
             f"Executor response truncated at {response.usage.output_tokens} tokens. "
             "Context may be too large -- consider reducing input size."
@@ -255,6 +290,21 @@ def get_trading_decisions(
 
         data = json.loads(text)
     except json.JSONDecodeError as e:
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="executor_response",
+            payload={
+                "parse_succeeded": False,
+                "stop_reason": response.stop_reason,
+                "decision_count": 0,
+                "thesis_invalidation_count": 0,
+                "unknown_top_level_keys": [],
+                "unknown_decision_keys": [],
+                "raw_response_text_truncated": response_text[:EXECUTOR_RAW_TEXT_CAP],
+                "error": f"JSONDecodeError: {e}",
+            },
+        )
         raise ValueError(f"Failed to parse LLM response as JSON: {response_text}") from e
 
     # Build response object
@@ -291,6 +341,27 @@ def get_trading_decisions(
             thesis_id=tid,
             reason=inv.get("reason", ""),
         ))
+
+    unknown_top = sorted(set(data.keys()) - EXECUTOR_KNOWN_TOP_KEYS)
+    unknown_dec = sorted({
+        k for d in data.get("decisions", []) if isinstance(d, dict)
+        for k in d.keys()
+    } - EXECUTOR_KNOWN_DECISION_KEYS)
+    record_event(
+        session_id=session_id,
+        stage_name="trading",
+        event_type="executor_response",
+        payload={
+            "parse_succeeded": True,
+            "stop_reason": response.stop_reason,
+            "decision_count": len(decisions),
+            "thesis_invalidation_count": len(thesis_invalidations),
+            "unknown_top_level_keys": unknown_top,
+            "unknown_decision_keys": unknown_dec,
+            "raw_response_text_truncated": response_text[:EXECUTOR_RAW_TEXT_CAP],
+            "error": None,
+        },
+    )
 
     return AgentResponse(
         decisions=decisions,
