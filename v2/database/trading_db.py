@@ -473,6 +473,58 @@ def get_playbook_actions(playbook_id) -> list:
         return cur.fetchall()
 
 
+def get_recent_playbooks_with_actions(n: int = 3) -> list[dict]:
+    """Return the N most recent playbooks with their actions nested.
+
+    Used by the strategist's reversal-justification flow: shows what was
+    *planned* in recent sessions (not just what got executed), so the
+    strategist can detect when today's plan reverses a recent one.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                p.id              AS pb_id,
+                p.date            AS pb_date,
+                p.market_outlook  AS pb_market_outlook,
+                pa.id             AS action_id,
+                pa.ticker         AS ticker,
+                pa.action         AS action,
+                pa.intent_type    AS intent_type,
+                pa.intent_magnitude AS intent_magnitude,
+                pa.reasoning      AS reasoning
+            FROM playbooks p
+            LEFT JOIN playbook_actions pa ON pa.playbook_id = p.id
+            WHERE p.id IN (
+                SELECT id FROM playbooks ORDER BY date DESC LIMIT %s
+            )
+            ORDER BY p.date DESC, pa.priority ASC NULLS LAST, pa.id ASC
+        """, (n,))
+        rows = cur.fetchall()
+
+    by_pb: dict[int, dict] = {}
+    order: list[int] = []
+    for row in rows:
+        pb_id = row["pb_id"]
+        if pb_id not in by_pb:
+            by_pb[pb_id] = {
+                "pb_id": pb_id,
+                "pb_date": row["pb_date"],
+                "pb_market_outlook": row.get("pb_market_outlook"),
+                "actions": [],
+            }
+            order.append(pb_id)
+        if row.get("action_id") is not None:
+            by_pb[pb_id]["actions"].append({
+                "action_id": row["action_id"],
+                "ticker": row["ticker"],
+                "action": row["action"],
+                "intent_type": row.get("intent_type"),
+                "intent_magnitude": row.get("intent_magnitude"),
+                "reasoning": row.get("reasoning") or "",
+            })
+    return [by_pb[pb_id] for pb_id in order]
+
+
 def update_playbook_action_status(action_id: int, status: str):
     """Update the status of a playbook action (e.g. pending -> executed)."""
     with get_cursor() as cur:

@@ -64,12 +64,15 @@ class ExecutorInput:
     strategy_rules: str = ""
     equity_summary: str = ""
     todays_decisions: list[dict] = None
+    recent_ticker_decisions: list[dict] = None
 
     def __post_init__(self):
         if self.current_prices is None:
             self.current_prices = {}
         if self.todays_decisions is None:
             self.todays_decisions = []
+        if self.recent_ticker_decisions is None:
+            self.recent_ticker_decisions = []
 
 
 @dataclass
@@ -130,6 +133,7 @@ INPUTS (as JSON object):
 10. strategy_rules — active constraints from past performance (MUST follow)
 11. equity_summary — recent account performance
 12. todays_decisions — decisions already executed THIS session (don't duplicate)
+13. recent_ticker_decisions — for every ticker in today's playbook, the most recent ≤5 buy/sell decisions on that ticker in the past 7 days (with full reasoning). USE THIS to detect when today's playbook reverses a recent decision.
 
 CRITICAL RULE — YOU NEVER AUTHOR SHARE QUANTITIES:
 Share counts are computed by the system from live portfolio state. You author an INTENT and a MAGNITUDE; the system divides/multiplies against the real position, current price, buying_power, and portfolio_value. This is how the system stays consistent with actual holdings even if your reasoning drifts.
@@ -152,6 +156,7 @@ RULES:
 - Set is_off_playbook to true for trades not in the playbook
 - If no playbook available: hold everything, no new positions
 - If uncertain: HOLD
+- REVERSAL JUSTIFICATION: if your decision on a ticker is the opposite action of any entry in `recent_ticker_decisions` for that ticker, your `reasoning` field MUST explicitly identify (a) the prior decision (date + action), and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. "Re-narrating the same fundamentals" is not new evidence. If you can't articulate (b), HOLD instead.
 
 SIGNAL_REFS — COPY VERBATIM, DO NOT INVENT:
 - For decisions ON a playbook action: copy `signal_refs` VERBATIM from the playbook action's `signal_refs` field. Do not edit, drop, or invent IDs. The strategist already cited the evidence; you are passing it through to attribution.
@@ -196,6 +201,7 @@ def get_trading_decisions(
         "strategy_rules": executor_input.strategy_rules,
         "equity_summary": executor_input.equity_summary,
         "todays_decisions": executor_input.todays_decisions,
+        "recent_ticker_decisions": executor_input.recent_ticker_decisions,
     }
     input_json = json.dumps(input_data, default=str)
 

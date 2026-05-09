@@ -641,7 +641,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 16 handler functions."""
+        """TOOL_HANDLERS should have all 17 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -655,6 +655,7 @@ class TestToolCompleteness:
             "get_macro_signals",
             "get_signal_attribution",
             "get_decision_history",
+            "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
             "get_strategy_rules",
@@ -663,8 +664,8 @@ class TestToolCompleteness:
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 17 entries (16 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 17
+        """TOOL_DEFINITIONS should have 18 entries (17 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 18
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -684,6 +685,7 @@ class TestToolCompleteness:
             "get_macro_signals",
             "get_signal_attribution",
             "get_decision_history",
+            "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
             "get_strategy_rules",
@@ -825,3 +827,42 @@ class TestGetStrategyHistoryTruncation:
         result = tool_get_strategy_history(n=5)
         assert "short old memo" in result
         assert "..." not in result.split("\n")[2]
+
+
+class TestToolGetRecentPlaybooks:
+    """Strategist tool that surfaces yesterday's planned actions."""
+
+    @patch("v2.tools.get_recent_playbooks_with_actions")
+    def test_renders_playbooks_with_actions(self, mock_get):
+        from v2.tools import tool_get_recent_playbooks
+        mock_get.return_value = [
+            {
+                "pb_id": 87, "pb_date": date(2026, 5, 4),
+                "pb_market_outlook": "fragile",
+                "actions": [
+                    {"action_id": 401, "ticker": "ANET", "action": "sell",
+                     "intent_type": "exit_partial_pct", "intent_magnitude": 50,
+                     "reasoning": "trim pre-earnings binary tomorrow"},
+                ],
+            },
+        ]
+
+        result = tool_get_recent_playbooks(n=3)
+
+        assert "2026-05-04" in result
+        assert "ANET" in result
+        assert "SELL" in result.upper()
+        assert "exit_partial_pct=50" in result
+        assert "trim pre-earnings" in result
+
+    @patch("v2.tools.get_recent_playbooks_with_actions", return_value=[])
+    def test_empty_marker_when_no_playbooks(self, mock_get):
+        from v2.tools import tool_get_recent_playbooks
+        result = tool_get_recent_playbooks(n=3)
+        assert "no recent playbooks" in result.lower() or "none" in result.lower()
+
+    def test_tool_registered_in_definitions_and_handlers(self):
+        from v2.tools import TOOL_DEFINITIONS, TOOL_HANDLERS
+        names = [t["name"] for t in TOOL_DEFINITIONS]
+        assert "get_recent_playbooks" in names
+        assert "get_recent_playbooks" in TOOL_HANDLERS

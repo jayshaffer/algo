@@ -605,3 +605,108 @@ class TestBuildTradingContext:
         assert "Signal" in result
         assert "Decision" in result
         assert "Attribution" in result
+
+
+class TestRecentTickerDecisions:
+    """Executor input must surface recent decisions for tickers in the playbook."""
+
+    @patch("v2.executor.get_latest_price", return_value=Decimal("100"))
+    @patch("v2.context.get_signal_attribution", return_value=[])
+    @patch("v2.context.get_positions", return_value=[])
+    @patch("v2.context.get_recent_decisions")
+    @patch("v2.context.get_pending_playbook_actions")
+    @patch("v2.context.get_playbook")
+    def test_includes_decisions_on_playbook_tickers_within_7_days(
+        self, mock_pb, mock_pb_actions, mock_decisions, mock_pos, mock_attr, mock_price,
+        mock_db, mock_cursor,
+    ):
+        from datetime import date, timedelta
+        from v2.context import build_executor_input
+        today = date.today()
+        mock_pb.return_value = {"id": 1, "market_outlook": "", "risk_notes": ""}
+        mock_pb_actions.return_value = [
+            {"id": 10, "ticker": "GOOGL", "action": "buy", "thesis_id": 5,
+             "reasoning": "add", "confidence": "high", "intent_type": "invest_dollar",
+             "intent_magnitude": 100, "priority": 1},
+        ]
+        mock_decisions.return_value = [
+            {"id": 200, "date": today - timedelta(days=1), "ticker": "GOOGL",
+             "action": "sell", "quantity": Decimal("0.17"), "price": Decimal("383.02"),
+             "reasoning": "near consensus PT, trim", "outcome_7d": None,
+             "outcome_30d": None},
+            {"id": 195, "date": today - timedelta(days=5), "ticker": "GOOGL",
+             "action": "buy", "quantity": Decimal("0.22"), "price": Decimal("380.00"),
+             "reasoning": "Cloud blowout", "outcome_7d": None, "outcome_30d": None},
+            {"id": 100, "date": today - timedelta(days=30), "ticker": "GOOGL",
+             "action": "buy", "quantity": Decimal("0.5"), "price": Decimal("350.00"),
+             "reasoning": "old", "outcome_7d": Decimal("2.0"), "outcome_30d": Decimal("5.0")},
+            {"id": 199, "date": today - timedelta(days=1), "ticker": "AMZN",
+             "action": "buy", "quantity": Decimal("1.0"), "price": Decimal("270.00"),
+             "reasoning": "irrelevant", "outcome_7d": None, "outcome_30d": None},
+        ]
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = None
+
+        result = build_executor_input(account_info={"equity": 10000})
+
+        rtd = result.recent_ticker_decisions
+        tickers = [r["ticker"] for r in rtd]
+        ids = [r.get("id") for r in rtd]
+        assert "GOOGL" in tickers
+        assert "AMZN" not in tickers, "AMZN not in today's playbook — must be excluded"
+        assert 100 not in ids, "30d-old decision must be excluded (outside 7d window)"
+        assert 200 in ids
+        assert 195 in ids
+
+    @patch("v2.executor.get_latest_price", return_value=Decimal("100"))
+    @patch("v2.context.get_signal_attribution", return_value=[])
+    @patch("v2.context.get_positions", return_value=[])
+    @patch("v2.context.get_recent_decisions")
+    @patch("v2.context.get_pending_playbook_actions")
+    @patch("v2.context.get_playbook")
+    def test_reasoning_not_truncated(
+        self, mock_pb, mock_pb_actions, mock_decisions, mock_pos, mock_attr, mock_price,
+        mock_db, mock_cursor,
+    ):
+        from datetime import date, timedelta
+        from v2.context import build_executor_input
+        long_reasoning = "X" * 500
+        today = date.today()
+        mock_pb.return_value = {"id": 1, "market_outlook": "", "risk_notes": ""}
+        mock_pb_actions.return_value = [
+            {"id": 10, "ticker": "GOOGL", "action": "buy", "thesis_id": 5,
+             "reasoning": "add", "confidence": "high", "intent_type": "invest_dollar",
+             "intent_magnitude": 100, "priority": 1},
+        ]
+        mock_decisions.return_value = [
+            {"id": 200, "date": today - timedelta(days=1), "ticker": "GOOGL",
+             "action": "sell", "quantity": Decimal("0.17"), "price": Decimal("383.02"),
+             "reasoning": long_reasoning, "outcome_7d": None, "outcome_30d": None},
+        ]
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = None
+
+        result = build_executor_input(account_info={"equity": 10000})
+
+        assert result.recent_ticker_decisions[0]["reasoning"] == long_reasoning, (
+            "reasoning was truncated — executor cannot judge reversal without full text"
+        )
+
+    @patch("v2.executor.get_latest_price", return_value=Decimal("100"))
+    @patch("v2.context.get_signal_attribution", return_value=[])
+    @patch("v2.context.get_positions", return_value=[])
+    @patch("v2.context.get_recent_decisions", return_value=[])
+    @patch("v2.context.get_pending_playbook_actions", return_value=[])
+    @patch("v2.context.get_playbook")
+    def test_empty_when_no_playbook_actions(
+        self, mock_pb, mock_pb_actions, mock_decisions, mock_pos, mock_attr, mock_price,
+        mock_db, mock_cursor,
+    ):
+        from v2.context import build_executor_input
+        mock_pb.return_value = None
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = None
+
+        result = build_executor_input(account_info={"equity": 10000})
+
+        assert result.recent_ticker_decisions == []

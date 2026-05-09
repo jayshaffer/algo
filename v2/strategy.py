@@ -21,6 +21,7 @@ from .database.trading_db import (
     retire_strategy_rule,
 )
 from .formation import build_formation_context
+from .patterns import analyze_round_trips
 from .tools import tool_get_strategy_history, tool_get_strategy_identity, tool_get_strategy_rules
 
 logger = logging.getLogger(__name__)
@@ -334,6 +335,23 @@ def tool_get_session_summary(days: int = 30) -> str:
     lines.append("")
     lines.append("Signal Attribution:")
     lines.append(get_attribution_summary())
+
+    # Round-trip evidence — surfaces same-ticker opposing-action churn
+    # that signal-level attribution cannot see. Same 30d window as the
+    # rest of this summary; gap_days=7 captures same-week flips.
+    round_trips = analyze_round_trips(days=30, gap_days=7, min_pairs=2)
+    lines.append("")
+    if round_trips:
+        lines.append("Round-Trips (past 30d, ≥2 opposing actions ≤7d apart):")
+        for rt in round_trips[:5]:
+            lines.append(
+                f"  {rt.ticker}: {rt.pair_count} pairs "
+                f"({rt.first_date} to {rt.last_date})"
+            )
+        if len(round_trips) > 5:
+            lines.append(f"  ... ({len(round_trips)} total)")
+    else:
+        lines.append("Round-Trips (past 30d, ≥2 opposing actions ≤7d apart): none.")
 
     return "\n".join(lines)
 
