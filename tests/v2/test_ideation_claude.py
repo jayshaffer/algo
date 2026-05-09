@@ -229,6 +229,20 @@ class TestSystemPrompts:
         assert "get_strategy_rules" in CLAUDE_STRATEGIST_SYSTEM
         assert "get_strategy_history" in CLAUDE_STRATEGIST_SYSTEM
 
+    def test_strategist_prompt_mentions_get_recent_playbooks(self):
+        assert "get_recent_playbooks" in CLAUDE_STRATEGIST_SYSTEM
+        assert "get_recent_playbooks" in CLAUDE_SESSION_STRATEGIST_SYSTEM
+
+    def test_strategist_prompt_has_reversal_justification_rule(self):
+        for prompt in (CLAUDE_STRATEGIST_SYSTEM, CLAUDE_SESSION_STRATEGIST_SYSTEM):
+            text = prompt.lower()
+            assert "reversal" in text, (
+                "strategist must be told to justify reversals against recent playbooks"
+            )
+            assert "new evidence" in text, (
+                "rule must require new evidence, not re-narration"
+            )
+
 
 class TestStrategistPreSeedMemos:
     def test_strategy_history_in_preseed(self):
@@ -323,3 +337,30 @@ class TestFormationInjection:
                     system_prompt = arg
                     break
         assert "FORMATION MODE" not in system_prompt
+
+
+class TestStrategistTelemetryWiring:
+    """`run_strategist_loop` must thread `session_id` and `stage_name="ideation"`
+    to the agentic loop so tool_invocation events carry session context."""
+
+    def test_passes_session_id_and_stage_name_to_loop(self):
+        mock_result = MagicMock()
+        mock_result.messages = []
+        mock_result.turns_used = 0
+        mock_result.stop_reason = "end_turn"
+        mock_result.input_tokens = 0
+        mock_result.output_tokens = 0
+        mock_result.cache_creation_input_tokens = 0
+        mock_result.cache_read_input_tokens = 0
+
+        with patch("v2.ideation_claude.get_claude_client", return_value=MagicMock()), \
+             patch("v2.ideation_claude.reset_session"), \
+             patch("v2.ideation_claude.run_agentic_loop") as mock_loop, \
+             patch("v2.ideation_claude.extract_final_text", return_value="Summary"), \
+             patch("v2.ideation_claude.build_formation_context", return_value=""):
+            mock_loop.return_value = mock_result
+            run_strategist_loop(model="claude-opus-4-6", max_turns=1, session_id=42)
+
+        call_kwargs = mock_loop.call_args.kwargs
+        assert call_kwargs["session_id"] == 42
+        assert call_kwargs["stage_name"] == "ideation"

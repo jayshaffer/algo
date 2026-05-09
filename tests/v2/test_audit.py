@@ -682,6 +682,213 @@ class TestCheckRuleJudgment:
         assert len(findings) == 20
 
 
+# --- Phase 1 telemetry-driven checks ---
+
+
+class TestCheckStrategistUsingReversalTool:
+    """Warn when 3 consecutive sessions have round-trip evidence but the
+    ideation stage never called `get_recent_playbooks` to consult prior
+    plays before reversing direction."""
+
+    def test_no_event_data_returns_nothing(self):
+        from v2.audit import check_strategist_using_reversal_tool
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_strategist_using_reversal_tool(cur) == []
+
+    def test_three_sessions_with_evidence_no_lookup_warns(self):
+        from v2.audit import check_strategist_using_reversal_tool
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"session_id": 100, "reversal_evidence": 1, "lookup_calls": 0},
+            {"session_id": 99, "reversal_evidence": 1, "lookup_calls": 0},
+            {"session_id": 98, "reversal_evidence": 1, "lookup_calls": 0},
+        ]
+        findings = check_strategist_using_reversal_tool(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "STRATEGIST_NOT_USING_REVERSAL_TOOL"
+        assert findings[0].severity == "warn"
+
+    def test_below_threshold_returns_nothing(self):
+        """Even if 2 sessions show the gap, stay quiet — pattern needs 3+."""
+        from v2.audit import check_strategist_using_reversal_tool
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"session_id": 100, "reversal_evidence": 1, "lookup_calls": 0},
+            {"session_id": 99, "reversal_evidence": 1, "lookup_calls": 1},
+            {"session_id": 98, "reversal_evidence": 1, "lookup_calls": 0},
+        ]
+        assert check_strategist_using_reversal_tool(cur) == []
+
+
+class TestCheckReflectionInertOnRoundTrips:
+    """Warn when 5 consecutive sessions had round-trip evidence shown to
+    reflection AND zero `propose_rule` / `retire_rule` invocations from the
+    reflection stage in those same sessions."""
+
+    def test_no_event_data_returns_nothing(self):
+        from v2.audit import check_reflection_inert_on_round_trips
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_reflection_inert_on_round_trips(cur) == []
+
+    def test_five_sessions_with_evidence_no_rule_actions_warns(self):
+        from v2.audit import check_reflection_inert_on_round_trips
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"session_id": s, "reversal_evidence": 1, "rule_actions": 0}
+            for s in (200, 199, 198, 197, 196)
+        ]
+        findings = check_reflection_inert_on_round_trips(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "REFLECTION_INERT_ON_ROUND_TRIPS"
+        assert findings[0].severity == "warn"
+
+    def test_any_rule_action_clears_warning(self):
+        from v2.audit import check_reflection_inert_on_round_trips
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"session_id": 200, "reversal_evidence": 1, "rule_actions": 0},
+            {"session_id": 199, "reversal_evidence": 1, "rule_actions": 1},
+            {"session_id": 198, "reversal_evidence": 1, "rule_actions": 0},
+            {"session_id": 197, "reversal_evidence": 1, "rule_actions": 0},
+            {"session_id": 196, "reversal_evidence": 1, "rule_actions": 0},
+        ]
+        assert check_reflection_inert_on_round_trips(cur) == []
+
+
+class TestCheckToolErrorRate:
+    """Per-tool 7-day error rate. ≥20% is a warn, ≥50% is critical. Tools
+    with fewer than 5 invocations are ignored to avoid noisy small-N alerts."""
+
+    def test_no_tool_calls_returns_nothing(self):
+        from v2.audit import check_tool_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_tool_error_rate(cur) == []
+
+    def test_high_error_rate_emits_critical(self):
+        from v2.audit import check_tool_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"tool_name": "write_playbook", "n": 10, "errors": 6},
+        ]
+        findings = check_tool_error_rate(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "TOOL_ERROR_RATE"
+        assert findings[0].severity == "critical"
+
+    def test_low_volume_skipped(self):
+        """4 invocations, 3 errors → 75% rate but n<5, ignore."""
+        from v2.audit import check_tool_error_rate
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"tool_name": "write_playbook", "n": 4, "errors": 3},
+        ]
+        assert check_tool_error_rate(cur) == []
+
+
+class TestCheckRiskBlockHotspot:
+    """Same-ticker risk_block ≥3 times in 7 days → warn. Surfaces a
+    persistently breached sector-cap that the strategist isn't reacting to."""
+
+    def test_no_blocks_returns_nothing(self):
+        from v2.audit import check_risk_block_hotspot
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_risk_block_hotspot(cur) == []
+
+    def test_three_or_more_same_ticker_warns(self):
+        from v2.audit import check_risk_block_hotspot
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"ticker": "AAPL", "n": 4},
+        ]
+        findings = check_risk_block_hotspot(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "RISK_BLOCK_HOTSPOT"
+        assert findings[0].severity == "warn"
+        assert findings[0].evidence["tickers"][0]["ticker"] == "AAPL"
+
+    def test_below_threshold_skipped(self):
+        from v2.audit import check_risk_block_hotspot
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"ticker": "AAPL", "n": 2},
+        ]
+        assert check_risk_block_hotspot(cur) == []
+
+
+class TestCheckRiskBlockBurst:
+    """≥5 risk_blocks on a single date in 14 days → warn. Catches a single
+    bad session that hammered the sector gate."""
+
+    def test_no_blocks_returns_nothing(self):
+        from v2.audit import check_risk_block_burst
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        assert check_risk_block_burst(cur) == []
+
+    def test_five_or_more_on_one_date_warns(self):
+        from v2.audit import check_risk_block_burst
+        from datetime import date as _date
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"d": _date(2026, 5, 8), "n": 6},
+        ]
+        findings = check_risk_block_burst(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "RISK_BLOCK_BURST"
+        assert findings[0].severity == "warn"
+
+    def test_below_threshold_skipped(self):
+        from v2.audit import check_risk_block_burst
+        from datetime import date as _date
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"d": _date(2026, 5, 8), "n": 4},
+        ]
+        assert check_risk_block_burst(cur) == []
+
+
+class TestCheckIdeationToolDrought:
+    """Any tool in the expected ideation toolset with 0 invocations across
+    the last 7 ideation sessions → warn. Flags a tool the strategist has
+    silently stopped using."""
+
+    def test_all_expected_tools_used_returns_nothing(self):
+        from v2.audit import EXPECTED_IDEATION_TOOLS, check_ideation_tool_drought
+        cur = MagicMock()
+        cur.fetchone.return_value = {"n_sessions": 7}
+        cur.fetchall.return_value = [
+            {"tool_name": t, "n": 1} for t in EXPECTED_IDEATION_TOOLS
+        ]
+        assert check_ideation_tool_drought(cur) == []
+
+    def test_missing_tool_emits_warning(self):
+        from v2.audit import EXPECTED_IDEATION_TOOLS, check_ideation_tool_drought
+        cur = MagicMock()
+        cur.fetchone.return_value = {"n_sessions": 7}
+        # Drop `get_recent_playbooks` from observed counts.
+        cur.fetchall.return_value = [
+            {"tool_name": t, "n": 3}
+            for t in EXPECTED_IDEATION_TOOLS if t != "get_recent_playbooks"
+        ]
+        findings = check_ideation_tool_drought(cur)
+        assert len(findings) == 1
+        assert findings[0].check_code == "IDEATION_TOOL_DROUGHT"
+        assert findings[0].severity == "warn"
+        assert "get_recent_playbooks" in findings[0].evidence["missing_tools"]
+
+    def test_too_few_sessions_skipped(self):
+        """Window not yet meaningful — fewer than 3 ideation sessions in 7d."""
+        from v2.audit import check_ideation_tool_drought
+        cur = MagicMock()
+        cur.fetchone.return_value = {"n_sessions": 2}
+        cur.fetchall.return_value = []
+        assert check_ideation_tool_drought(cur) == []
+
+
 # --- Runner tests (Task 15) ---
 
 class TestRunner:

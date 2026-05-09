@@ -16,6 +16,7 @@ from .database.trading_db import (
     get_news_signals,
     get_positions,
     get_recent_decisions,
+    get_recent_playbooks_with_actions,
     get_recent_strategy_memos,
     get_thesis_by_id,
     insert_thesis,
@@ -363,6 +364,33 @@ def tool_get_decision_history(days: int = 30) -> str:
         )
 
     return "\n".join(lines)
+
+
+def tool_get_recent_playbooks(n: int = 3) -> str:
+    """Return the past N playbooks (planned actions) so the strategist
+    can detect reversals against its own recent plans before writing a
+    new playbook."""
+    logger.info(f"Getting recent playbooks (n={n})")
+    playbooks = get_recent_playbooks_with_actions(n=n)
+    if not playbooks:
+        return "No recent playbooks."
+
+    lines = [f"Recent Playbooks ({len(playbooks)} most recent):", ""]
+    for pb in playbooks:
+        lines.append(f"{pb['pb_date']} (Playbook #{pb['pb_id']}):")
+        if not pb["actions"]:
+            lines.append("  (no actions)")
+        for a in pb["actions"]:
+            mag = a.get("intent_magnitude")
+            intent = a.get("intent_type") or ""
+            mag_str = f"={mag}" if mag is not None else ""
+            intent_part = f" {intent}{mag_str}" if intent else ""
+            reasoning = (a.get("reasoning") or "").strip()
+            lines.append(
+                f"  {a['ticker']}: {a['action'].upper()}{intent_part} — {reasoning}"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def tool_write_playbook(
@@ -716,6 +744,21 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "get_recent_playbooks",
+        "description": (
+            "Past playbooks (planned actions) for recent sessions. "
+            "Use BEFORE writing today's playbook to check whether today's "
+            "actions would reverse what you wrote in recent sessions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "Count (default: 3)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "write_playbook",
         "description": (
             "Write today's playbook for the executor. REQUIRED every session. "
@@ -791,6 +834,7 @@ TOOL_HANDLERS = {
     "get_macro_signals": tool_get_macro_signals,
     "get_signal_attribution": tool_get_signal_attribution,
     "get_decision_history": tool_get_decision_history,
+    "get_recent_playbooks": tool_get_recent_playbooks,
     "write_playbook": tool_write_playbook,
     "get_strategy_identity": tool_get_strategy_identity,
     "get_strategy_rules": tool_get_strategy_rules,

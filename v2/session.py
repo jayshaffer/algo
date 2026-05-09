@@ -45,6 +45,7 @@ from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
+from .telemetry import session_summary_line
 from .trader import TradingSessionResult, run_trading_session
 from .social_trades import TradePostsStageResult, run_trade_posts_stage
 from .twitter import TwitterStageResult, run_twitter_stage
@@ -284,6 +285,7 @@ def _run_strategist_stage(
                 model=model,
                 max_turns=max_turns,
                 attribution_constraints=attribution_constraints,
+                session_id=session_id,
             )
             # P2.24: validate playbook BEFORE persisting the memo. The previous
             # order committed the memo first, then raised on missing playbook;
@@ -340,7 +342,9 @@ def _run_executor_stage(
     _start_stage(session_id, "executor")
     with capture_usage() as usage:
         try:
-            result.trading_result = run_trading_session(dry_run=dry_run, model=executor_model)
+            result.trading_result = run_trading_session(
+                dry_run=dry_run, model=executor_model, session_id=session_id,
+            )
             _complete_stage(session_id, "executor", usage=usage)
         except Exception as e:
             result.trading_error = str(e)
@@ -367,6 +371,7 @@ def _run_strategy_stage(
                 model=DEFAULT_REFLECTION_MODEL,
                 max_turns=10,
                 trading_result=result.trading_result,
+                session_id=session_id,
             )
             # P1.15: parallel to P2.24 for the strategist — the reflection LLM is
             # instructed to "always write a memo" but nothing structurally enforced
@@ -481,6 +486,11 @@ def _finalize_session(result: SessionResult, session_id: int | None) -> None:
             logger.warning("Could not update session status: %s", e)
 
     _log_session_costs(session_id)
+    if session_id:
+        try:
+            logger.info(session_summary_line(session_id))
+        except Exception:
+            logger.exception("session_summary_line failed; continuing")
     logger.info("=" * 60)
     logger.info("Session complete in %.1fs", result.duration_seconds)
     if result.has_errors:

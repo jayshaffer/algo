@@ -92,6 +92,7 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
 - Use `get_strategy_history` to review recent strategy reflection memos
 - Use `get_signal_attribution` to see which signal types have been historically predictive
 - Use `get_decision_history` to review recent trading performance
+- Use `get_recent_playbooks` to see what you planned in recent sessions. Always check this BEFORE writing today's playbook — if today's plan reverses a recent action on the same ticker, you must justify the reversal in your reasoning.
 - Use `web_search` to research current market conditions and companies
 - Use `get_market_snapshot` to see sector performance and movers
 - Use thesis tools to manage trade ideas
@@ -111,7 +112,8 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
 
    Example: "exit AMZN fully" → {{"action":"sell","intent_type":"exit_full","intent_magnitude":null}}
    Example: "put $500 into AMD" → {{"action":"buy","intent_type":"invest_dollar","intent_magnitude":500}}
-   Example: "take half off SPY" → {{"action":"sell","intent_type":"exit_partial_pct","intent_magnitude":50}}"""
+   Example: "take half off SPY" → {{"action":"sell","intent_type":"exit_partial_pct","intent_magnitude":50}}
+8. **Reversal Justification.** Before adding a buy/sell action to today's playbook, check `get_recent_playbooks` for the same ticker. If today's action is the opposite of what you wrote in the past 7 days, your action's `reasoning` must explicitly cite (a) the prior playbook date and action, and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. Re-narrating the same fundamentals from a different angle is not new evidence; if you cannot articulate (b), do not propose the action."""
 
 CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
     timing="after market close",
@@ -203,6 +205,8 @@ def _run_claude_loop(
     model: str,
     max_turns: int,
     label: str,
+    session_id: int | None = None,
+    stage_name: str | None = None,
 ) -> ClaudeIdeationResult:
     """Run a Claude agentic loop and return a standardized result.
 
@@ -222,6 +226,8 @@ def _run_claude_loop(
         tools=TOOL_DEFINITIONS,
         tool_handlers=TOOL_HANDLERS,
         max_turns=max_turns,
+        session_id=session_id,
+        stage_name=stage_name,
     )
 
     created, updated, closed, adopted = count_actions(result.messages)
@@ -286,6 +292,7 @@ def _print_cost_summary(label, result, model, created, updated, closed, summary,
 def run_ideation_claude(
     model: str = "claude-opus-4-6",
     max_turns: int = 20,
+    session_id: int | None = None,
 ) -> ClaudeIdeationResult:
     """Run an agentic ideation session with Claude.
 
@@ -305,6 +312,8 @@ When you've completed your research, provide a summary of your findings and acti
         model=model,
         max_turns=max_turns,
         label="Claude Ideation Session",
+        session_id=session_id,
+        stage_name="ideation",
     )
 
 
@@ -377,6 +386,7 @@ def run_strategist_loop(
     max_turns: int = 25,
     system_prompt: str = None,
     attribution_constraints: str = "",
+    session_id: int | None = None,
 ) -> ClaudeIdeationResult:
     """Run the strategist agentic loop.
 
@@ -422,6 +432,8 @@ When you've completed your work, provide a summary of your findings and actions.
         model=model,
         max_turns=max_turns,
         label="Strategist Loop",
+        session_id=session_id,
+        stage_name="ideation",
     )
 
 

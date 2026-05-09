@@ -49,7 +49,8 @@ from .intents import (
     resolve_buy_intent,
     resolve_sell_intent,
 )
-from .risk import check_sector_cap_for_buy, check_sector_concentration
+from .risk import MAX_SECTOR_PCT, SECTOR_MAP, check_sector_cap_for_buy, check_sector_concentration
+from .telemetry import record_event
 
 logger = logging.getLogger("trader")
 
@@ -462,6 +463,7 @@ def _prepare_decision(
     errors: list[str],
     session_date: date,
     position_values: dict | None = None,
+    session_id: int | None = None,
 ) -> Decimal | None:
     """Price-lookup, resolve intent to share count, and run sell precheck.
 
@@ -530,6 +532,36 @@ def _prepare_decision(
             decision.reasoning = f"[REJECTED: {breach}] {decision.reasoning}"
             decision.action = "invalid"
             totals.trades_failed += 1
+
+            # Telemetry: persist the projected sector exposure so the auditor
+            # can detect ticker hotspots (RISK_BLOCK_HOTSPOT) and bursts
+            # (RISK_BLOCK_BURST). Recompute the structured fields here rather
+            # than parsing them out of the breach text.
+            sector = SECTOR_MAP.get(decision.ticker, "other")
+            new_value = resolved_qty * price
+            sector_total = sum(
+                (v for t, v in position_values.items()
+                 if SECTOR_MAP.get(t, "other") == sector),
+                Decimal(0),
+            )
+            projected = sector_total + new_value
+            sector_pct_after = (
+                float(projected / portfolio_value) if portfolio_value > 0 else None
+            )
+            record_event(
+                session_id=session_id,
+                stage_name="trading",
+                event_type="risk_block",
+                payload={
+                    "ticker": decision.ticker,
+                    "sector": sector,
+                    "proposed_qty": float(resolved_qty),
+                    "price": float(price),
+                    "sector_pct_after": sector_pct_after,
+                    "cap": float(MAX_SECTOR_PCT),
+                    "reason_text": breach,
+                },
+            )
             return None
 
     # P1.6: pre-submit dedup. The previous post-submit check left a window
@@ -574,6 +606,7 @@ def _execute_decisions(
     dry_run: bool,
     errors: list[str],
     session_date: date,
+    session_id: int | None = None,
 ) -> tuple[_ExecutionTotals, dict, dict, dict]:
     """Run the per-decision execution loop.
 
@@ -623,6 +656,7 @@ def _execute_decisions(
             portfolio_value, buying_power, totals, errors,
             session_date,
             position_values=position_values,
+            session_id=session_id,
         )
         if price is None:
             continue
@@ -920,6 +954,7 @@ def _log_decisions(
 def run_trading_session(
     dry_run: bool = False,
     model: str = DEFAULT_EXECUTOR_MODEL,
+    session_id: int | None = None,
 ) -> TradingSessionResult:
     """
     Run a complete trading session.
@@ -988,6 +1023,7 @@ def run_trading_session(
     totals, order_ids, order_results, decision_account_states = _execute_decisions(
         response, positions, account_info, data_client, dry_run, errors,
         session_date,
+        session_id=session_id,
     )
 
     # Step 5b: Process thesis invalidations

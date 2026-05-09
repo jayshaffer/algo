@@ -9,6 +9,7 @@ import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import partial
 
 from .attribution import get_attribution_summary
 from .claude_client import get_claude_client, run_agentic_loop
@@ -21,6 +22,8 @@ from .database.trading_db import (
     retire_strategy_rule,
 )
 from .formation import build_formation_context
+from .patterns import analyze_round_trips
+from .telemetry import record_event
 from .tools import tool_get_strategy_history, tool_get_strategy_identity, tool_get_strategy_rules
 
 logger = logging.getLogger(__name__)
@@ -335,7 +338,61 @@ def tool_get_session_summary(days: int = 30) -> str:
     lines.append("Signal Attribution:")
     lines.append(get_attribution_summary())
 
+    # Round-trip evidence — surfaces same-ticker opposing-action churn
+    # that signal-level attribution cannot see. Same 30d window as the
+    # rest of this summary; gap_days=7 captures same-week flips.
+    round_trips = analyze_round_trips(days=30, gap_days=7, min_pairs=2)
+    lines.append("")
+    if round_trips:
+        lines.append("Round-Trips (past 30d, ≥2 opposing actions ≤7d apart):")
+        for rt in round_trips[:5]:
+            lines.append(
+                f"  {rt.ticker}: {rt.pair_count} pairs "
+                f"({rt.first_date} to {rt.last_date})"
+            )
+        if len(round_trips) > 5:
+            lines.append(f"  ... ({len(round_trips)} total)")
+    else:
+        lines.append("Round-Trips (past 30d, ≥2 opposing actions ≤7d apart): none.")
+
     return "\n".join(lines)
+
+
+def tool_get_session_summary_with_telemetry(
+    days: int = 30,
+    *,
+    session_id: int | None = None,
+) -> str:
+    """Session-aware wrapper around `tool_get_session_summary`.
+
+    Calls the inner tool to render text for the LLM, then re-computes
+    `analyze_round_trips` with the same window and emits an `evidence_shown`
+    event so the auditor can ask "was reflection shown round-trip evidence
+    on this session?". Always emits — even on empty — so absence-of-event
+    means the wrapper didn't run, not that there was no evidence.
+    """
+    output = tool_get_session_summary(days=days)
+    round_trips = analyze_round_trips(days=30, gap_days=7, min_pairs=2)
+    items = [
+        {
+            "ticker": rt.ticker,
+            "pair_count": rt.pair_count,
+            "first_date": rt.first_date,
+            "last_date": rt.last_date,
+        }
+        for rt in round_trips
+    ]
+    record_event(
+        session_id=session_id,
+        stage_name="reflection",
+        event_type="evidence_shown",
+        payload={
+            "evidence_kind": "round_trips",
+            "items": items,
+            "summary": {"n_tickers": len(items)},
+        },
+    )
+    return output
 
 
 # --- Tool Definitions ---
@@ -498,6 +555,7 @@ def run_strategy_reflection(
     model: str = DEFAULT_REFLECTION_MODEL,
     max_turns: int = 10,
     trading_result=None,
+    session_id: int | None = None,
 ) -> StrategyReflectionResult:
     """Run the strategy reflection stage (Stage 4)."""
     logger.info("Starting strategy reflection (model=%s, max_turns=%d)", model, max_turns)
@@ -524,14 +582,27 @@ def run_strategy_reflection(
     if formation_context:
         system_prompt = system_prompt + "\n\n" + formation_context
 
+    # Closure-bind a session-aware wrapper for `get_session_summary` so the
+    # auditor can persist what round-trip evidence was shown to reflection.
+    # Other handlers don't need session context — they're either pure reads
+    # or write through their own tool_invocation events emitted by the loop.
+    handlers = {
+        **STRATEGY_TOOL_HANDLERS,
+        "get_session_summary": partial(
+            tool_get_session_summary_with_telemetry, session_id=session_id
+        ),
+    }
+
     result = run_agentic_loop(
         client=client,
         model=model,
         system=system_prompt,
         initial_message="\n".join(initial_parts),
         tools=STRATEGY_TOOL_DEFINITIONS,
-        tool_handlers=STRATEGY_TOOL_HANDLERS,
+        tool_handlers=handlers,
         max_turns=max_turns,
+        session_id=session_id,
+        stage_name="reflection",
     )
 
     proposed, retired, identity_updated, memo_written = _count_actions(result.messages)

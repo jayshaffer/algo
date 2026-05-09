@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import anthropic
 
+from .telemetry import record_event
+
 logger = logging.getLogger(__name__)
 
 # Retry configuration for Claude API calls
@@ -277,6 +279,8 @@ def run_agentic_loop(
     tools: list[dict],
     tool_handlers: dict[str, Callable],
     max_turns: int = 20,
+    session_id: int | None = None,
+    stage_name: str | None = None,
 ) -> AgenticLoopResult:
     """Run an agentic loop where Claude uses tools until it completes its task."""
     messages = [{"role": "user", "content": initial_message}]
@@ -393,6 +397,7 @@ def run_agentic_loop(
                 logger.info(f"Executing tool: {tool_name}")
                 logger.debug(f"Tool input: {tool_input}")
 
+                started = time.monotonic()
                 handler = tool_handlers.get(tool_name)
                 if handler is None:
                     result = ToolResult(
@@ -414,6 +419,19 @@ def run_agentic_loop(
                             content=f"Error: {e}",
                             is_error=True,
                         )
+                duration_ms = int((time.monotonic() - started) * 1000)
+                record_event(
+                    session_id=session_id,
+                    stage_name=stage_name or "unknown",
+                    event_type="tool_invocation",
+                    payload={
+                        "tool_name": tool_name,
+                        "args": tool_input if isinstance(tool_input, dict) else {"_raw": str(tool_input)},
+                        "success": not result.is_error,
+                        "error": (result.content if result.is_error else None),
+                        "duration_ms": duration_ms,
+                    },
+                )
 
                 tool_results.append(
                     {
