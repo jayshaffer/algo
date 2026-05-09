@@ -505,6 +505,7 @@ def run_agentic_loop(
                         "success": not result.is_error,
                         "error": (result.content if result.is_error else None),
                         "duration_ms": duration_ms,
+                        "output_chars": len(result.content),
                     },
                 )
 
