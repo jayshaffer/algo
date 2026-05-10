@@ -212,3 +212,67 @@ class TestPipelineStats:
             errors=0
         )
         assert not hasattr(stats, "news_filtered")
+
+
+class TestPipelineSummaryPersistence:
+    """News pipeline must persist NewsItem.summary so the Haiku filter
+    has more than the 60-char headline excerpt to rank on."""
+
+    @patch("v2.pipeline.insert_news_signals_batch")
+    @patch("v2.pipeline.insert_macro_signals_batch")
+    @patch("v2.pipeline.classify_news_batch")
+    @patch("v2.pipeline.fetch_broad_news")
+    def test_pipeline_passes_summary_to_db_layer(
+        self, mock_fetch, mock_classify, mock_macro_insert, mock_ticker_insert
+    ):
+        from datetime import timezone
+        from v2.news import NewsItem
+        from v2.classifier import ClassificationResult, TickerSignal
+
+        # Alpaca returned one news item with a real summary.
+        mock_fetch.return_value = [
+            NewsItem(
+                id="alp-123",
+                headline="AAPL hits ATH",
+                summary="Apple closed at $300 after the Foxconn deal.",
+                author="x",
+                source="Reuters",
+                symbols=["AAPL"],
+                published_at=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+                url="https://example.com",
+            ),
+        ]
+
+        # Classifier produces one ticker signal carrying the summary through.
+        mock_classify.return_value = [
+            ClassificationResult(
+                news_type="ticker_specific",
+                ticker_signals=[
+                    TickerSignal(
+                        ticker="AAPL",
+                        headline="AAPL hits ATH",
+                        summary="Apple closed at $300 after the Foxconn deal.",
+                        category="momentum",
+                        sentiment="bullish",
+                        confidence="high",
+                        published_at=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+                        alpaca_id="alp-123",
+                    )
+                ],
+                macro_signal=None,
+            ),
+        ]
+        mock_ticker_insert.return_value = 1
+        mock_macro_insert.return_value = 0
+
+        run_pipeline(hours=1, limit=10, dry_run=False)
+
+        # The pipeline must include summary in the tuple passed to the DB.
+        assert mock_ticker_insert.call_count == 1
+        ticker_tuples = mock_ticker_insert.call_args[0][0]
+        assert len(ticker_tuples) == 1, f"expected 1 tuple, got {ticker_tuples}"
+        # The tuple shape after this change is:
+        # (ticker, headline, category, sentiment, confidence, published_at, alpaca_id, summary)
+        assert ticker_tuples[0][-1] == "Apple closed at $300 after the Foxconn deal.", (
+            f"summary not at last position; tuple was {ticker_tuples[0]}"
+        )
