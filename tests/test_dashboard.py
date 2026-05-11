@@ -297,6 +297,15 @@ class TestPlaybookPage:
         assert resp.status_code == 200
         mock_queries.get_playbook_actions.assert_not_called()
 
+    def test_playbook_links_ticker_and_thesis(self, client):
+        mock_queries.get_today_playbook.return_value = make_playbook_row()
+        mock_queries.get_playbook_actions.return_value = [
+            make_playbook_action_row(ticker="NVDA", thesis_id=7),
+        ]
+        resp = client.get("/playbook")
+        assert b'href="/ticker/NVDA"' in resp.data
+        assert b'href="/thesis/7"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Attribution page
