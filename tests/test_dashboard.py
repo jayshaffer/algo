@@ -1076,6 +1076,12 @@ class TestEventsPage:
             limit=200, event_type=None, session_id=42
         )
 
+    def test_event_session_links_to_session_detail(self, client):
+        mock_queries.get_recent_agent_events.return_value = [make_agent_event_row(session_id=42)]
+        mock_queries.get_agent_event_types.return_value = []
+        resp = client.get("/events")
+        assert b'href="/session/42"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Decision detail
