@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Costs - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Session Costs</h1>
+
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Recent Sessions (token usage + USD)</h2>
+        <p class="text-xs text-gray-500 mt-1">
+            Cost is computed from <code>session_stage_costs</code> using
+            <code>model_pricing</code>. Stages without a recorded model show
+            <code>—</code>.
+        </p>
+    </div>
+    <div class="p-4 overflow-x-auto">
+        {% if sessions %}
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-gray-500 border-b">
+                    <th class="pb-2">Date</th>
+                    <th class="pb-2">Type</th>
+                    <th class="pb-2">Status</th>
+                    <th class="pb-2 text-right">Cost (USD)</th>
+                    <th class="pb-2 text-right">Input</th>
+                    <th class="pb-2 text-right">Output</th>
+                    <th class="pb-2 text-right">Cache Write</th>
+                    <th class="pb-2 text-right">Cache Read</th>
+                    <th class="pb-2">Started</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in sessions %}
+                <tr class="border-t">
+                    <td class="py-2">{{ s.session_date }}</td>
+                    <td class="py-2">{{ s.session_type }}</td>
+                    <td class="py-2">{{ s.status }}</td>
+                    <td class="py-2 text-right font-mono">
+                        {% if s.total_cost_usd is not none %}
+                            ${{ '%.4f' % s.total_cost_usd|float }}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.total_input_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.total_output_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.total_cache_creation_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.total_cache_read_tokens or 0) }}</td>
+                    <td class="py-2 text-xs text-gray-500">
+                        {{ s.started_at.strftime('%Y-%m-%d %H:%M') if s.started_at else '' }}
+                        <a href="/costs/{{ s.session_id }}" class="text-blue-600 hover:underline ml-2">stages →</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No session cost data yet. Session stages need <code>model</code> + token columns set (migration 024).</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

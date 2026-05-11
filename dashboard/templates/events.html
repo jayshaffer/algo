@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Agent Events - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">Agent Events</h1>
+<p class="text-sm text-gray-600 mb-6">
+    Raw <code>agent_events</code> log: tool invocations, risk blocks, loop
+    recoveries, executor responses. Best-effort writes — missing rows mean a
+    producer didn't pass <code>session_id</code>, not necessarily a bug.
+</p>
+
+<!-- Filter bar -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">Filter</h2>
+    </div>
+    <div class="p-4">
+        <div class="flex flex-wrap gap-2 mb-3">
+            <a href="/events" class="px-3 py-1 rounded text-sm {% if not current_type and not current_session %}bg-blue-600 text-white{% else %}bg-gray-200 hover:bg-gray-300{% endif %}">all</a>
+            {% for tc in type_counts %}
+            <a href="/events?type={{ tc.event_type }}{% if current_session %}&session={{ current_session }}{% endif %}"
+               class="px-3 py-1 rounded text-sm {% if current_type == tc.event_type %}bg-blue-600 text-white{% else %}bg-gray-200 hover:bg-gray-300{% endif %}">
+                {{ tc.event_type }} <span class="text-xs opacity-75">({{ tc.n }})</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% if current_session %}
+        <div class="text-sm">
+            Session filter: <code>{{ current_session }}</code>
+            <a href="/events{% if current_type %}?type={{ current_type }}{% endif %}" class="text-blue-600 hover:underline ml-2">clear</a>
+        </div>
+        {% endif %}
+        <p class="text-xs text-gray-500 mt-2">14-day type counts. Showing latest 200 matching events.</p>
+    </div>
+</div>
+
+<!-- Events table -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b">
+        <h2 class="text-lg font-semibold">{{ events|length }} events</h2>
+    </div>
+    <div class="p-4 overflow-x-auto">
+        {% if events %}
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-gray-500 border-b">
+                    <th class="pb-2">Time</th>
+                    <th class="pb-2">Session</th>
+                    <th class="pb-2">Stage</th>
+                    <th class="pb-2">Event</th>
+                    <th class="pb-2">Payload</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                <tr class="border-t">
+                    <td class="py-2 align-top text-xs text-gray-500 whitespace-nowrap">
+                        {{ e.occurred_at.strftime('%m-%d %H:%M:%S') if e.occurred_at else '' }}
+                    </td>
+                    <td class="py-2 align-top text-xs">
+                        {% if e.session_id %}
+                        <a href="/events?session={{ e.session_id }}" class="text-blue-600 hover:underline">{{ e.session_id }}</a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="py-2 align-top text-xs">{{ e.stage_name or '—' }}</td>
+                    <td class="py-2 align-top">
+                        <span class="bg-gray-100 px-2 py-0.5 rounded text-xs font-mono">{{ e.event_type }}</span>
+                    </td>
+                    <td class="py-2 align-top">
+                        <pre class="text-xs text-gray-700 whitespace-pre-wrap break-all max-w-2xl">{{ e.payload|tojson(indent=2) }}</pre>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No events match the current filter.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

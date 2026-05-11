@@ -326,6 +326,7 @@ def make_news_signal_row(**kwargs):
         "id": 1,
         "ticker": "AAPL",
         "headline": "AAPL Q3 earnings beat",
+        "summary": "AAPL reported earnings above consensus, raising guidance.",
         "category": "earnings",
         "sentiment": "bullish",
         "confidence": "high",

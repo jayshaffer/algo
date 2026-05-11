@@ -1,7 +1,7 @@
 """Tests for dashboard/app.py - Flask dashboard routes."""
 
 import sys
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -777,3 +777,175 @@ class TestTweetsPage:
         assert resp.status_code == 200
         assert b"Failed" in resp.data
         assert b"Rate limit exceeded" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Signals: summary column
+# ---------------------------------------------------------------------------
+
+
+class TestSignalsSummaryColumn:
+    """Regression: news_signals.summary must render on /signals."""
+
+    def test_signals_renders_summary_when_present(self, client):
+        mock_queries.get_recent_ticker_signals.return_value = [
+            make_news_signal_row(summary="Filtered summary text exposed to UI")
+        ]
+
+        resp = client.get("/signals")
+        assert resp.status_code == 200
+        assert b"Filtered summary text exposed to UI" in resp.data
+
+    def test_signals_handles_missing_summary(self, client):
+        # summary can be NULL for old rows; template must not 500.
+        row = make_news_signal_row()
+        row["summary"] = None
+        mock_queries.get_recent_ticker_signals.return_value = [row]
+
+        resp = client.get("/signals")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Costs page
+# ---------------------------------------------------------------------------
+
+
+class TestCostsPage:
+    """Tests for GET /costs and GET /costs/<session_id>."""
+
+    def test_costs_renders_empty(self, client):
+        mock_queries.get_recent_session_costs.return_value = []
+
+        resp = client.get("/costs")
+        assert resp.status_code == 200
+        assert b"No session cost data yet" in resp.data
+        mock_queries.get_recent_session_costs.assert_called_once_with(limit=30)
+
+    def test_costs_renders_with_data(self, client):
+        mock_queries.get_recent_session_costs.return_value = [
+            {
+                "session_id": 42,
+                "session_date": date(2026, 5, 9),
+                "session_type": "daily",
+                "status": "completed",
+                "total_cost_usd": Decimal("1.2345"),
+                "total_input_tokens": 12345,
+                "total_output_tokens": 678,
+                "total_cache_creation_tokens": 9000,
+                "total_cache_read_tokens": 1000,
+                "started_at": datetime(2026, 5, 9, 21, 0, 0),
+                "completed_at": datetime(2026, 5, 9, 21, 5, 0),
+            }
+        ]
+
+        resp = client.get("/costs")
+        assert resp.status_code == 200
+        assert b"$1.2345" in resp.data
+        assert b"12,345" in resp.data
+        assert b"/costs/42" in resp.data
+
+    def test_costs_session_renders_stages(self, client):
+        mock_queries.get_session_stage_costs.return_value = [
+            {
+                "id": 1,
+                "stage_name": "ideation",
+                "status": "completed",
+                "started_at": datetime(2026, 5, 9, 21, 1, 0),
+                "completed_at": datetime(2026, 5, 9, 21, 2, 0),
+                "model": "claude-opus-4-7",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 200,
+                "cost_usd": Decimal("0.5000"),
+            },
+            {
+                "id": 2,
+                "stage_name": "trading",
+                "status": "completed",
+                "started_at": datetime(2026, 5, 9, 21, 3, 0),
+                "completed_at": datetime(2026, 5, 9, 21, 4, 0),
+                "model": "claude-haiku-4-5",
+                "input_tokens": 200,
+                "output_tokens": 100,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 50,
+                "cost_usd": Decimal("0.1000"),
+            },
+        ]
+
+        resp = client.get("/costs/42")
+        assert resp.status_code == 200
+        assert b"ideation" in resp.data
+        assert b"trading" in resp.data
+        assert b"$0.6000" in resp.data  # sum of stage costs
+        mock_queries.get_session_stage_costs.assert_called_once_with(42)
+
+    def test_costs_session_404_when_no_stages(self, client):
+        mock_queries.get_session_stage_costs.return_value = []
+
+        resp = client.get("/costs/999")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Events page (agent_events viewer)
+# ---------------------------------------------------------------------------
+
+
+class TestEventsPage:
+    """Tests for GET /events."""
+
+    def test_events_renders_empty(self, client):
+        mock_queries.get_recent_agent_events.return_value = []
+        mock_queries.get_agent_event_types.return_value = []
+
+        resp = client.get("/events")
+        assert resp.status_code == 200
+        assert b"No events match" in resp.data
+        mock_queries.get_recent_agent_events.assert_called_once_with(
+            limit=200, event_type=None, session_id=None
+        )
+
+    def test_events_renders_with_data(self, client):
+        mock_queries.get_recent_agent_events.return_value = [
+            {
+                "id": 1,
+                "session_id": 42,
+                "stage_name": "trading",
+                "event_type": "risk_block",
+                "payload": {"ticker": "AAPL", "reason": "max_position"},
+                "occurred_at": datetime(2026, 5, 9, 21, 5, 0),
+            }
+        ]
+        mock_queries.get_agent_event_types.return_value = [
+            {"event_type": "tool_invocation", "n": 50},
+            {"event_type": "risk_block", "n": 3},
+        ]
+
+        resp = client.get("/events")
+        assert resp.status_code == 200
+        assert b"risk_block" in resp.data
+        assert b"tool_invocation" in resp.data
+        assert b"AAPL" in resp.data
+
+    def test_events_filter_by_type(self, client):
+        mock_queries.get_recent_agent_events.return_value = []
+        mock_queries.get_agent_event_types.return_value = []
+
+        resp = client.get("/events?type=tool_invocation")
+        assert resp.status_code == 200
+        mock_queries.get_recent_agent_events.assert_called_once_with(
+            limit=200, event_type="tool_invocation", session_id=None
+        )
+
+    def test_events_filter_by_session(self, client):
+        mock_queries.get_recent_agent_events.return_value = []
+        mock_queries.get_agent_event_types.return_value = []
+
+        resp = client.get("/events?session=42")
+        assert resp.status_code == 200
+        mock_queries.get_recent_agent_events.assert_called_once_with(
+            limit=200, event_type=None, session_id=42
+        )

@@ -69,7 +69,7 @@
             <thead>
                 <tr class="text-left text-gray-500 text-sm">
                     <th class="pb-2">Ticker</th>
-                    <th class="pb-2">Headline</th>
+                    <th class="pb-2">Headline / Summary</th>
                     <th class="pb-2">Category</th>
                     <th class="pb-2">Sentiment</th>
                     <th class="pb-2">Confidence</th>
@@ -79,12 +79,17 @@
             <tbody>
                 {% for signal in ticker_signals %}
                 <tr class="border-t">
-                    <td class="py-2 font-semibold">{{ signal.ticker }}</td>
-                    <td class="py-2 text-sm">{{ signal.headline[:60] }}{% if signal.headline|length > 60 %}...{% endif %}</td>
-                    <td class="py-2"><span class="bg-gray-100 px-2 py-0.5 rounded text-sm">{{ signal.category }}</span></td>
-                    <td class="py-2 sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</td>
-                    <td class="py-2 text-sm text-gray-600">{{ signal.confidence }}</td>
-                    <td class="py-2 text-sm text-gray-500">{{ signal.published_at.strftime('%m/%d %H:%M') if signal.published_at else '' }}</td>
+                    <td class="py-2 align-top font-semibold">{{ signal.ticker }}</td>
+                    <td class="py-2 align-top text-sm">
+                        <div>{{ signal.headline[:80] }}{% if signal.headline|length > 80 %}...{% endif %}</div>
+                        {% if signal.summary %}
+                        <div class="text-xs text-gray-500 mt-0.5">{{ signal.summary[:140] }}{% if signal.summary|length > 140 %}...{% endif %}</div>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 align-top"><span class="bg-gray-100 px-2 py-0.5 rounded text-sm">{{ signal.category }}</span></td>
+                    <td class="py-2 align-top sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</td>
+                    <td class="py-2 align-top text-sm text-gray-600">{{ signal.confidence }}</td>
+                    <td class="py-2 align-top text-sm text-gray-500">{{ signal.published_at.strftime('%m/%d %H:%M') if signal.published_at else '' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
