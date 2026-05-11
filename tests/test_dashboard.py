@@ -848,6 +848,25 @@ class TestStrategyPage:
         assert resp.status_code == 200
         assert b"No memos in the last 30 days" in resp.data
 
+    def test_strategy_memo_links_to_session(self, client):
+        memo_date = date(2026, 5, 11)
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [
+            make_strategy_memo_row(session_date=memo_date),
+        ]
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/strategy")
+        assert b'href="/session/42"' in resp.data
+
+    def test_strategy_memo_without_session(self, client):
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [make_strategy_memo_row()]
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Tweets page

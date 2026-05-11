@@ -300,7 +300,12 @@ def strategy():
     """Strategy state, rules, and memos page."""
     state = get_current_strategy()
     rules = get_strategy_rules(status='active')
-    memos = get_strategy_memos(days=30)
+    memos_raw = get_strategy_memos(days=30)
+    memos = []
+    for m in memos_raw:
+        m = dict(m)
+        m["session_id"] = lookup_session_id_by_date(m["session_date"])
+        memos.append(m)
     return render_template("strategy.html", state=state, rules=rules, memos=memos)
 
 

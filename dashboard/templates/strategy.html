@@ -123,7 +123,13 @@
         {% for memo in memos %}
         <div class="p-4">
             <div class="flex items-center gap-2 mb-1">
-                <span class="text-sm font-medium text-gray-500">{{ memo.session_date }}</span>
+                <span class="text-sm font-medium text-gray-500">
+                    {% if memo.session_id %}
+                    <a href="/session/{{ memo.session_id }}" class="text-blue-600 hover:underline">{{ memo.session_date }}</a>
+                    {% else %}
+                    {{ memo.session_date }}
+                    {% endif %}
+                </span>
                 <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ memo.memo_type }}</span>
             </div>
             <p class="text-gray-700 whitespace-pre-line">{{ memo.content }}</p>
