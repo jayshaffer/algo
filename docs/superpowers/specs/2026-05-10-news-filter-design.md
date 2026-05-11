@@ -403,3 +403,57 @@ Manual check only (no unit test per codebase convention):
   require additional fetches and storage outside this scope.
 - Sentiment/category re-classification by Haiku. Existing pipeline
   classification stays as-is.
+
+## Validation results
+
+Validation run on paper, session 243, 2026-05-11.
+
+**Backfill outcome:** 8070 items fetched from Alpaca; 193 paper rows had
+their `summary` populated (out of 913 rows in the 7-day window).
+Coverage skews older: May-06 day got 98/267, May-08 got 26/371. Alpaca's
+historical news endpoint returns less detail for older items than fresh
+ones, and the pipeline already filters out ~89% of fetched items as
+noise, so the matchable pool is naturally smaller than the firehose.
+Pipeline going forward persists summaries automatically, so coverage
+should grow over time.
+
+**Strategist behavior — side-by-side with the two earlier baselines:**
+
+| Metric | Pre-filter (241) | Cache-fix attempt (242) | News filter (243) |
+|---|---|---|---|
+| Strategist cost | $6.28 | $4.19 | $6.04 |
+| Turns | 21 | 9 | 6 |
+| Playbook actions | 5 | 5 | 5 |
+| Theses created | 2 | 0 (regression) | 2 ✓ |
+| Theses updated | 5 | 7 | 5 |
+| Theses closed | 1 | 0 | 1 |
+| `get_news_signals` calls | 2 | 4 | 1 |
+| `get_curated_news` calls | n/a | n/a | 1 |
+| `get_news_signals` avg output | ~100K chars | ~100K chars | 429 chars (ticker-scoped) |
+| `get_curated_news` avg output | n/a | n/a | 2,927 chars |
+
+**Quality:** restored to baseline. 2 new theses created (cache-fix's
+regression was 0), 5 playbook actions with substantive rationales
+("Continuation from May 10 playbook. Thesis #25 formation entry…"),
+1 thesis closed, 5 updated. The strategist used both tools as
+intended: curated for the broad scan, then `get_news_signals` for a
+narrow ticker-scoped deep-dive.
+
+**Turn count dropped from 21 → 6.** The denser, more relevant input
+appears to let the strategist converge faster.
+
+**Cost is roughly flat vs the pre-filter baseline** ($6.04 vs $6.28,
+~4% reduction). Net win on this run is quality, not dollars. The
+modest cost neutrality is expected: the curated tool replaces a ~100K
+firehose with ~3K of curated output (a clean win on tool-return
+cache_creation), but the irreducible upfront cache_create on the
+pre-seeded context still dominates per-session cost. Larger savings
+would require trimming `_build_pre_seeded_context` — a separate,
+deferred lever.
+
+**Prod migration:** deferred. `algo-db-1` is not running at validation
+time. When prod is brought up, run:
+```
+cat db/init/027_news_signals_summary.sql | docker exec -i algo-db-1 psql -U algo -d trading
+docker exec algo-trading-1 python -m v2.news_backfill --hours 168
+```
