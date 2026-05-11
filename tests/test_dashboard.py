@@ -482,6 +482,24 @@ class TestDecisionsPage:
         resp = client.get("/decisions")
         assert resp.status_code == 200
 
+    def test_decisions_link_ticker_signal_refs_and_detail(self, client):
+        mock_queries.get_recent_decisions.return_value = [
+            make_decision_row(id=20, ticker="GOOG", playbook_action_id=5),
+        ]
+        mock_queries.get_decision_signal_refs_batch.return_value = {
+            20: [
+                {"signal_type": "news_signal", "signal_id": 100, "label": "Big news"},
+                {"signal_type": "thesis", "signal_id": 7, "label": "Strong thesis"},
+            ],
+        }
+        resp = client.get("/decisions")
+        assert b'href="/ticker/GOOG"' in resp.data
+        assert b'href="/decision/20"' in resp.data
+        # news signal links into decision detail anchor
+        assert b'href="/decision/20#signal-news-100"' in resp.data
+        # thesis ref links directly to thesis detail
+        assert b'href="/thesis/7"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Performance page
