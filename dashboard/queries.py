@@ -578,3 +578,47 @@ def lookup_session_id_by_date(d, session_type: str = 'daily'):
         """, (d, session_type))
         row = cur.fetchone()
         return row["id"] if row else None
+
+
+def get_thesis(thesis_id: int):
+    """Return one thesis row, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+                   invalidation, confidence, source, status,
+                   created_at, updated_at, closed_at, close_reason
+            FROM theses
+            WHERE id = %s
+        """, (thesis_id,))
+        return cur.fetchone()
+
+
+def get_thesis_decisions(thesis_id: int):
+    """Return decisions that cited this thesis (via decision_signals)."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
+                   d.reasoning, d.account_equity, d.outcome_7d, d.outcome_30d,
+                   d.is_off_playbook, d.playbook_action_id
+            FROM decisions d
+            JOIN decision_signals ds ON ds.decision_id = d.id
+            WHERE ds.signal_type = 'thesis' AND ds.signal_id = %s
+            ORDER BY d.date DESC, d.id DESC
+        """, (thesis_id,))
+        return cur.fetchall()
+
+
+def get_thesis_playbook_actions(thesis_id: int):
+    """Return playbook_actions that reference this thesis, with playbook date."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT pa.id, pa.playbook_id, pa.ticker, pa.action, pa.thesis_id,
+                   pa.reasoning, pa.confidence, pa.intent_type,
+                   pa.intent_magnitude, pa.priority, pa.created_at,
+                   p.date AS playbook_date
+            FROM playbook_actions pa
+            JOIN playbooks p ON p.id = pa.playbook_id
+            WHERE pa.thesis_id = %s
+            ORDER BY p.date DESC, pa.priority ASC NULLS LAST
+        """, (thesis_id,))
+        return cur.fetchall()

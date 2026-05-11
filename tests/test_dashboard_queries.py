@@ -63,3 +63,43 @@ class TestLookupSessionIdByDate:
         called_params = cur.execute.call_args[0][1]
         assert "session_type" in called_sql
         assert "premarket" in called_params
+
+
+class TestGetThesis:
+    def test_returns_thesis_row(self, cur):
+        from dashboard.queries import get_thesis
+        cur.fetchone.return_value = make_thesis_row(id=5)
+        result = get_thesis(5)
+        assert result["id"] == 5
+
+    def test_returns_none_when_not_found(self, cur):
+        from dashboard.queries import get_thesis
+        cur.fetchone.return_value = None
+        assert get_thesis(999) is None
+
+
+class TestGetThesisDecisions:
+    def test_returns_decisions_joined_through_decision_signals(self, cur):
+        from dashboard.queries import get_thesis_decisions
+        cur.fetchall.return_value = [make_decision_row(id=1), make_decision_row(id=2)]
+        result = get_thesis_decisions(5)
+        assert len(result) == 2
+        # Verify SQL joins decision_signals filtered by signal_type='thesis'
+        called_sql = cur.execute.call_args[0][0]
+        assert "decision_signals" in called_sql
+        assert "thesis" in called_sql
+        assert 5 in cur.execute.call_args[0][1]
+
+    def test_returns_empty_when_no_decisions(self, cur):
+        from dashboard.queries import get_thesis_decisions
+        cur.fetchall.return_value = []
+        assert get_thesis_decisions(5) == []
+
+
+class TestGetThesisPlaybookActions:
+    def test_returns_actions_for_thesis(self, cur):
+        from dashboard.queries import get_thesis_playbook_actions
+        cur.fetchall.return_value = [make_playbook_action_row(thesis_id=5)]
+        result = get_thesis_playbook_actions(5)
+        assert len(result) == 1
+        assert 5 in cur.execute.call_args[0][1]
