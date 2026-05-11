@@ -1022,6 +1022,23 @@ class TestCostsPage:
         resp = client.get("/costs/999")
         assert resp.status_code == 404
 
+    def test_session_date_links_to_session_detail(self, client):
+        mock_queries.get_recent_session_costs.return_value = [{
+            "session_id": 42,
+            "session_date": date(2026, 5, 11),
+            "session_type": "daily",
+            "status": "completed",
+            "total_cost_usd": Decimal("0.50"),
+            "total_input_tokens": 1000,
+            "total_output_tokens": 200,
+            "total_cache_creation_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "started_at": datetime(2026, 5, 11, 10, 0),
+            "completed_at": datetime(2026, 5, 11, 10, 5),
+        }]
+        resp = client.get("/costs")
+        assert b'href="/session/42"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Events page (agent_events viewer)

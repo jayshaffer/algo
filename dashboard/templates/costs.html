@@ -33,7 +33,7 @@
             <tbody>
                 {% for s in sessions %}
                 <tr class="border-t">
-                    <td class="py-2">{{ s.session_date }}</td>
+                    <td class="py-2"><a href="/session/{{ s.session_id }}" class="text-blue-600 hover:underline">{{ s.session_date }}</a></td>
                     <td class="py-2">{{ s.session_type }}</td>
                     <td class="py-2">{{ s.status }}</td>
                     <td class="py-2 text-right font-mono">
