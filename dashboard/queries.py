@@ -559,3 +559,22 @@ def update_audit_finding_status(finding_id: int, status: str, note: str | None):
             "UPDATE audit_findings SET status=%s, resolved_at=now(), resolved_note=%s WHERE id=%s",
             (status, note, finding_id),
         )
+
+
+def lookup_session_id_by_date(d, session_type: str = 'daily'):
+    """Return the most recent sessions.id for a given date + type, or None.
+
+    Multiple sessions can share a (date, type) only if the UNIQUE constraint
+    is bypassed — in practice the ON CONFLICT path keeps one row per pair —
+    but we ORDER BY started_at DESC for safety.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id
+            FROM sessions
+            WHERE session_date = %s AND session_type = %s
+            ORDER BY started_at DESC
+            LIMIT 1
+        """, (d, session_type))
+        row = cur.fetchone()
+        return row["id"] if row else None
