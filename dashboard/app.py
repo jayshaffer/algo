@@ -42,6 +42,12 @@ from queries import (
     get_thesis_decisions,
     get_thesis_playbook_actions,
     get_thesis_stats,
+    get_ticker_attribution,
+    get_ticker_decisions,
+    get_ticker_open_orders,
+    get_ticker_position,
+    get_ticker_signals,
+    get_ticker_theses,
     get_today_playbook,
     lookup_session_id_by_date,
     update_audit_finding_status,
@@ -192,6 +198,28 @@ def thesis_detail(thesis_id):
         decisions=decisions,
         actions=actions,
         origin_session_id=origin_session_id,
+    )
+
+
+@app.route("/ticker/<sym>")
+def ticker_overview(sym):
+    """Aggregate view of position, theses, decisions, signals for one ticker."""
+    sym = sym.upper()
+    position = get_ticker_position(sym)
+    theses = get_ticker_theses(sym)
+    decisions = get_ticker_decisions(sym)
+    signals = get_ticker_signals(sym)
+    open_orders = get_ticker_open_orders(sym)
+    attribution = get_ticker_attribution(sym)
+    return render_template(
+        "ticker.html",
+        sym=sym,
+        position=position,
+        theses=theses,
+        decisions=decisions,
+        signals=signals,
+        open_orders=open_orders,
+        attribution=attribution,
     )
 
 

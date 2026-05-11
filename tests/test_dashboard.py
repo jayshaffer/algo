@@ -97,6 +97,12 @@ def _reset_query_mocks():
     mock_queries.get_thesis.return_value = None
     mock_queries.get_thesis_decisions.return_value = []
     mock_queries.get_thesis_playbook_actions.return_value = []
+    mock_queries.get_ticker_position.return_value = None
+    mock_queries.get_ticker_theses.return_value = []
+    mock_queries.get_ticker_decisions.return_value = []
+    mock_queries.get_ticker_signals.return_value = []
+    mock_queries.get_ticker_open_orders.return_value = []
+    mock_queries.get_ticker_attribution.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1048,3 +1054,44 @@ class TestThesisDetail:
         mock_queries.lookup_session_id_by_date.return_value = None
         resp = client.get("/thesis/3")
         assert b'href="/decision/10"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Ticker overview
+# ---------------------------------------------------------------------------
+
+
+class TestTickerOverview:
+    def test_renders_with_position(self, client):
+        mock_queries.get_ticker_position.return_value = make_position_row(ticker="AAPL")
+        mock_queries.get_ticker_theses.return_value = []
+        mock_queries.get_ticker_decisions.return_value = []
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/AAPL")
+        assert resp.status_code == 200
+        assert b"AAPL" in resp.data
+
+    def test_renders_when_never_traded(self, client):
+        """Ticker page renders even for symbols never traded — shows empty state, not 404."""
+        mock_queries.get_ticker_position.return_value = None
+        mock_queries.get_ticker_theses.return_value = []
+        mock_queries.get_ticker_decisions.return_value = []
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/ZZZZ")
+        assert resp.status_code == 200
+        assert b"ZZZZ" in resp.data
+
+    def test_links_to_decisions_and_theses(self, client):
+        mock_queries.get_ticker_position.return_value = None
+        mock_queries.get_ticker_theses.return_value = [make_thesis_row(id=7, ticker="AAPL")]
+        mock_queries.get_ticker_decisions.return_value = [make_decision_row(id=11, ticker="AAPL")]
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/AAPL")
+        assert b'href="/thesis/7"' in resp.data
+        assert b'href="/decision/11"' in resp.data

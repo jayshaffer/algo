@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block title %}{{ sym }} - Alpaca Trading{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">{{ sym }}</h1>
+
+<!-- Position -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Position</h2></div>
+    <div class="p-4">
+        {% if position %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Shares</th><th class="pb-2">Avg Cost</th><th class="pb-2">Total</th><th class="pb-2">Updated</th>
+            </tr></thead>
+            <tbody><tr class="border-t">
+                <td class="py-2 font-semibold">{{ position.shares }}</td>
+                <td class="py-2">${{ "%.2f"|format(position.avg_cost|float) }}</td>
+                <td class="py-2">${{ "%.2f"|format((position.shares|float * position.avg_cost|float)) }}</td>
+                <td class="py-2 text-gray-500">{{ position.updated_at.strftime('%Y-%m-%d %H:%M') if position.updated_at else '-' }}</td>
+            </tr></tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No open position.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Open orders -->
+{% if open_orders %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Open Orders</h2></div>
+    <div class="p-4 overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Side</th><th class="pb-2">Type</th><th class="pb-2">Qty</th><th class="pb-2">Filled</th><th class="pb-2">Limit</th><th class="pb-2">Stop</th><th class="pb-2">Status</th><th class="pb-2">Submitted</th>
+            </tr></thead>
+            <tbody>
+            {% for o in open_orders %}
+            <tr class="border-t">
+                <td class="py-2"><span class="px-2 py-0.5 rounded {% if o.side == 'buy' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">{{ o.side|upper }}</span></td>
+                <td class="py-2">{{ o.order_type }}</td>
+                <td class="py-2">{{ o.qty }}</td>
+                <td class="py-2">{{ o.filled_qty }}</td>
+                <td class="py-2">{{ "$%.2f"|format(o.limit_price|float) if o.limit_price else '-' }}</td>
+                <td class="py-2">{{ "$%.2f"|format(o.stop_price|float) if o.stop_price else '-' }}</td>
+                <td class="py-2">{{ o.status }}</td>
+                <td class="py-2 text-gray-500">{{ o.submitted_at.strftime('%Y-%m-%d %H:%M') if o.submitted_at else '-' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Theses -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Theses</h2></div>
+    <div class="p-4">
+        {% if theses %}
+        <div class="space-y-3">
+            {% for t in theses %}
+            <div class="border rounded p-3">
+                <div class="flex justify-between items-center mb-1 text-sm">
+                    <div>
+                        <a href="/thesis/{{ t.id }}" class="text-blue-600 hover:underline font-semibold">#{{ t.id }}</a>
+                        <span class="ml-2 px-2 py-0.5 rounded text-xs
+                            {% if t.direction == 'long' %}bg-green-100 text-green-800
+                            {% elif t.direction == 'short' %}bg-red-100 text-red-800
+                            {% else %}bg-gray-100 text-gray-800{% endif %}">{{ t.direction }}</span>
+                        <span class="ml-1 px-2 py-0.5 rounded text-xs
+                            {% if t.status == 'active' %}bg-blue-100 text-blue-800
+                            {% elif t.status == 'executed' %}bg-green-100 text-green-800
+                            {% elif t.status == 'invalidated' %}bg-red-100 text-red-800
+                            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ t.status }}</span>
+                    </div>
+                    <span class="text-gray-500 text-xs">{{ t.created_at.strftime('%Y-%m-%d') if t.created_at else '' }}</span>
+                </div>
+                <div class="text-sm text-gray-700">{{ t.thesis }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No theses for this ticker.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Decisions -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Recent Decisions (90 days)</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if decisions %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Date</th><th class="pb-2">Action</th><th class="pb-2">Qty</th><th class="pb-2">Price</th><th class="pb-2">7d</th><th class="pb-2">30d</th><th class="pb-2"></th>
+            </tr></thead>
+            <tbody>
+            {% for d in decisions %}
+            <tr class="border-t">
+                <td class="py-2">{{ d.date.strftime('%Y-%m-%d') if d.date else '' }}</td>
+                <td class="py-2">{{ d.action|upper }}</td>
+                <td class="py-2">{{ d.quantity or '-' }}</td>
+                <td class="py-2">{{ "$%.2f"|format(d.price|float) if d.price else '-' }}</td>
+                <td class="py-2 {% if d.outcome_7d and d.outcome_7d > 0 %}text-green-600{% elif d.outcome_7d and d.outcome_7d < 0 %}text-red-600{% endif %}">{{ "%.1f"|format(d.outcome_7d|float) if d.outcome_7d is not none else '-' }}%</td>
+                <td class="py-2 {% if d.outcome_30d and d.outcome_30d > 0 %}text-green-600{% elif d.outcome_30d and d.outcome_30d < 0 %}text-red-600{% endif %}">{{ "%.1f"|format(d.outcome_30d|float) if d.outcome_30d is not none else '-' }}%</td>
+                <td class="py-2"><a href="/decision/{{ d.id }}" class="text-blue-600 hover:underline">view &rarr;</a></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No decisions in last 90 days.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Signals -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Recent Signals (30 days)</h2></div>
+    <div class="p-4">
+        {% if signals %}
+        <div class="space-y-2">
+            {% for s in signals %}
+            <div class="border-l-4 pl-3 py-1 {% if s.sentiment == 'bullish' %}border-green-500 bg-bullish{% elif s.sentiment == 'bearish' %}border-red-500 bg-bearish{% else %}border-gray-400 bg-neutral{% endif %}">
+                <div class="text-sm">{{ s.headline }}</div>
+                <div class="text-xs text-gray-500 flex gap-2 mt-0.5">
+                    <a href="/attribution?category=news:{{ s.category }}" class="bg-gray-100 px-2 rounded hover:bg-gray-200">{{ s.category }}</a>
+                    <span class="sentiment-{{ s.sentiment }}">{{ s.sentiment }}</span>
+                    <span>{{ s.published_at.strftime('%m/%d %H:%M') if s.published_at else '' }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No recent signals for this ticker.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Attribution by source -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Attribution by Source (90 days)</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if attribution %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Category</th><th class="pb-2">Sample</th><th class="pb-2">Avg 7d</th><th class="pb-2">Avg 30d</th>
+            </tr></thead>
+            <tbody>
+            {% for a in attribution %}
+            <tr class="border-t">
+                <td class="py-2"><a href="/attribution?category={{ a.category }}" class="text-blue-600 hover:underline">{{ a.category }}</a></td>
+                <td class="py-2">{{ a.sample_size }}</td>
+                <td class="py-2 {% if a.avg_outcome_7d and a.avg_outcome_7d|float > 0 %}text-green-600{% elif a.avg_outcome_7d and a.avg_outcome_7d|float < 0 %}text-red-600{% endif %}">{{ "%.2f%%"|format(a.avg_outcome_7d|float) if a.avg_outcome_7d is not none else '-' }}</td>
+                <td class="py-2 {% if a.avg_outcome_30d and a.avg_outcome_30d|float > 0 %}text-green-600{% elif a.avg_outcome_30d and a.avg_outcome_30d|float < 0 %}text-red-600{% endif %}">{{ "%.2f%%"|format(a.avg_outcome_30d|float) if a.avg_outcome_30d is not none else '-' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No attribution data for this ticker yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
