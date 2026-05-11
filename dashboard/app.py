@@ -38,6 +38,9 @@ from queries import (
     get_strategy_memos,
     get_strategy_rules,
     get_theses,
+    get_thesis,
+    get_thesis_decisions,
+    get_thesis_playbook_actions,
     get_thesis_stats,
     get_today_playbook,
     lookup_session_id_by_date,
@@ -171,6 +174,24 @@ def decision_detail(decision_id):
         tweets=tweets,
         parent_action=parent_action,
         session_id=session_id,
+    )
+
+
+@app.route("/thesis/<int:thesis_id>")
+def thesis_detail(thesis_id):
+    """Single thesis with linked decisions and playbook actions."""
+    thesis = get_thesis(thesis_id)
+    if not thesis:
+        abort(404)
+    decisions = get_thesis_decisions(thesis_id)
+    actions = get_thesis_playbook_actions(thesis_id)
+    origin_session_id = lookup_session_id_by_date(thesis["created_at"].date()) if thesis.get("created_at") else None
+    return render_template(
+        "thesis_detail.html",
+        thesis=thesis,
+        decisions=decisions,
+        actions=actions,
+        origin_session_id=origin_session_id,
     )
 
 

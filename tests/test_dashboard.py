@@ -20,6 +20,7 @@ from tests.conftest import (
     make_strategy_memo_row,
     make_strategy_rule_row,
     make_strategy_state_row,
+    make_thesis_row,
     make_tweet_row,
 )
 
@@ -93,6 +94,9 @@ def _reset_query_mocks():
     mock_queries.get_decision_tweets.return_value = []
     mock_queries.get_playbook_action.return_value = None
     mock_queries.lookup_session_id_by_date.return_value = None
+    mock_queries.get_thesis.return_value = None
+    mock_queries.get_thesis_decisions.return_value = []
+    mock_queries.get_thesis_playbook_actions.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1011,3 +1015,36 @@ class TestDecisionDetail:
         mock_queries.lookup_session_id_by_date.return_value = 42
         resp = client.get("/decision/5")
         assert b'href="/session/42"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Thesis detail
+# ---------------------------------------------------------------------------
+
+
+class TestThesisDetail:
+    def test_renders_200(self, client):
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA")
+        mock_queries.get_thesis_decisions.return_value = []
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/thesis/3")
+        assert resp.status_code == 200
+        assert b"NVDA" in resp.data
+        # Ticker link present
+        assert b'href="/ticker/NVDA"' in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_thesis.return_value = None
+        resp = client.get("/thesis/999")
+        assert resp.status_code == 404
+
+    def test_shows_linked_decisions(self, client):
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA")
+        mock_queries.get_thesis_decisions.return_value = [
+            make_decision_row(id=10, ticker="NVDA", action="buy"),
+        ]
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/thesis/3")
+        assert b'href="/decision/10"' in resp.data
