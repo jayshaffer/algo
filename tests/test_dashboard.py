@@ -227,6 +227,18 @@ class TestPortfolioPage:
         assert resp.status_code == 200
         assert b"mdash" in resp.data
 
+    def test_position_ticker_links_to_ticker_page(self, client):
+        mock_queries.get_positions.return_value = [make_position_row(ticker="AAPL")]
+        mock_queries.get_open_orders.return_value = []
+        resp = client.get("/")
+        assert b'href="/ticker/AAPL"' in resp.data
+
+    def test_open_order_ticker_links(self, client):
+        mock_queries.get_positions.return_value = []
+        mock_queries.get_open_orders.return_value = [make_open_order_row(ticker="TSLA")]
+        resp = client.get("/")
+        assert b'href="/ticker/TSLA"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Playbook page
