@@ -5,6 +5,13 @@
 {% block content %}
 <h1 class="text-2xl font-bold mb-6">Market Signals</h1>
 
+{% if current_category %}
+<div class="bg-blue-50 border-l-4 border-blue-400 p-3 mb-4 text-sm">
+    Filtered to category <code class="font-mono">{{ current_category }}</code> ·
+    <a href="/signals" class="text-blue-600 hover:underline">clear</a>
+</div>
+{% endif %}
+
 <!-- Signal Summary -->
 <div class="bg-white rounded-lg shadow mb-6">
     <div class="p-4 border-b">
@@ -15,7 +22,7 @@
         <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {% for summary in signal_summary %}
             <div class="border rounded p-3">
-                <div class="font-bold text-lg">{{ summary.ticker }}</div>
+                <div class="font-bold text-lg"><a href="/ticker/{{ summary.ticker }}" class="text-blue-600 hover:underline">{{ summary.ticker }}</a></div>
                 <div class="flex gap-2 text-sm mt-1">
                     <span class="sentiment-bullish">+{{ summary.bullish }}</span>
                     <span class="sentiment-bearish">-{{ summary.bearish }}</span>
@@ -42,7 +49,7 @@
             <div class="border-l-4 pl-3 py-1 {% if signal.sentiment == 'bullish' %}border-green-500 bg-bullish{% elif signal.sentiment == 'bearish' %}border-red-500 bg-bearish{% else %}border-gray-400 bg-neutral{% endif %}">
                 <div class="font-medium">{{ signal.headline }}</div>
                 <div class="text-sm text-gray-600 flex gap-3 mt-1">
-                    <span class="bg-gray-200 px-2 py-0.5 rounded">{{ signal.category }}</span>
+                    <a href="/attribution?category=macro:{{ signal.category }}" class="bg-gray-200 px-2 py-0.5 rounded hover:bg-gray-300">{{ signal.category }}</a>
                     <span class="sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</span>
                     {% if signal.affected_sectors %}
                     <span>Sectors: {{ signal.affected_sectors|join(', ') }}</span>
@@ -79,14 +86,14 @@
             <tbody>
                 {% for signal in ticker_signals %}
                 <tr class="border-t">
-                    <td class="py-2 align-top font-semibold">{{ signal.ticker }}</td>
+                    <td class="py-2 align-top font-semibold"><a href="/ticker/{{ signal.ticker }}" class="text-blue-600 hover:underline">{{ signal.ticker }}</a></td>
                     <td class="py-2 align-top text-sm">
                         <div>{{ signal.headline[:80] }}{% if signal.headline|length > 80 %}...{% endif %}</div>
                         {% if signal.summary %}
                         <div class="text-xs text-gray-500 mt-0.5">{{ signal.summary[:140] }}{% if signal.summary|length > 140 %}...{% endif %}</div>
                         {% endif %}
                     </td>
-                    <td class="py-2 align-top"><span class="bg-gray-100 px-2 py-0.5 rounded text-sm">{{ signal.category }}</span></td>
+                    <td class="py-2 align-top"><a href="/attribution?category=news:{{ signal.category }}" class="bg-gray-100 px-2 py-0.5 rounded text-sm hover:bg-gray-200">{{ signal.category }}</a></td>
                     <td class="py-2 align-top sentiment-{{ signal.sentiment }}">{{ signal.sentiment }}</td>
                     <td class="py-2 align-top text-sm text-gray-600">{{ signal.confidence }}</td>
                     <td class="py-2 align-top text-sm text-gray-500">{{ signal.published_at.strftime('%m/%d %H:%M') if signal.published_at else '' }}</td>

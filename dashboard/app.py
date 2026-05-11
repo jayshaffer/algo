@@ -118,16 +118,17 @@ def attribution():
 
 @app.route("/signals")
 def signals():
-    """Market signals page."""
-    ticker_signals = get_recent_ticker_signals(days=7, limit=50)
-    macro_signals = get_recent_macro_signals(days=7, limit=20)
+    """Market signals page (optionally filtered by category)."""
+    category = request.args.get("category") or None
+    ticker_signals = get_recent_ticker_signals(days=7, limit=50, category=category)
+    macro_signals = get_recent_macro_signals(days=7, limit=20, category=category)
     signal_summary = get_signal_summary(days=7)
-
     return render_template(
         "signals.html",
         ticker_signals=ticker_signals,
         macro_signals=macro_signals,
         signal_summary=signal_summary,
+        current_category=category,
     )
 
 

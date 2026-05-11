@@ -342,8 +342,8 @@ class TestSignalsPage:
     def test_signals_renders(self, client):
         resp = client.get("/signals")
         assert resp.status_code == 200
-        mock_queries.get_recent_ticker_signals.assert_called_once_with(days=7, limit=50)
-        mock_queries.get_recent_macro_signals.assert_called_once_with(days=7, limit=20)
+        mock_queries.get_recent_ticker_signals.assert_called_once_with(days=7, limit=50, category=None)
+        mock_queries.get_recent_macro_signals.assert_called_once_with(days=7, limit=20, category=None)
         mock_queries.get_signal_summary.assert_called_once_with(days=7)
 
     def test_signals_with_data(self, client):
@@ -355,6 +355,27 @@ class TestSignalsPage:
 
         resp = client.get("/signals")
         assert resp.status_code == 200
+
+    def test_signals_links_tickers_and_categories(self, client):
+        mock_queries.get_recent_ticker_signals.return_value = [
+            make_news_signal_row(ticker="AAPL", category="earnings"),
+        ]
+        mock_queries.get_recent_macro_signals.return_value = []
+        mock_queries.get_signal_summary.return_value = [
+            {"ticker": "AAPL", "bullish": 2, "bearish": 1, "neutral": 0},
+        ]
+        resp = client.get("/signals")
+        assert b'href="/ticker/AAPL"' in resp.data
+        assert b'href="/attribution?category=news%3Aearnings"' in resp.data or \
+               b'href="/attribution?category=news:earnings"' in resp.data
+
+    def test_signals_category_filter_param(self, client):
+        mock_queries.get_recent_ticker_signals.return_value = []
+        mock_queries.get_recent_macro_signals.return_value = []
+        mock_queries.get_signal_summary.return_value = []
+        resp = client.get("/signals?category=earnings")
+        assert resp.status_code == 200
+        mock_queries.get_recent_ticker_signals.assert_called_with(days=7, limit=50, category="earnings")
 
 
 # ---------------------------------------------------------------------------
