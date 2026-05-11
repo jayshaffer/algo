@@ -88,6 +88,11 @@ def _reset_query_mocks():
     mock_queries.get_strategy_rules.return_value = []
     mock_queries.get_strategy_memos.return_value = []
     mock_queries.get_recent_tweets.return_value = []
+    mock_queries.get_decision.return_value = None
+    mock_queries.get_decision_signals_full.return_value = []
+    mock_queries.get_decision_tweets.return_value = []
+    mock_queries.get_playbook_action.return_value = None
+    mock_queries.lookup_session_id_by_date.return_value = None
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -949,3 +954,60 @@ class TestEventsPage:
         mock_queries.get_recent_agent_events.assert_called_once_with(
             limit=200, event_type=None, session_id=42
         )
+
+
+# ---------------------------------------------------------------------------
+# Decision detail
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionDetail:
+    def test_renders_200_with_decision(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5, ticker="AAPL")
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/decision/5")
+        assert resp.status_code == 200
+        assert b"AAPL" in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_decision.return_value = None
+        resp = client.get("/decision/999")
+        assert resp.status_code == 404
+
+    def test_renders_signal_refs(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5)
+        mock_queries.get_decision_signals_full.return_value = [
+            {
+                "signal_type": "news_signal", "signal_id": 100,
+                "news_headline": "Big earnings beat",
+                "news_summary": "Apple report", "news_category": "earnings",
+                "news_sentiment": "bullish", "news_confidence": "high",
+                "news_published_at": datetime(2026, 5, 11, 10, 0),
+                "news_ticker": "AAPL",
+                "macro_headline": None, "macro_category": None,
+                "macro_affected_sectors": None, "macro_sentiment": None,
+                "macro_published_at": None,
+                "thesis_text": None, "thesis_ticker": None,
+                "thesis_direction": None, "thesis_status": None,
+            },
+        ]
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/decision/5")
+        assert resp.status_code == 200
+        assert b"Big earnings beat" in resp.data
+        # Anchor target for inbound links from /decisions
+        assert b'id="signal-news-100"' in resp.data
+
+    def test_links_to_session_when_session_exists(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5)
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/decision/5")
+        assert b'href="/session/42"' in resp.data

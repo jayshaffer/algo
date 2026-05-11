@@ -6,19 +6,23 @@ from benchmark import (
     get_deposit_history,
     get_spy_benchmark,
 )
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 from queries import (
     close_thesis,
     get_agent_event_types,
     get_audit_finding,
     get_current_strategy,
+    get_decision,
     get_decision_signal_refs_batch,
+    get_decision_signals_full,
     get_decision_stats,
+    get_decision_tweets,
     get_equity_curve,
     get_latest_snapshot,
     get_open_audit_findings,
     get_open_orders,
     get_performance_metrics,
+    get_playbook_action,
     get_playbook_actions,
     get_positions,
     get_recent_agent_events,
@@ -36,6 +40,7 @@ from queries import (
     get_theses,
     get_thesis_stats,
     get_today_playbook,
+    lookup_session_id_by_date,
     update_audit_finding_status,
 )
 
@@ -142,6 +147,30 @@ def decisions():
         decisions=recent_decisions,
         stats=stats,
         signal_refs=signal_refs,
+    )
+
+
+@app.route("/decision/<int:decision_id>")
+def decision_detail(decision_id):
+    """Single decision deep-dive with linked signals, thesis, and session."""
+    decision = get_decision(decision_id)
+    if not decision:
+        abort(404)
+    signals = get_decision_signals_full(decision_id)
+    tweets = get_decision_tweets(decision_id)
+    parent_action = (
+        get_playbook_action(decision["playbook_action_id"])
+        if decision.get("playbook_action_id")
+        else None
+    )
+    session_id = lookup_session_id_by_date(decision["date"])
+    return render_template(
+        "decision_detail.html",
+        decision=decision,
+        signals=signals,
+        tweets=tweets,
+        parent_action=parent_action,
+        session_id=session_id,
     )
 
 
