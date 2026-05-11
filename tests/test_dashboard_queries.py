@@ -269,3 +269,34 @@ class TestSessionQueries:
         result = get_session_events(1, limit=50)
         assert len(result) == 1
         assert 1 in cur.execute.call_args[0][1]
+
+
+class TestCategoryFilters:
+    def test_recent_ticker_signals_filters_by_category(self, cur):
+        from dashboard.queries import get_recent_ticker_signals
+        cur.fetchall.return_value = []
+        get_recent_ticker_signals(days=7, limit=50, category="earnings")
+        params = cur.execute.call_args[0][1]
+        assert "earnings" in params
+
+    def test_recent_ticker_signals_no_category(self, cur):
+        from dashboard.queries import get_recent_ticker_signals
+        cur.fetchall.return_value = []
+        get_recent_ticker_signals(days=7, limit=50)
+        called_sql = cur.execute.call_args[0][0]
+        # No category WHERE clause when not filtered
+        assert "category = " not in called_sql
+
+    def test_recent_macro_signals_filters_by_category(self, cur):
+        from dashboard.queries import get_recent_macro_signals
+        cur.fetchall.return_value = []
+        get_recent_macro_signals(days=7, limit=20, category="fed")
+        params = cur.execute.call_args[0][1]
+        assert "fed" in params
+
+    def test_signal_attribution_filters_by_category(self, cur):
+        from dashboard.queries import get_signal_attribution
+        cur.fetchall.return_value = []
+        get_signal_attribution(category="news:earnings")
+        params = cur.execute.call_args[0][1]
+        assert "news:earnings" in params

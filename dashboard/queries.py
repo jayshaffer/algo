@@ -67,30 +67,42 @@ def get_open_orders():
 
 # --- Signals ---
 
-def get_recent_ticker_signals(days: int = 7, limit: int = 50):
-    """Get recent ticker-specific signals."""
+def get_recent_ticker_signals(days: int = 7, limit: int = 50, category: str | None = None):
+    """Fetch recent ticker-specific news signals, optionally filtered by category."""
+    where = ["published_at > NOW() - INTERVAL '%s days'"]
+    params: list = [days]
+    if category:
+        where.append("category = %s")
+        params.append(category)
+    params.append(limit)
     with get_cursor() as cur:
-        cur.execute("""
-            SELECT ticker, headline, summary, category, sentiment, confidence,
-                   published_at
+        cur.execute(f"""
+            SELECT id, ticker, headline, summary, category, sentiment, confidence,
+                   published_at, processed_at
             FROM news_signals
-            WHERE published_at > NOW() - INTERVAL '%s days'
+            WHERE {" AND ".join(where)}
             ORDER BY published_at DESC
             LIMIT %s
-        """, (days, limit))
+        """, params)
         return cur.fetchall()
 
 
-def get_recent_macro_signals(days: int = 7, limit: int = 20):
-    """Get recent macro signals."""
+def get_recent_macro_signals(days: int = 7, limit: int = 20, category: str | None = None):
+    """Fetch recent macro signals, optionally filtered by category."""
+    where = ["published_at > NOW() - INTERVAL '%s days'"]
+    params: list = [days]
+    if category:
+        where.append("category = %s")
+        params.append(category)
+    params.append(limit)
     with get_cursor() as cur:
-        cur.execute("""
-            SELECT headline, category, affected_sectors, sentiment, published_at
+        cur.execute(f"""
+            SELECT id, headline, category, affected_sectors, sentiment, published_at
             FROM macro_signals
-            WHERE published_at > NOW() - INTERVAL '%s days'
+            WHERE {" AND ".join(where)}
             ORDER BY published_at DESC
             LIMIT %s
-        """, (days, limit))
+        """, params)
         return cur.fetchall()
 
 
@@ -226,15 +238,21 @@ def get_playbook_actions(playbook_id):
 
 # --- Signal Attribution ---
 
-def get_signal_attribution():
-    """Get signal attribution scores."""
+def get_signal_attribution(category: str | None = None):
+    """Get latest attribution scores, optionally filtered to one category."""
+    where = ""
+    params: list = []
+    if category:
+        where = "WHERE category = %s"
+        params.append(category)
     with get_cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT category, sample_size, avg_outcome_7d, avg_outcome_30d,
                    win_rate_7d, win_rate_30d, updated_at
             FROM signal_attribution
+            {where}
             ORDER BY sample_size DESC
-        """)
+        """, params)
         return cur.fetchall()
 
 
