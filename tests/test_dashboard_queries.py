@@ -172,3 +172,51 @@ class TestGetPlaybookAction:
         from dashboard.queries import get_playbook_action
         cur.fetchone.return_value = None
         assert get_playbook_action(999) is None
+
+
+class TestTickerQueries:
+    def test_get_ticker_position_returns_row_when_held(self, cur):
+        from dashboard.queries import get_ticker_position
+        cur.fetchone.return_value = make_position_row(ticker="AAPL")
+        assert get_ticker_position("AAPL")["ticker"] == "AAPL"
+
+    def test_get_ticker_position_returns_none_when_not_held(self, cur):
+        from dashboard.queries import get_ticker_position
+        cur.fetchone.return_value = None
+        assert get_ticker_position("XYZ") is None
+
+    def test_get_ticker_theses_returns_all_statuses(self, cur):
+        from dashboard.queries import get_ticker_theses
+        cur.fetchall.return_value = [
+            make_thesis_row(id=1, ticker="AAPL", status="active"),
+            make_thesis_row(id=2, ticker="AAPL", status="expired"),
+        ]
+        result = get_ticker_theses("AAPL")
+        assert len(result) == 2
+
+    def test_get_ticker_decisions_filters_by_days(self, cur):
+        from dashboard.queries import get_ticker_decisions
+        cur.fetchall.return_value = [make_decision_row(id=1, ticker="AAPL")]
+        result = get_ticker_decisions("AAPL", days=90)
+        assert len(result) == 1
+        assert "AAPL" in cur.execute.call_args[0][1]
+
+    def test_get_ticker_signals_returns_news(self, cur):
+        from dashboard.queries import get_ticker_signals
+        cur.fetchall.return_value = [make_news_signal_row(ticker="AAPL")]
+        assert get_ticker_signals("AAPL")[0]["ticker"] == "AAPL"
+
+    def test_get_ticker_open_orders(self, cur):
+        from dashboard.queries import get_ticker_open_orders
+        cur.fetchall.return_value = [make_open_order_row(ticker="AAPL")]
+        assert len(get_ticker_open_orders("AAPL")) == 1
+
+    def test_get_ticker_attribution_groups_by_category(self, cur):
+        from dashboard.queries import get_ticker_attribution
+        cur.fetchall.return_value = [
+            {"signal_type": "news_signal", "category": "earnings",
+             "sample_size": 3, "avg_outcome_7d": Decimal("1.5"),
+             "avg_outcome_30d": Decimal("3.0")},
+        ]
+        result = get_ticker_attribution("AAPL", days=90)
+        assert result[0]["category"] == "earnings"

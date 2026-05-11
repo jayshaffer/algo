@@ -702,3 +702,105 @@ def get_playbook_action(action_id: int):
             WHERE pa.id = %s
         """, (action_id,))
         return cur.fetchone()
+
+
+# --- Ticker overview ---
+
+def get_ticker_position(sym: str):
+    """Return one position row for this ticker, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT ticker, shares, avg_cost, updated_at
+            FROM positions
+            WHERE ticker = %s
+        """, (sym,))
+        return cur.fetchone()
+
+
+def get_ticker_theses(sym: str):
+    """Return all theses (any status) for this ticker, newest first."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
+                   invalidation, confidence, source, status,
+                   created_at, updated_at, closed_at, close_reason
+            FROM theses
+            WHERE ticker = %s
+            ORDER BY created_at DESC
+        """, (sym,))
+        return cur.fetchall()
+
+
+def get_ticker_decisions(sym: str, days: int = 90, limit: int = 50):
+    """Return recent decisions for this ticker."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, date, ticker, action, quantity, price, reasoning,
+                   account_equity, outcome_7d, outcome_30d,
+                   is_off_playbook, playbook_action_id
+            FROM decisions
+            WHERE ticker = %s
+              AND date > CURRENT_DATE - INTERVAL '%s days'
+            ORDER BY date DESC, id DESC
+            LIMIT %s
+        """, (sym, days, limit))
+        return cur.fetchall()
+
+
+def get_ticker_signals(sym: str, days: int = 30, limit: int = 50):
+    """Return recent news signals for this ticker."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, ticker, headline, summary, category, sentiment,
+                   confidence, published_at
+            FROM news_signals
+            WHERE ticker = %s
+              AND published_at > NOW() - INTERVAL '%s days'
+            ORDER BY published_at DESC
+            LIMIT %s
+        """, (sym, days, limit))
+        return cur.fetchall()
+
+
+def get_ticker_open_orders(sym: str):
+    """Return open orders for this ticker."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT order_id, ticker, side, order_type, qty, filled_qty,
+                   limit_price, stop_price, status, submitted_at, updated_at
+            FROM open_orders
+            WHERE ticker = %s
+            ORDER BY submitted_at DESC
+        """, (sym,))
+        return cur.fetchall()
+
+
+def get_ticker_attribution(sym: str, days: int = 90):
+    """Per-category attribution for signals that fed decisions on this ticker.
+
+    Joins decision_signals through to news/macro categories and aggregates
+    decision outcomes. Theses are excluded (not a 'category').
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                CASE ds.signal_type
+                    WHEN 'news_signal'  THEN 'news:'  || ns.category
+                    WHEN 'macro_signal' THEN 'macro:' || ms.category
+                END AS category,
+                ds.signal_type,
+                COUNT(*) AS sample_size,
+                AVG(d.outcome_7d)::numeric(8,4)  AS avg_outcome_7d,
+                AVG(d.outcome_30d)::numeric(8,4) AS avg_outcome_30d
+            FROM decision_signals ds
+            JOIN decisions d ON d.id = ds.decision_id
+            LEFT JOIN news_signals  ns ON ds.signal_type = 'news_signal'  AND ds.signal_id = ns.id
+            LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ds.signal_id = ms.id
+            WHERE d.ticker = %s
+              AND d.date > CURRENT_DATE - INTERVAL '%s days'
+              AND ds.signal_type IN ('news_signal', 'macro_signal')
+              AND ds.signal_id IS NOT NULL
+            GROUP BY category, ds.signal_type
+            ORDER BY sample_size DESC
+        """, (sym, days))
+        return cur.fetchall()
