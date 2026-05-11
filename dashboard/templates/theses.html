@@ -74,7 +74,7 @@
         <!-- Header -->
         <div class="p-4 border-b flex items-center justify-between flex-wrap gap-2">
             <div class="flex items-center gap-2">
-                <span class="font-bold text-lg">{{ thesis.ticker }}</span>
+                <a href="/ticker/{{ thesis.ticker }}" class="font-bold text-lg text-blue-600 hover:underline">{{ thesis.ticker }}</a>
                 <!-- Direction badge -->
                 {% if thesis.direction == 'long' %}
                 <span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded">Long</span>
@@ -152,6 +152,7 @@
                 </button>
                 {% endif %}
                 <span class="bg-gray-200 px-2 py-0.5 rounded">{{ thesis.source }}</span>
+                <a href="/thesis/{{ thesis.id }}" class="text-blue-600 hover:underline text-xs">Details →</a>
             </div>
         </div>
     </div>

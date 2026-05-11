@@ -407,6 +407,12 @@ class TestThesesPage:
         assert resp.status_code == 200
         mock_queries.get_theses.assert_called_once_with("all", "ticker")
 
+    def test_theses_link_ticker_and_detail(self, client):
+        mock_queries.get_theses.return_value = [make_thesis_row(id=11, ticker="MSFT")]
+        resp = client.get("/theses")
+        assert b'href="/ticker/MSFT"' in resp.data
+        assert b'href="/thesis/11"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Decisions page
