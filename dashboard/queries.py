@@ -518,6 +518,82 @@ def get_agent_event_types(days: int = 14):
         return cur.fetchall()
 
 
+def get_session(session_id: int):
+    """Return one sessions row, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_date, session_type, status, started_at,
+                   completed_at, error
+            FROM sessions
+            WHERE id = %s
+        """, (session_id,))
+        return cur.fetchone()
+
+
+def get_session_decisions(session_id: int):
+    """Return decisions made during this session (by date match)."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
+                   d.reasoning, d.account_equity, d.outcome_7d, d.outcome_30d,
+                   d.is_off_playbook, d.playbook_action_id
+            FROM decisions d
+            JOIN sessions s ON s.session_date = d.date
+            WHERE s.id = %s
+            ORDER BY d.id ASC
+        """, (session_id,))
+        return cur.fetchall()
+
+
+def get_session_theses_created(session_id: int):
+    """Return theses created on this session's date."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT t.id, t.ticker, t.direction, t.thesis, t.entry_trigger,
+                   t.exit_trigger, t.invalidation, t.confidence, t.source,
+                   t.status, t.created_at, t.updated_at
+            FROM theses t
+            JOIN sessions s ON s.session_date = t.created_at::date
+            WHERE s.id = %s
+            ORDER BY t.created_at ASC
+        """, (session_id,))
+        return cur.fetchall()
+
+
+def get_session_memo(session_id: int):
+    """Return the strategy_memos row for this session's date, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT m.id, m.session_date, m.memo_type, m.content, m.created_at
+            FROM strategy_memos m
+            JOIN sessions s ON s.session_date = m.session_date
+            WHERE s.id = %s
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        """, (session_id,))
+        return cur.fetchone()
+
+
+def get_session_tweets(session_id: int):
+    """Return tweets posted on this session's date."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT tw.id, tw.session_date, tw.tweet_type, tw.tweet_text,
+                   tw.platform, tw.posted, tw.error, tw.created_at,
+                   tw.decision_id
+            FROM tweets tw
+            JOIN sessions s ON s.session_date = tw.session_date
+            WHERE s.id = %s
+            ORDER BY tw.created_at DESC
+        """, (session_id,))
+        return cur.fetchall()
+
+
+def get_session_events(session_id: int, limit: int = 200):
+    """Return agent_events filtered to this session (thin wrapper)."""
+    return get_recent_agent_events(limit=limit, session_id=session_id)
+
+
 # --- Audit queries ---
 
 def get_open_audit_findings():

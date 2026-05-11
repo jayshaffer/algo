@@ -220,3 +220,52 @@ class TestTickerQueries:
         ]
         result = get_ticker_attribution("AAPL", days=90)
         assert result[0]["category"] == "earnings"
+
+
+class TestSessionQueries:
+    def test_get_session_returns_row(self, cur):
+        from dashboard.queries import get_session
+        cur.fetchone.return_value = make_session_row(id=1)
+        assert get_session(1)["id"] == 1
+
+    def test_get_session_returns_none_when_not_found(self, cur):
+        from dashboard.queries import get_session
+        cur.fetchone.return_value = None
+        assert get_session(999) is None
+
+    def test_get_session_decisions(self, cur):
+        from dashboard.queries import get_session_decisions
+        cur.fetchall.return_value = [make_decision_row(id=1)]
+        result = get_session_decisions(1)
+        assert len(result) == 1
+        # Should filter by joining session_date
+        called_sql = cur.execute.call_args[0][0]
+        assert "sessions" in called_sql or "session_date" in called_sql
+
+    def test_get_session_theses_created(self, cur):
+        from dashboard.queries import get_session_theses_created
+        cur.fetchall.return_value = [make_thesis_row(id=1)]
+        result = get_session_theses_created(1)
+        assert len(result) == 1
+
+    def test_get_session_memo_returns_row(self, cur):
+        from dashboard.queries import get_session_memo
+        cur.fetchone.return_value = make_strategy_memo_row(id=1)
+        assert get_session_memo(1)["id"] == 1
+
+    def test_get_session_memo_returns_none(self, cur):
+        from dashboard.queries import get_session_memo
+        cur.fetchone.return_value = None
+        assert get_session_memo(999) is None
+
+    def test_get_session_tweets(self, cur):
+        from dashboard.queries import get_session_tweets
+        cur.fetchall.return_value = [make_tweet_row(id=1)]
+        assert len(get_session_tweets(1)) == 1
+
+    def test_get_session_events_uses_existing_filter(self, cur):
+        from dashboard.queries import get_session_events
+        cur.fetchall.return_value = [make_agent_event_row(session_id=1)]
+        result = get_session_events(1, limit=50)
+        assert len(result) == 1
+        assert 1 in cur.execute.call_args[0][1]
