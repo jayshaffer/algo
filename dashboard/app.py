@@ -111,9 +111,14 @@ def playbook():
 
 @app.route("/attribution")
 def attribution():
-    """Signal attribution dashboard."""
-    scores = get_signal_attribution()
-    return render_template("attribution.html", scores=scores)
+    """Signal attribution dashboard, optionally filtered to one category."""
+    category = request.args.get("category") or None
+    scores = get_signal_attribution(category=category)
+    return render_template(
+        "attribution.html",
+        scores=scores,
+        current_category=category,
+    )
 
 
 @app.route("/signals")

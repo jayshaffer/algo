@@ -5,6 +5,13 @@
 {% block content %}
 <h1 class="text-2xl font-bold mb-6">Signal Attribution</h1>
 
+{% if current_category %}
+<div class="bg-blue-50 border-l-4 border-blue-400 p-3 mb-4 text-sm">
+    Filtered to <code class="font-mono">{{ current_category }}</code> ·
+    <a href="/attribution" class="text-blue-600 hover:underline">clear</a>
+</div>
+{% endif %}
+
 {% if scores %}
 <div class="bg-white rounded-lg shadow">
     <div class="p-4 border-b">
@@ -26,7 +33,9 @@
             <tbody>
                 {% for row in scores %}
                 <tr class="border-t">
-                    <td class="py-2 font-semibold">{{ row.category }}</td>
+                    <td id="cat-{{ row.category }}" class="py-2 font-semibold">
+                        <a href="/attribution?category={{ row.category }}" class="text-blue-600 hover:underline">{{ row.category }}</a>
+                    </td>
                     <td class="py-2">{{ row.sample_size }}</td>
                     <td class="py-2 {% if row.avg_outcome_7d and row.avg_outcome_7d|float > 0 %}text-green-600{% elif row.avg_outcome_7d and row.avg_outcome_7d|float < 0 %}text-red-600{% endif %}">
                         {{ "%.2f%%"|format(row.avg_outcome_7d|float) if row.avg_outcome_7d is not none else '-' }}

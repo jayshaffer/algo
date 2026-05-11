@@ -330,6 +330,23 @@ class TestAttributionPage:
         assert resp.status_code == 200
         assert b"No attribution data available" in resp.data
 
+    def test_attribution_categories_link_and_filter(self, client):
+        mock_queries.get_signal_attribution.return_value = [
+            make_attribution_row(category="news:earnings"),
+        ]
+        resp = client.get("/attribution")
+        # Category cell should be a link that filters the same page
+        assert b'href="/attribution?category=news%3Aearnings"' in resp.data or \
+               b'href="/attribution?category=news:earnings"' in resp.data
+        # Anchor target for cross-page links
+        assert b'id="cat-news:earnings"' in resp.data
+
+    def test_attribution_accepts_category_filter(self, client):
+        mock_queries.get_signal_attribution.return_value = []
+        resp = client.get("/attribution?category=news:earnings")
+        assert resp.status_code == 200
+        mock_queries.get_signal_attribution.assert_called_with(category="news:earnings")
+
 
 # ---------------------------------------------------------------------------
 # Signals page
