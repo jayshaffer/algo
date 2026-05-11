@@ -486,3 +486,51 @@ def make_tweet_row(**kwargs):
     }
     defaults.update(kwargs)
     return defaults
+
+
+def make_session_row(**kwargs):
+    """Create a sessions dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "session_date": date.today(),
+        "session_type": "daily",
+        "status": "completed",
+        "started_at": datetime.now() - timedelta(hours=2),
+        "completed_at": datetime.now() - timedelta(hours=1),
+        "error": None,
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_session_stage_cost_row(**kwargs):
+    """Create a session_stage_costs dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "stage_name": "ideation",
+        "status": "completed",
+        "started_at": datetime.now() - timedelta(hours=2),
+        "completed_at": datetime.now() - timedelta(hours=2) + timedelta(minutes=4),
+        "model": "claude-sonnet-4-6",
+        "input_tokens": 12000,
+        "output_tokens": 800,
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 10000,
+        "cost_usd": Decimal("0.0420"),
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def make_agent_event_row(**kwargs):
+    """Create an agent_events dict like what DB returns."""
+    defaults = {
+        "id": 1,
+        "session_id": 1,
+        "stage_name": "trading",
+        "event_type": "tool_call",
+        "payload": {"tool": "get_portfolio_state", "args": {}},
+        "occurred_at": datetime.now() - timedelta(hours=1),
+    }
+    defaults.update(kwargs)
+    return defaults
