@@ -300,3 +300,14 @@ class TestCategoryFilters:
         get_signal_attribution(category="news:earnings")
         params = cur.execute.call_args[0][1]
         assert "news:earnings" in params
+
+
+class TestRecentTweetsExtended:
+    def test_returns_decision_id_and_session_id(self, cur):
+        from dashboard.queries import get_recent_tweets
+        cur.fetchall.return_value = [
+            {**make_tweet_row(id=1), "decision_id": 11, "session_id": 42},
+        ]
+        result = get_recent_tweets()
+        assert result[0]["decision_id"] == 11
+        assert result[0]["session_id"] == 42

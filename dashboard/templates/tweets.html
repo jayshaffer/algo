@@ -11,18 +11,24 @@
         {% for tweet in tweets %}
         <div class="p-4">
             <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium text-gray-500">{{ tweet.session_date }}</span>
+                <div class="flex items-center gap-2 text-sm">
+                    <span class="font-medium text-gray-500">
+                        {% if tweet.session_id %}
+                        <a href="/session/{{ tweet.session_id }}" class="text-blue-600 hover:underline">{{ tweet.session_date }}</a>
+                        {% else %}
+                        {{ tweet.session_date }}
+                        {% endif %}
+                    </span>
                     <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ tweet.tweet_type }}</span>
                     <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ tweet.platform }}</span>
+                    {% if tweet.decision_id %}
+                    <a href="/decision/{{ tweet.decision_id }}" class="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs hover:bg-blue-100">decision #{{ tweet.decision_id }}</a>
+                    {% endif %}
                 </div>
                 <div>
-                    {% if tweet.posted %}
-                    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Posted</span>
-                    {% elif tweet.error %}
-                    <span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium">Failed</span>
-                    {% else %}
-                    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Pending</span>
+                    {% if tweet.posted %}<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Posted</span>
+                    {% elif tweet.error %}<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium">Failed</span>
+                    {% else %}<span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Pending</span>
                     {% endif %}
                 </div>
             </div>

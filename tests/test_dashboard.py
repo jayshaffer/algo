@@ -904,6 +904,14 @@ class TestTweetsPage:
         assert b"Failed" in resp.data
         assert b"Rate limit exceeded" in resp.data
 
+    def test_tweets_link_session_and_decision(self, client):
+        mock_queries.get_recent_tweets.return_value = [
+            {**make_tweet_row(id=1), "decision_id": 11, "session_id": 42},
+        ]
+        resp = client.get("/tweets")
+        assert b'href="/session/42"' in resp.data
+        assert b'href="/decision/11"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Signals: summary column

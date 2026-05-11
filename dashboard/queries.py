@@ -420,14 +420,18 @@ def get_strategy_memos(days=30):
 # --- Tweets ---
 
 def get_recent_tweets(days=30, limit=50):
-    """Fetch recent tweets."""
+    """Fetch recent tweets joined with their session row."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT id, session_date, tweet_type, tweet_text, platform,
-                   posted, error, created_at
-            FROM tweets
-            WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
-            ORDER BY session_date DESC, created_at DESC
+            SELECT tw.id, tw.session_date, tw.tweet_type, tw.tweet_text,
+                   tw.platform, tw.posted, tw.error, tw.created_at,
+                   tw.decision_id,
+                   s.id AS session_id
+            FROM tweets tw
+            LEFT JOIN sessions s ON s.session_date = tw.session_date
+                                 AND s.session_type = 'daily'
+            WHERE tw.session_date > CURRENT_DATE - INTERVAL '%s days'
+            ORDER BY tw.session_date DESC, tw.created_at DESC
             LIMIT %s
         """, (days, limit))
         return cur.fetchall()
