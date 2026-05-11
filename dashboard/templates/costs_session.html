@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Session {{ session_id }} costs - Alpaca Trading{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/costs" class="text-blue-600 hover:underline">← back to sessions</a>
+</div>
+
+<h1 class="text-2xl font-bold mb-2">Session #{{ session_id }} cost breakdown</h1>
+<p class="text-sm text-gray-600 mb-6">
+    Total: <span class="font-mono">${{ '%.4f' % total_cost }}</span>
+</p>
+
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-gray-500 border-b">
+                    <th class="pb-2">Stage</th>
+                    <th class="pb-2">Status</th>
+                    <th class="pb-2">Model</th>
+                    <th class="pb-2 text-right">Cost (USD)</th>
+                    <th class="pb-2 text-right">Input</th>
+                    <th class="pb-2 text-right">Output</th>
+                    <th class="pb-2 text-right">Cache Write</th>
+                    <th class="pb-2 text-right">Cache Read</th>
+                    <th class="pb-2">Started</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in stages %}
+                <tr class="border-t">
+                    <td class="py-2 font-semibold">{{ s.stage_name }}</td>
+                    <td class="py-2">{{ s.status }}</td>
+                    <td class="py-2 text-xs">{{ s.model or '—' }}</td>
+                    <td class="py-2 text-right font-mono">
+                        {% if s.cost_usd is not none %}
+                            ${{ '%.4f' % s.cost_usd|float }}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.input_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.output_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.cache_creation_tokens or 0) }}</td>
+                    <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.cache_read_tokens or 0) }}</td>
+                    <td class="py-2 text-xs text-gray-500">{{ s.started_at.strftime('%Y-%m-%d %H:%M') if s.started_at else '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<p class="mt-4 text-sm">
+    <a href="/events?session={{ session_id }}" class="text-blue-600 hover:underline">view agent events for this session →</a>
+</p>
+{% endblock %}

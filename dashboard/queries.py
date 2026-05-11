@@ -71,7 +71,8 @@ def get_recent_ticker_signals(days: int = 7, limit: int = 50):
     """Get recent ticker-specific signals."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT ticker, headline, category, sentiment, confidence, published_at
+            SELECT ticker, headline, summary, category, sentiment, confidence,
+                   published_at
             FROM news_signals
             WHERE published_at > NOW() - INTERVAL '%s days'
             ORDER BY published_at DESC
@@ -440,6 +441,80 @@ def get_theses(status_filter: str = 'active', sort_by: str = 'newest'):
             {where_clause}
             ORDER BY {order_clause}
         """, params)
+        return cur.fetchall()
+
+
+# --- Session cost / token usage ---
+
+def get_recent_session_costs(limit: int = 30):
+    """Return recent sessions with aggregated token usage and USD cost.
+
+    Joins `session_costs` view back to `sessions` for ordering / display.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT sc.session_id, sc.session_date, sc.session_type, sc.status,
+                   sc.total_cost_usd, sc.total_input_tokens, sc.total_output_tokens,
+                   sc.total_cache_creation_tokens, sc.total_cache_read_tokens,
+                   s.started_at, s.completed_at
+            FROM session_costs sc
+            JOIN sessions s ON s.id = sc.session_id
+            ORDER BY sc.session_date DESC, sc.session_id DESC
+            LIMIT %s
+        """, (limit,))
+        return cur.fetchall()
+
+
+def get_session_stage_costs(session_id: int):
+    """Return per-stage token usage + USD cost for a session."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, stage_name, status, started_at, completed_at,
+                   model, input_tokens, output_tokens,
+                   cache_creation_tokens, cache_read_tokens, cost_usd
+            FROM session_stage_costs
+            WHERE session_id = %s
+            ORDER BY started_at ASC, id ASC
+        """, (session_id,))
+        return cur.fetchall()
+
+
+# --- Agent events (telemetry substrate) ---
+
+def get_recent_agent_events(limit: int = 100, event_type: str = None,
+                            session_id: int = None):
+    """Return recent agent_events with optional event_type / session_id filter."""
+    where = []
+    params = []
+    if event_type:
+        where.append("event_type = %s")
+        params.append(event_type)
+    if session_id:
+        where.append("session_id = %s")
+        params.append(session_id)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    params.append(limit)
+    with get_cursor() as cur:
+        cur.execute(f"""
+            SELECT id, session_id, stage_name, event_type, payload, occurred_at
+            FROM agent_events
+            {where_sql}
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT %s
+        """, params)
+        return cur.fetchall()
+
+
+def get_agent_event_types(days: int = 14):
+    """Return distinct event_type values with counts over the last N days."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT event_type, COUNT(*) AS n
+            FROM agent_events
+            WHERE occurred_at > NOW() - INTERVAL '%s days'
+            GROUP BY event_type
+            ORDER BY n DESC
+        """, (days,))
         return cur.fetchall()
 
 

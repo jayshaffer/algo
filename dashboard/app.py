@@ -9,6 +9,7 @@ from benchmark import (
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from queries import (
     close_thesis,
+    get_agent_event_types,
     get_audit_finding,
     get_current_strategy,
     get_decision_signal_refs_batch,
@@ -20,11 +21,14 @@ from queries import (
     get_performance_metrics,
     get_playbook_actions,
     get_positions,
+    get_recent_agent_events,
     get_recent_audit_runs,
     get_recent_decisions,
     get_recent_macro_signals,
+    get_recent_session_costs,
     get_recent_ticker_signals,
     get_recent_tweets,
+    get_session_stage_costs,
     get_signal_attribution,
     get_signal_summary,
     get_strategy_memos,
@@ -245,6 +249,46 @@ def api_signals():
         "ticker_signals": [dict(s) for s in ticker_signals] if ticker_signals else [],
         "macro_signals": [dict(s) for s in macro_signals] if macro_signals else [],
     })
+
+
+@app.route("/costs")
+def costs_page():
+    """Per-session token usage + USD cost overview."""
+    sessions = get_recent_session_costs(limit=30)
+    return render_template("costs.html", sessions=sessions)
+
+
+@app.route("/costs/<int:session_id>")
+def costs_session_page(session_id):
+    """Per-stage cost breakdown for a single session."""
+    stages = get_session_stage_costs(session_id)
+    if not stages:
+        return "Session not found or no stage cost data", 404
+    total_cost = sum(float(s["cost_usd"] or 0) for s in stages)
+    return render_template(
+        "costs_session.html",
+        session_id=session_id,
+        stages=stages,
+        total_cost=total_cost,
+    )
+
+
+@app.route("/events")
+def events_page():
+    """Recent agent_events (tool invocations, risk blocks, loop recoveries, ...)."""
+    event_type = request.args.get("type") or None
+    session_id = request.args.get("session", type=int) or None
+    events = get_recent_agent_events(
+        limit=200, event_type=event_type, session_id=session_id
+    )
+    type_counts = get_agent_event_types(days=14)
+    return render_template(
+        "events.html",
+        events=events,
+        type_counts=type_counts,
+        current_type=event_type,
+        current_session=session_id,
+    )
 
 
 @app.route("/audit")
