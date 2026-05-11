@@ -36,7 +36,8 @@ def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False, sessi
     headlines = [item.headline for item in news_items]
     published_ats = [item.published_at for item in news_items]
     alpaca_ids = [item.id for item in news_items]
-    results = classify_news_batch(headlines, published_ats, alpaca_ids=alpaca_ids, session_id=session_id)
+    summaries = [item.summary for item in news_items]
+    results = classify_news_batch(headlines, published_ats, alpaca_ids=alpaca_ids, summaries=summaries, session_id=session_id)
 
     # Step 3: Store signals
     ticker_signals_batch = []
@@ -51,7 +52,7 @@ def run_pipeline(hours: int = 24, limit: int = 300, dry_run: bool = False, sessi
             ticker_signals_batch.append((
                 signal.ticker, signal.headline, signal.category,
                 signal.sentiment, signal.confidence, signal.published_at,
-                signal.alpaca_id,
+                signal.alpaca_id, signal.summary,
             ))
 
         if result.macro_signal:

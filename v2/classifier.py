@@ -115,6 +115,7 @@ class TickerSignal:
     confidence: str    # high, medium, low
     published_at: datetime
     alpaca_id: str | None = None  # P2.16: source news id for canonical dedup
+    summary: str = ""  # Full article summary from Alpaca (propagated from NewsItem)
 
 
 @dataclass
@@ -241,7 +242,8 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _build_classification_result(
-    entry: dict, headline: str, published_at: datetime, alpaca_id: str | None = None
+    entry: dict, headline: str, published_at: datetime, alpaca_id: str | None = None,
+    summary: str = "",
 ) -> ClassificationResult:
     """Build a ClassificationResult from a parsed JSON entry."""
     news_type = entry.get("type", "noise")
@@ -265,6 +267,7 @@ def _build_classification_result(
                     confidence=entry.get("confidence", "low"),
                     published_at=published_at,
                     alpaca_id=alpaca_id,
+                    summary=summary,
                 ))
     elif news_type == "macro_political":
         category = _validate_category(
@@ -344,6 +347,7 @@ def classify_news_batch(
     published_ats: list[datetime],
     batch_size: int = 50,
     alpaca_ids: list[str | None] | None = None,
+    summaries: list[str] | None = None,
     *,
     session_id: int | None = None,
 ) -> list[ClassificationResult]:
@@ -358,12 +362,15 @@ def classify_news_batch(
         published_ats: Corresponding publication times
         batch_size: Headlines per LLM call (default 50)
         alpaca_ids: Source Alpaca news ids, used for canonical dedup (P2.16)
+        summaries: Full article summaries from Alpaca, threaded into TickerSignal.summary
 
     Returns:
         List of ClassificationResult, one per headline
     """
     if alpaca_ids is None:
         alpaca_ids = [None] * len(headlines)
+    if summaries is None:
+        summaries = [""] * len(headlines)
 
     results = []
 
@@ -373,9 +380,10 @@ def classify_news_batch(
         batch_headlines = headlines[start:start + batch_size]
         batch_dates = published_ats[start:start + batch_size]
         batch_ids = alpaca_ids[start:start + batch_size]
+        batch_summaries = summaries[start:start + batch_size]
 
         try:
-            batch_results = _classify_batch(batch_headlines, batch_dates, batch_ids, session_id=session_id)
+            batch_results = _classify_batch(batch_headlines, batch_dates, batch_ids, batch_summaries, session_id=session_id)
             results.extend(batch_results)
         except _anthropic.RateLimitError as e:
             # P2.20: don't fan out N per-call retries on rate limit — the batch
@@ -401,6 +409,7 @@ def classify_news_batch(
 def _classify_batch(
     headlines: list[str], published_ats: list[datetime],
     alpaca_ids: list[str | None] | None = None,
+    summaries: list[str] | None = None,
     *, session_id: int | None = None,
 ) -> list[ClassificationResult]:
     """Classify a single batch of headlines in one Claude Haiku call."""
@@ -432,6 +441,8 @@ def _classify_batch(
 
     if alpaca_ids is None:
         alpaca_ids = [None] * len(headlines)
+    if summaries is None:
+        summaries = [""] * len(headlines)
 
     # P2.15: index-based mapping instead of positional zip. Haiku may reorder
     # or truncate the array; previously parsed[i] paired with headlines[i]
@@ -454,7 +465,7 @@ def _classify_batch(
         else:
             results.append(
                 _build_classification_result(
-                    entry, headlines[i], published_ats[i], alpaca_ids[i]
+                    entry, headlines[i], published_ats[i], alpaca_ids[i], summaries[i]
                 )
             )
 

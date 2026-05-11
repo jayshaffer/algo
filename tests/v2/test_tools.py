@@ -641,7 +641,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 17 handler functions."""
+        """TOOL_HANDLERS should have all 18 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -650,6 +650,7 @@ class TestToolCompleteness:
             "adopt_thesis",
             "update_thesis",
             "close_thesis",
+            "get_curated_news",
             "get_news_signals",
             "get_macro_context",
             "get_macro_signals",
@@ -664,8 +665,8 @@ class TestToolCompleteness:
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 18 entries (17 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 18
+        """TOOL_DEFINITIONS should have 19 entries (18 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 19
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -680,6 +681,7 @@ class TestToolCompleteness:
             "adopt_thesis",
             "update_thesis",
             "close_thesis",
+            "get_curated_news",
             "get_news_signals",
             "get_macro_context",
             "get_macro_signals",
@@ -866,3 +868,157 @@ class TestToolGetRecentPlaybooks:
         names = [t["name"] for t in TOOL_DEFINITIONS]
         assert "get_recent_playbooks" in names
         assert "get_recent_playbooks" in TOOL_HANDLERS
+
+
+class TestToolGetCuratedNews:
+    """tool_get_curated_news fetches signals from DB, filters via Haiku,
+    re-renders in the existing [#id] line format. Falls back to firehose
+    on filter failure. Caches per (ticker, days, target_n) within a
+    session; reset by reset_session()."""
+
+    def _row(self, id_, ticker="AAPL", summary="full summary"):
+        from datetime import datetime, timezone
+        return {
+            "id": id_,
+            "ticker": ticker,
+            "headline": f"headline {id_}",
+            "category": "momentum",
+            "sentiment": "bullish",
+            "confidence": "high",
+            "published_at": datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+            "summary": summary,
+            "alpaca_id": f"alp-{id_}",
+        }
+
+    def test_filters_signals_via_haiku(self, monkeypatch):
+        from v2 import tools
+
+        rows = [self._row(i) for i in [1, 2, 3, 4, 5]]
+        monkeypatch.setattr(tools, "get_news_signals", lambda **kw: rows)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "risk-on regime")
+        monkeypatch.setattr(
+            tools,
+            "curate_signals",
+            lambda signals, target_n, regime_context: [2, 4],
+        )
+        tools.reset_session()  # ensure cache is clean
+
+        out = tools.tool_get_curated_news(target_n=2)
+
+        assert "[#2]" in out and "[#4]" in out
+        assert "[#1]" not in out
+        assert "[#3]" not in out
+        assert "[#5]" not in out
+
+    def test_skips_haiku_when_below_target(self, monkeypatch):
+        from v2 import tools
+
+        rows = [self._row(i) for i in [1, 2, 3]]
+        monkeypatch.setattr(tools, "get_news_signals", lambda **kw: rows)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "x")
+        called = {"count": 0}
+
+        def fake_curate(*args, **kwargs):
+            called["count"] += 1
+            return [s["id"] for s in args[0]]
+
+        monkeypatch.setattr(tools, "curate_signals", fake_curate)
+        tools.reset_session()
+
+        out = tools.tool_get_curated_news(target_n=10)
+
+        assert called["count"] == 0, "curate_signals should not be called when candidates <= target_n"
+        for i in [1, 2, 3]:
+            assert f"[#{i}]" in out
+
+    def test_drops_null_summary_rows(self, monkeypatch):
+        from v2 import tools
+
+        rows = [
+            self._row(1, summary="full"),
+            self._row(2, summary=None),
+            self._row(3, summary=""),
+            self._row(4, summary="full"),
+        ]
+        captured = {}
+
+        def fake_curate(signals, target_n, regime_context):
+            captured["signal_ids"] = [s["id"] for s in signals]
+            return [s["id"] for s in signals]
+
+        monkeypatch.setattr(tools, "get_news_signals", lambda **kw: rows)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "x")
+        monkeypatch.setattr(tools, "curate_signals", fake_curate)
+        tools.reset_session()
+
+        # Force the filter path by setting target_n below the post-NULL-filter count.
+        tools.tool_get_curated_news(target_n=1)
+
+        assert captured["signal_ids"] == [1, 4], (
+            f"NULL/empty summaries must be dropped before filter; got {captured['signal_ids']}"
+        )
+
+    def test_caches_within_session(self, monkeypatch):
+        from v2 import tools
+
+        rows = [self._row(i) for i in range(1, 41)]  # 40 rows, above target
+        monkeypatch.setattr(tools, "get_news_signals", lambda **kw: rows)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "x")
+        called = {"count": 0}
+
+        def fake_curate(*args, **kwargs):
+            called["count"] += 1
+            return [1, 2, 3]
+
+        monkeypatch.setattr(tools, "curate_signals", fake_curate)
+        tools.reset_session()
+
+        tools.tool_get_curated_news(target_n=3)
+        tools.tool_get_curated_news(target_n=3)
+
+        assert called["count"] == 1, "second call with same params must hit cache"
+
+        # Different target_n is a different cache key:
+        tools.tool_get_curated_news(target_n=5)
+        assert called["count"] == 2, "different target_n must miss cache"
+
+    def test_cache_resets_with_session(self, monkeypatch):
+        from v2 import tools
+
+        rows = [self._row(i) for i in range(1, 41)]
+        monkeypatch.setattr(tools, "get_news_signals", lambda **kw: rows)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "x")
+        called = {"count": 0}
+
+        def fake_curate(*args, **kwargs):
+            called["count"] += 1
+            return [1]
+
+        monkeypatch.setattr(tools, "curate_signals", fake_curate)
+        tools.reset_session()
+
+        tools.tool_get_curated_news(target_n=1)
+        tools.reset_session()
+        tools.tool_get_curated_news(target_n=1)
+
+        assert called["count"] == 2, "reset_session must clear the curated-news cache"
+
+    def test_ticker_specific_passes_ticker_to_db(self, monkeypatch):
+        from v2 import tools
+
+        captured_kwargs = {}
+
+        def fake_get_news_signals(**kw):
+            captured_kwargs.update(kw)
+            return [self._row(1, ticker="AAPL")]
+
+        monkeypatch.setattr(tools, "get_news_signals", fake_get_news_signals)
+        monkeypatch.setattr(tools, "get_macro_context", lambda days: "x")
+        monkeypatch.setattr(tools, "curate_signals", lambda *a, **kw: [1])
+        tools.reset_session()
+
+        tools.tool_get_curated_news(ticker="aapl", days=3)
+
+        # Ticker is normalised upstream; assert the DB was queried for AAPL/3.
+        assert captured_kwargs.get("ticker") == "AAPL"
+        assert captured_kwargs.get("days") == 3

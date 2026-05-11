@@ -8,7 +8,7 @@ rules, and write session memos.
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from functools import partial
 
 from .attribution import get_attribution_summary
@@ -43,7 +43,7 @@ def _utc_date(dt: datetime) -> date:
     """
     if dt.tzinfo is None:
         return dt.date()
-    return dt.astimezone(UTC).date()
+    return dt.astimezone(timezone.utc).date()
 # T2.6: previously the strategist could propose unlimited new rules per
 # session while retirement was capped at 2. That asymmetry let runaway
 # proposal loops bloat the rule table during a single session and
@@ -171,7 +171,7 @@ def tool_update_strategy_identity(
     # Normalise both sides to UTC dates so a write at 23:30 ET (= 03:30
     # UTC the next day) doesn't read as "yesterday" elsewhere in the
     # session.
-    today_utc = datetime.now(UTC).date()
+    today_utc = datetime.now(timezone.utc).date()
     if current and (today_utc - _utc_date(current["created_at"])).days < 3:
         return (
             f"Warning: Identity was updated within the last 3 days "
@@ -235,7 +235,7 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
     # Tenure guard: rules must be active for minimum days. T2.7: same
     # UTC-normalisation as the identity throttle so the boundary is
     # consistent regardless of when the rule was inserted.
-    age_days = (datetime.now(UTC).date() - _utc_date(rule["created_at"])).days
+    age_days = (datetime.now(timezone.utc).date() - _utc_date(rule["created_at"])).days
     if age_days < MIN_RULE_TENURE_DAYS:
         remaining = MIN_RULE_TENURE_DAYS - age_days
         return (

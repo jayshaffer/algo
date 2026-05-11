@@ -931,3 +931,55 @@ class TestLoopCompletionTelemetry:
         p = completions[0]["payload"]
         assert p["input_tokens"] == 200
         assert p["output_tokens"] == 80
+
+
+class TestToolInvocationOutputChars:
+    """Phase 1: tool_invocation events must include output_chars so we can
+    size-tune the cache-friendly truncation threshold from real data."""
+
+    def test_tool_invocation_event_includes_output_chars(self, monkeypatch):
+        """The tool_invocation payload should record len(result.content)."""
+        from v2 import claude_client
+
+        captured: list[dict] = []
+
+        def fake_record_event(session_id, stage_name, event_type, payload):
+            captured.append({"event_type": event_type, "payload": payload})
+
+        monkeypatch.setattr(claude_client, "record_event", fake_record_event)
+
+        # Two-turn loop: first response calls a tool that returns 1500 chars,
+        # second response ends the turn so the loop exits cleanly.
+        tool_response = _make_response(
+            content=[
+                _tool_use_block("call-1", "echo", {"text": "hi"}),
+            ],
+            stop_reason="tool_use",
+        )
+        end_response = _make_response(
+            content=[_text_block("done")],
+            stop_reason="end_turn",
+        )
+        client = _make_stream_mock([tool_response, end_response])
+
+        big_payload = "x" * 1500
+
+        run_agentic_loop(
+            client=client,
+            model="m",
+            system="sys",
+            initial_message="go",
+            tools=[{"name": "echo", "description": "", "input_schema": {}}],
+            tool_handlers={"echo": lambda **_: big_payload},
+            max_turns=5,
+            session_id=1,
+            stage_name="strategist",
+        )
+
+        tool_events = [e for e in captured if e["event_type"] == "tool_invocation"]
+        assert len(tool_events) == 1, f"expected 1 tool_invocation event, got {len(tool_events)}"
+        payload = tool_events[0]["payload"]
+        assert "output_chars" in payload, f"output_chars missing from payload: {payload}"
+        assert payload["output_chars"] == 1500, (
+            f"expected output_chars=1500, got {payload['output_chars']}"
+        )

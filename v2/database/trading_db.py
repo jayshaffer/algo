@@ -24,19 +24,26 @@ def insert_news_signal(ticker, headline, category, sentiment, confidence, publis
 def insert_news_signals_batch(signals: list[tuple]) -> int:
     """Batch-insert news_signals rows.
 
-    Tuple shape: (ticker, headline, category, sentiment, confidence, published_at, alpaca_id?).
-    For backward compatibility with 6-element tuples (no alpaca_id), we pad with None.
+    Tuple shape: (ticker, headline, category, sentiment, confidence,
+    published_at, alpaca_id?, summary?). Legacy 6/7-tuples are padded
+    with None for missing trailing fields so callers updated in
+    different commits don't break each other.
     """
     if not signals:
         return 0
-    # P2.16: tolerate the legacy 6-tuple shape until all callers are updated.
-    normalized = [
-        (*s, None) if len(s) == 6 else s
-        for s in signals
-    ]
+
+    def _normalize(s):
+        if len(s) == 6:
+            return (*s, None, None)
+        if len(s) == 7:
+            return (*s, None)
+        return s
+
+    normalized = [_normalize(s) for s in signals]
+
     with get_cursor() as cur:
         execute_values(cur, """
-            INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at, alpaca_id)
+            INSERT INTO news_signals (ticker, headline, category, sentiment, confidence, published_at, alpaca_id, summary)
             VALUES %s
             ON CONFLICT DO NOTHING
         """, normalized)

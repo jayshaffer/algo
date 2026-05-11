@@ -26,12 +26,17 @@ from .database.trading_db import (
 )
 from .executor import get_account_info
 from .market_data import format_market_snapshot, get_market_snapshot
+from .news_filter import curate_signals
 
 logger = logging.getLogger(__name__)
 
 
+_curated_news_cache: dict[tuple, list[int]] = {}
+
+
 def reset_session():
     """Reset session state. Call at start of each ideation run."""
+    _curated_news_cache.clear()
     logger.info("Session state reset")
 
 
@@ -301,6 +306,66 @@ def tool_get_news_signals(ticker: str = None, days: int = 7) -> str:
 
     lines = []
     for s in signals:
+        date_str = s["published_at"].strftime("%m-%d %H:%M")
+        headline = s["headline"][:60]
+        lines.append(
+            f"[#{s['id']}] {date_str} {s['ticker']} "
+            f"{s['category']}/{s['sentiment']}/{s['confidence']}: {headline}"
+        )
+
+    return "\n".join(lines)
+
+
+def tool_get_curated_news(
+    ticker: str = None,
+    days: int = 7,
+    target_n: int = 30,
+) -> str:
+    """Curated news signals — Haiku-filtered to the ~target_n most
+    relevant for today's market regime. Use this by default for thesis
+    research; use get_news_signals if you need the raw firehose.
+
+    Each line is prefixed with [#<id>] (same format as get_news_signals)
+    so signal_refs citation works unchanged.
+    """
+    ticker = _norm_ticker(ticker)
+    cache_key = (ticker, days, target_n)
+    cached_ids = _curated_news_cache.get(cache_key)
+
+    logger.info("Getting curated news (ticker=%s, days=%d, target_n=%d)", ticker, days, target_n)
+    rows = get_news_signals(ticker=ticker, days=days)
+
+    # Drop rows without usable summaries — pre-backfill safety + empty-summary cleanup.
+    candidates = [r for r in rows if r.get("summary")]
+
+    if not candidates:
+        if ticker:
+            return f"No news signals for {ticker} in the last {days} days."
+        return f"No news signals in the last {days} days."
+
+    if cached_ids is None:
+        if len(candidates) <= target_n:
+            # No filtering needed — return everything.
+            selected_ids = [r["id"] for r in candidates]
+        else:
+            regime_context = get_macro_context(days=2)
+            selected_ids = curate_signals(
+                candidates,
+                target_n=target_n,
+                regime_context=regime_context,
+            )
+        _curated_news_cache[cache_key] = selected_ids
+    else:
+        selected_ids = cached_ids
+
+    selected_set = set(selected_ids)
+    selected_rows = [r for r in candidates if r["id"] in selected_set]
+    # Preserve curate_signals' ordering (rank order), not DB order:
+    order = {sid: i for i, sid in enumerate(selected_ids)}
+    selected_rows.sort(key=lambda r: order.get(r["id"], 1_000_000))
+
+    lines = []
+    for s in selected_rows:
         date_str = s["published_at"].strftime("%m-%d %H:%M")
         headline = s["headline"][:60]
         lines.append(
@@ -691,8 +756,29 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "get_curated_news",
+        "description": (
+            "PREFERRED: Curated news signals — Haiku-filtered to the most relevant "
+            "for today's market regime. Use this by default. Each line is [#<id>] "
+            "(use IDs for signal_refs citation, same as get_news_signals)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Filter by ticker"},
+                "days": {"type": "integer", "description": "Lookback days (default: 7)"},
+                "target_n": {"type": "integer", "description": "Approx. number of signals to return (default: 30)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_news_signals",
-        "description": "Recent ticker news signals: headlines, sentiment, category, confidence.",
+        "description": (
+            "RAW FIREHOSE: Unfiltered recent ticker news signals (could be 900+ items "
+            "across 7 days). Use get_curated_news by default; reach for this only when "
+            "you need to look past the filter for a specific ticker or theme."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -829,6 +915,7 @@ TOOL_HANDLERS = {
     "adopt_thesis": tool_adopt_thesis,
     "update_thesis": tool_update_thesis,
     "close_thesis": tool_close_thesis,
+    "get_curated_news": tool_get_curated_news,
     "get_news_signals": tool_get_news_signals,
     "get_macro_context": tool_get_macro_context,
     "get_macro_signals": tool_get_macro_signals,
