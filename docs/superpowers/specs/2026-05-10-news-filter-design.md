@@ -1,7 +1,7 @@
 # Haiku News Filter for the Strategist
 
 **Date:** 2026-05-10
-**Status:** Design — pending implementation plan
+**Status:** Implemented and validated on paper (session 243). See "Validation results" at the end.
 **Owner:** jay
 
 ## Problem
