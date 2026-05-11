@@ -32,7 +32,13 @@ from queries import (
     get_recent_session_costs,
     get_recent_ticker_signals,
     get_recent_tweets,
+    get_session,
+    get_session_decisions,
+    get_session_events,
+    get_session_memo,
     get_session_stage_costs,
+    get_session_theses_created,
+    get_session_tweets,
     get_signal_attribution,
     get_signal_summary,
     get_strategy_memos,
@@ -220,6 +226,30 @@ def ticker_overview(sym):
         signals=signals,
         open_orders=open_orders,
         attribution=attribution,
+    )
+
+
+@app.route("/session/<int:session_id>")
+def session_detail(session_id):
+    """Unified per-session view: stages, events, decisions, theses, tweets, memo."""
+    session = get_session(session_id)
+    if not session:
+        abort(404)
+    stages = get_session_stage_costs(session_id)
+    decisions = get_session_decisions(session_id)
+    theses_created = get_session_theses_created(session_id)
+    memo = get_session_memo(session_id)
+    tweets = get_session_tweets(session_id)
+    events = get_session_events(session_id, limit=200)
+    return render_template(
+        "session_detail.html",
+        session=session,
+        stages=stages,
+        decisions=decisions,
+        theses_created=theses_created,
+        memo=memo,
+        tweets=tweets,
+        events=events,
     )
 
 

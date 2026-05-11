@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.conftest import (
+    make_agent_event_row,
     make_attribution_row,
     make_decision_row,
     make_macro_signal_row,
@@ -16,6 +17,7 @@ from tests.conftest import (
     make_playbook_action_row,
     make_playbook_row,
     make_position_row,
+    make_session_row,
     make_snapshot_row,
     make_strategy_memo_row,
     make_strategy_rule_row,
@@ -103,6 +105,13 @@ def _reset_query_mocks():
     mock_queries.get_ticker_signals.return_value = []
     mock_queries.get_ticker_open_orders.return_value = []
     mock_queries.get_ticker_attribution.return_value = []
+    mock_queries.get_session.return_value = None
+    mock_queries.get_session_stage_costs.return_value = []
+    mock_queries.get_session_decisions.return_value = []
+    mock_queries.get_session_theses_created.return_value = []
+    mock_queries.get_session_memo.return_value = None
+    mock_queries.get_session_tweets.return_value = []
+    mock_queries.get_session_events.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1095,3 +1104,39 @@ class TestTickerOverview:
         resp = client.get("/ticker/AAPL")
         assert b'href="/thesis/7"' in resp.data
         assert b'href="/decision/11"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Session detail
+# ---------------------------------------------------------------------------
+
+
+class TestSessionDetail:
+    def test_renders_200(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"Session #42" in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_session.return_value = None
+        resp = client.get("/session/999")
+        assert resp.status_code == 404
+
+    def test_renders_decisions_with_links(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = [make_decision_row(id=11, ticker="AAPL")]
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        resp = client.get("/session/42")
+        assert b'href="/decision/11"' in resp.data
+        assert b'href="/ticker/AAPL"' in resp.data
