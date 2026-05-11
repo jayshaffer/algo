@@ -622,3 +622,83 @@ def get_thesis_playbook_actions(thesis_id: int):
             ORDER BY p.date DESC, pa.priority ASC NULLS LAST
         """, (thesis_id,))
         return cur.fetchall()
+
+
+def get_decision(decision_id: int):
+    """Return one decision row, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, date, ticker, action, quantity, price, reasoning,
+                   signals_used, account_equity, buying_power,
+                   outcome_7d, outcome_30d, is_off_playbook, playbook_action_id
+            FROM decisions
+            WHERE id = %s
+        """, (decision_id,))
+        return cur.fetchone()
+
+
+def get_decision_signals_full(decision_id: int):
+    """Return decision_signals rows denormalized with the full signal record.
+
+    Result rows always contain all three signal blocks; only the matching
+    one is populated for any given row. Template renders the populated one.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT ds.signal_type, ds.signal_id,
+                   ns.headline   AS news_headline,
+                   ns.summary    AS news_summary,
+                   ns.category   AS news_category,
+                   ns.sentiment  AS news_sentiment,
+                   ns.confidence AS news_confidence,
+                   ns.published_at AS news_published_at,
+                   ns.ticker     AS news_ticker,
+                   ms.headline   AS macro_headline,
+                   ms.category   AS macro_category,
+                   ms.affected_sectors AS macro_affected_sectors,
+                   ms.sentiment  AS macro_sentiment,
+                   ms.published_at AS macro_published_at,
+                   t.thesis      AS thesis_text,
+                   t.ticker      AS thesis_ticker,
+                   t.direction   AS thesis_direction,
+                   t.status      AS thesis_status
+            FROM decision_signals ds
+            LEFT JOIN news_signals  ns ON ds.signal_type = 'news_signal'  AND ds.signal_id = ns.id
+            LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ds.signal_id = ms.id
+            LEFT JOIN theses        t  ON ds.signal_type = 'thesis'       AND ds.signal_id = t.id
+            WHERE ds.decision_id = %s
+            ORDER BY ds.signal_type, ds.signal_id
+        """, (decision_id,))
+        return cur.fetchall()
+
+
+def get_decision_tweets(decision_id: int):
+    """Return tweets posted for a given decision_id."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_date, tweet_type, tweet_text, platform,
+                   posted, error, created_at
+            FROM tweets
+            WHERE decision_id = %s
+            ORDER BY created_at DESC
+        """, (decision_id,))
+        return cur.fetchall()
+
+
+def get_playbook_action(action_id: int):
+    """Return one playbook_action joined with its thesis info, or None."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT pa.id, pa.playbook_id, pa.ticker, pa.action, pa.thesis_id,
+                   pa.reasoning, pa.confidence, pa.intent_type,
+                   pa.intent_magnitude, pa.priority, pa.created_at,
+                   t.thesis    AS thesis_text,
+                   t.direction AS thesis_direction,
+                   t.status    AS thesis_status,
+                   p.date      AS playbook_date
+            FROM playbook_actions pa
+            LEFT JOIN theses    t ON t.id = pa.thesis_id
+            LEFT JOIN playbooks p ON p.id = pa.playbook_id
+            WHERE pa.id = %s
+        """, (action_id,))
+        return cur.fetchone()

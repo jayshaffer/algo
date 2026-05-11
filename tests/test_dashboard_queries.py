@@ -103,3 +103,72 @@ class TestGetThesisPlaybookActions:
         result = get_thesis_playbook_actions(5)
         assert len(result) == 1
         assert 5 in cur.execute.call_args[0][1]
+
+
+class TestGetDecision:
+    def test_returns_decision_row(self, cur):
+        from dashboard.queries import get_decision
+        cur.fetchone.return_value = make_decision_row(id=7)
+        assert get_decision(7)["id"] == 7
+
+    def test_returns_none_when_not_found(self, cur):
+        from dashboard.queries import get_decision
+        cur.fetchone.return_value = None
+        assert get_decision(999) is None
+
+
+class TestGetDecisionSignalsFull:
+    def test_returns_denormalized_signals(self, cur):
+        from dashboard.queries import get_decision_signals_full
+        cur.fetchall.return_value = [
+            {
+                "signal_type": "news_signal",
+                "signal_id": 100,
+                "news_headline": "AAPL beats Q3",
+                "news_summary": "Apple beat estimates",
+                "news_category": "earnings",
+                "news_sentiment": "bullish",
+                "news_confidence": "high",
+                "news_published_at": datetime(2026, 5, 11, 10, 0),
+                "news_ticker": "AAPL",
+                "macro_headline": None,
+                "macro_category": None,
+                "macro_affected_sectors": None,
+                "macro_sentiment": None,
+                "macro_published_at": None,
+                "thesis_text": None,
+                "thesis_ticker": None,
+                "thesis_direction": None,
+                "thesis_status": None,
+            },
+        ]
+        result = get_decision_signals_full(7)
+        assert len(result) == 1
+        assert result[0]["signal_type"] == "news_signal"
+        assert result[0]["news_headline"] == "AAPL beats Q3"
+
+    def test_returns_empty_when_no_signals(self, cur):
+        from dashboard.queries import get_decision_signals_full
+        cur.fetchall.return_value = []
+        assert get_decision_signals_full(7) == []
+
+
+class TestGetDecisionTweets:
+    def test_returns_tweets_for_decision(self, cur):
+        from dashboard.queries import get_decision_tweets
+        cur.fetchall.return_value = [make_tweet_row(id=1)]
+        result = get_decision_tweets(7)
+        assert len(result) == 1
+        assert 7 in cur.execute.call_args[0][1]
+
+
+class TestGetPlaybookAction:
+    def test_returns_action_with_thesis_join(self, cur):
+        from dashboard.queries import get_playbook_action
+        cur.fetchone.return_value = make_playbook_action_row(id=3)
+        assert get_playbook_action(3)["id"] == 3
+
+    def test_returns_none_when_not_found(self, cur):
+        from dashboard.queries import get_playbook_action
+        cur.fetchone.return_value = None
+        assert get_playbook_action(999) is None
