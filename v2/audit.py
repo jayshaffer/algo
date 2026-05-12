@@ -1933,6 +1933,8 @@ CHECKS: list = [
     "check_loop_max_turns_hit",
     "check_cache_hit_ratio_degradation",
     "check_agent_call_latency_drift",
+    "check_audit_gaps_opus",
+    "check_app_improvements_opus",
     "check_rule_judgment",
 ]
 
@@ -1970,6 +1972,7 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
     summary = AuditRunSummary(run_id=None)
     rule_judgment_usage: dict = {}
     try:
+        _reset_opus_ideation_usage()
         run_id = insert_audit_run(mode="apply" if apply else "check")
         summary.run_id = run_id
         log.info("Audit run #%d started (mode=%s)", run_id, "apply" if apply else "check")
@@ -2004,15 +2007,39 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
                             cache_read_tokens=rule_judgment_usage.get("cache_read_tokens", 0),
                             latency_ms=rule_judgment_usage.get("latency_ms"),
                         )
+                elif check.__name__ in ("check_audit_gaps_opus", "check_app_improvements_opus"):
+                    purpose = ("audit_gaps" if check.__name__ == "check_audit_gaps_opus"
+                               else "app_improvements")
+                    usage = get_last_opus_ideation_usage(purpose)
+                    if usage:
+                        insert_audit_llm_call(
+                            audit_run_id=run_id,
+                            purpose=purpose,
+                            model=OPUS_IDEATION_MODEL,
+                            input_tokens=usage.get("input_tokens", 0),
+                            output_tokens=usage.get("output_tokens", 0),
+                            cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+                            cache_read_tokens=usage.get("cache_read_tokens", 0),
+                            latency_ms=usage.get("latency_ms"),
+                        )
 
                 for f in findings:
-                    current_fingerprints.add(f.fingerprint)
+                    # Opus findings stash a coarse topic-slug fingerprint in
+                    # evidence['_fp_override'] so daily re-emissions of the
+                    # same idea collapse. Pop it before insert so it doesn't
+                    # persist into the DB row.
+                    fp_override = None
+                    if isinstance(f.evidence, dict) and "_fp_override" in f.evidence:
+                        fp_override = f.evidence.pop("_fp_override")
+                    fingerprint = fp_override if fp_override else f.fingerprint
+                    current_fingerprints.add(fingerprint)
+
                     inserted_id = insert_audit_finding(
                         audit_run_id=run_id,
                         check_code=f.check_code, tier=f.tier, severity=f.severity,
                         title=f.title, body=f.body,
                         affected_count=f.affected_count, evidence=f.evidence,
-                        fingerprint=f.fingerprint,
+                        fingerprint=fingerprint,
                     )
                     if inserted_id is not None:
                         emitted += 1
@@ -2036,7 +2063,7 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
                                 body=f"Applied auto-fix for {f.check_code}.",
                                 affected_count=f.affected_count,
                                 evidence={**f.evidence, "fix": fix_evidence},
-                                fingerprint=f.fingerprint + ":fixed",
+                                fingerprint=fingerprint + ":fixed",
                                 status="auto_fixed",
                             )
                             auto_fixed += 1

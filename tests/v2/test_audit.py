@@ -1333,6 +1333,101 @@ class TestRunner:
                  "cache_read_tokens", "model"):
             assert k not in finalize_kwargs, f"{k} should no longer be passed"
 
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_opus_checks_record_llm_calls_and_use_topic_fingerprint(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1000, "output_tokens": 100,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 2000,
+            }
+            f = Finding("AUDIT_GAP", 3, "info", "Missing foo check", "...",
+                        1, {"topic_slug": "missing-foo", "category": "audit_gap",
+                            "priority": "low",
+                            "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", "missing-foo")},
+                        None)
+            return [f]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        def fake_app(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["app_improvements"] = {
+                "input_tokens": 2000, "output_tokens": 200,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 2500,
+            }
+            f = Finding("APP_IMPROVEMENT", 3, "info", "Build the bar", "...",
+                        1, {"topic_slug": "build-bar", "category": "app_improvement",
+                            "priority": "medium",
+                            "_fp_override": _opus_topic_fingerprint("APP_IMPROVEMENT", "build-bar")},
+                        None)
+            return [f]
+        fake_app.__name__ = "check_app_improvements_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap, fake_app]):
+            run_audit(apply=False)
+
+        # Both Opus purposes got LLM-call rows
+        purposes = [c.kwargs["purpose"] for c in mock_insert_llm.call_args_list]
+        assert "audit_gaps" in purposes
+        assert "app_improvements" in purposes
+        gap_call = next(c for c in mock_insert_llm.call_args_list
+                        if c.kwargs["purpose"] == "audit_gaps")
+        assert gap_call.kwargs["model"] == audit_mod.OPUS_IDEATION_MODEL
+        assert gap_call.kwargs["input_tokens"] == 1000
+        assert gap_call.kwargs["latency_ms"] == 2000
+
+        # Findings inserted with topic-slug fingerprint and WITHOUT _fp_override
+        gap_finding_call = next(
+            c for c in mock_finding.call_args_list
+            if c.kwargs["check_code"] == "AUDIT_GAP"
+        )
+        assert gap_finding_call.kwargs["fingerprint"] == _opus_topic_fingerprint(
+            "AUDIT_GAP", "missing-foo"
+        )
+        assert "_fp_override" not in gap_finding_call.kwargs["evidence"]
+
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_run_audit_resets_opus_usage_at_start(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        """A new run_audit invocation must not see stale usage from a prior call."""
+        from v2.audit import run_audit
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        # Pre-populate stale usage from a "previous run"
+        audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {"input_tokens": 99999}
+
+        with patch("v2.audit.CHECKS", []):
+            run_audit(apply=False)
+
+        # After the run, the stash should have been reset; the prior key gone
+        assert "audit_gaps" not in audit_mod._LAST_OPUS_IDEATION_USAGE
+
 
 # --- CLI tests (Task 16) ---
 
