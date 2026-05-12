@@ -280,44 +280,6 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Per-stage 7-day-rolling token totals doubled vs. prior 7-day window. Affected: {stages}. Likely cause: prompt growth or cache regression (a moved/removed `ephemeral` breakpoint silently doubles cost)."
 - **suggested_fix:** "Bisect recent commits to the affected stage's module(s) for prompt or cache-breakpoint changes. Restore the ephemeral cache breakpoint or trim the prompt as appropriate. Cross-check against CACHE_HIT_RATIO_DEGRADATION findings — they often co-fire."
 
-### AUDIT_LLM_COST_TREND_SPIKE
-
-- **env:** prod
-- **severity:** info
-- **category:** cost
-- **worktype:** code
-- **topic_slug:** audit-llm-cost-trend-spike
-- **title_template:** "{n} audit LLM purpose(s) with token usage >=2x prior 7-day window"
-- **sql:**
-  ```sql
-  WITH recent AS (
-      SELECT purpose,
-             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
-                +COALESCE(cache_creation_tokens,0)
-                +COALESCE(cache_read_tokens,0)) AS tok
-      FROM audit_llm_calls
-      WHERE created_at > now() - interval '7 days'
-      GROUP BY purpose
-  ),
-  prior AS (
-      SELECT purpose,
-             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
-                +COALESCE(cache_creation_tokens,0)
-                +COALESCE(cache_read_tokens,0)) AS tok
-      FROM audit_llm_calls
-      WHERE created_at > now() - interval '14 days'
-        AND created_at <= now() - interval '7 days'
-      GROUP BY purpose
-  )
-  SELECT COALESCE(r.purpose, p.purpose) AS purpose,
-         COALESCE(r.tok, 0) AS recent_tok,
-         COALESCE(p.tok, 0) AS prior_tok
-  FROM recent r FULL OUTER JOIN prior p ON r.purpose = p.purpose;
-  ```
-- **finding_when:** "any purpose with prior_tok > 0 AND recent_tok >= 2 * prior_tok"
-- **body_template:** "Per-purpose 7-day-rolling audit LLM token totals doubled vs. prior 7-day window. Affected: {purposes}. Likely cause: an audit LLM prompt grew (e.g., added context tables) or cache breakpoint regression."
-- **suggested_fix:** "Inspect the audit prompt builder for the flagged purpose(s) and the most recent commit touching it. Consider bounding context size via `ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS` and verifying cache breakpoints are still in place."
-
 ### DECISIONS_NO_SIGNAL_REFS
 
 - **env:** prod
@@ -634,7 +596,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
   HAVING COUNT(*) >= 3;
   ```
 - **finding_when:** "either query returns rows"
-- **body_template:** "Executor response contains JSON fields not in our canonical key sets. Either the prompt is requesting new fields the parser doesn't handle, or the LLM is emitting drift we should either consume or suppress. Where `top_drift_rows` = row count of query 1 (distinct top-level unknown keys with count >= 3), `dec_drift_rows` = row count of query 2 (distinct decision-level unknown keys with count >= 3). See `audit_llm_calls` for full per-key counts. Update EXECUTOR_KNOWN_*_KEYS or the parser in v2/agent.py."
+- **body_template:** "Executor response contains JSON fields not in our canonical key sets. Either the prompt is requesting new fields the parser doesn't handle, or the LLM is emitting drift we should either consume or suppress. Where `top_drift_rows` = row count of query 1 (distinct top-level unknown keys with count >= 3), `dec_drift_rows` = row count of query 2 (distinct decision-level unknown keys with count >= 3). Update EXECUTOR_KNOWN_*_KEYS or the parser in v2/agent.py."
 - **suggested_fix:** "In `v2/agent.py`, either add the new keys to `EXECUTOR_KNOWN_TOP_LEVEL_KEYS` / `EXECUTOR_KNOWN_DECISION_KEYS` (if they should be consumed), or tighten the executor prompt to stop emitting them. If the keys carry useful data, plumb them through the parser."
 
 ### EXECUTOR_PARSE_FAILURE_RATE
