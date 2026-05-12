@@ -810,6 +810,19 @@ def _reset_rule_judgment_usage() -> None:
     _LAST_RULE_JUDGMENT_USAGE.clear()
 
 
+_LAST_OPUS_IDEATION_USAGE: dict[str, dict] = {}
+
+
+def get_last_opus_ideation_usage(purpose: str) -> dict:
+    """Return a copy of the most recent Opus ideation usage for a purpose."""
+    return _LAST_OPUS_IDEATION_USAGE.get(purpose, {}).copy()
+
+
+def _reset_opus_ideation_usage() -> None:
+    """Clear all stashed Opus ideation usage. Called once per audit run."""
+    _LAST_OPUS_IDEATION_USAGE.clear()
+
+
 # --- Phase 1: agent_events-driven checks ---------------------------------
 
 # Tools the strategist should be using on a typical ideation run. A persistent
@@ -1595,6 +1608,117 @@ def check_rule_judgment(cur) -> list[Finding]:
             },
             auto_fix=None,
         ))
+    return findings
+
+
+# --- Phase 3: Opus 4.7 ideation checks -----------------------------------
+
+OPUS_AUDIT_GAPS_SYSTEM = """\
+You are auditing the auditor of an agentic trading system. Given (1) the list
+of existing audit check codes, (2) the audit's recent findings by check_code,
+(3) a high-level DB schema, and (4) audit cost trend, propose NEW audit
+checks that would catch integrity, strategy, or learning-loop problems the
+current audit does not cover. Be conservative. Prefer specific checks with
+clearly testable conditions over vague ones.
+
+Output JSON only:
+{
+  "findings": [
+    {"topic_slug": "kebab-case-stable-id",
+     "title": "short imperative phrasing",
+     "category": "audit_gap",
+     "priority": "high"|"medium"|"low",
+     "body": "1-3 short paragraphs",
+     "evidence_quote": "specific motivating data point",
+     "proposed_check_code": "PROPOSED_NEW_CODE"}
+  ]
+}
+
+The topic_slug must be a stable identifier for the underlying gap so that
+the same proposal on a future day yields the same slug. Max 10 findings.
+Empty findings array is fine if you cannot find anything defensible.
+"""
+
+
+def _build_audit_gaps_prompt(cur) -> str:
+    """Assemble the user prompt for check_audit_gaps_opus.
+
+    Issues three queries in order:
+      1. Recent findings summary (by check_code + severity).
+      2. DB schema (columns of key tables).
+      3. Recent audit_runs cost trend.
+    """
+    cur.execute("""
+        SELECT check_code, COUNT(DISTINCT fingerprint) AS n, severity
+        FROM audit_findings
+        WHERE created_at > now() - interval '30 days'
+        GROUP BY check_code, severity
+        ORDER BY n DESC
+    """)
+    findings_summary = cur.fetchall()
+
+    cur.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND table_name IN ('decisions','decision_signals','news_signals',
+                             'macro_signals','theses','strategy_rules',
+                             'agent_events','agent_calls','sessions',
+                             'session_stages','signal_attribution')
+        ORDER BY table_name, ordinal_position
+    """)
+    schema_rows = cur.fetchall()
+    schema_by_table: dict[str, list[str]] = {}
+    for r in schema_rows:
+        schema_by_table.setdefault(r["table_name"], []).append(r["column_name"])
+
+    cur.execute("""
+        SELECT ar.id, ar.started_at,
+               COALESCE(SUM(ac.input_tokens+ac.output_tokens
+                           +ac.cache_creation_tokens+ac.cache_read_tokens),0) AS tok,
+               ar.total_findings
+        FROM audit_runs ar
+        LEFT JOIN audit_llm_calls ac ON ac.audit_run_id = ar.id
+        WHERE ar.started_at > now() - interval '14 days'
+        GROUP BY ar.id
+        ORDER BY ar.started_at DESC
+        LIMIT 14
+    """)
+    cost_trend = cur.fetchall()
+
+    parts = ["## Existing audit check codes\n"]
+    parts.extend(f"- {name}" for name in CHECKS if isinstance(name, str))
+    parts.append("\n## Last 30 days of findings (by check_code)\n")
+    for r in findings_summary:
+        parts.append(f"- {r['check_code']} [{r['severity']}]: {r['n']} distinct fingerprints")
+    parts.append("\n## DB schema (selected tables)\n")
+    for t, cols in schema_by_table.items():
+        parts.append(f"### {t}\n{', '.join(cols)}\n")
+    parts.append("\n## Recent audit runs (last 14, total tokens + finding count)\n")
+    for r in cost_trend:
+        parts.append(f"- run {r['id']} @ {r['started_at']}: tok={r['tok']} findings={r['total_findings']}")
+    return "\n".join(parts)
+
+
+def check_audit_gaps_opus(cur) -> list[Finding]:
+    """Single Opus call proposing new audit checks. Tier 3 / severity info."""
+    prompt = _build_audit_gaps_prompt(cur)
+    parsed, usage = _call_opus_ideation(OPUS_AUDIT_GAPS_SYSTEM, prompt)
+    _LAST_OPUS_IDEATION_USAGE["audit_gaps"] = usage
+
+    findings: list[Finding] = []
+    seen_slugs: set[str] = set()
+    for item in (parsed.get("findings") or [])[:20]:
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        if f is None:
+            continue
+        slug = f.evidence["topic_slug"]
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        findings.append(f)
+        if len(findings) >= 10:
+            break
     return findings
 
 

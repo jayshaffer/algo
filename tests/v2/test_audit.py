@@ -1454,3 +1454,114 @@ class TestOpusFindingHelpers:
         assert len(f.title) <= 200
         assert len(f.body) <= 2000
         assert len(f.evidence["evidence_quote"]) <= 600
+
+
+class TestCheckAuditGapsOpus:
+    def _stub_cursor(self):
+        """A cursor whose fetchall returns the three queries _build_audit_gaps_prompt makes."""
+        cur = MagicMock()
+        # Query 1: findings summary (per check_code, severity)
+        findings_rows = [{"check_code": "ORPHAN_FK_NEWS_SIGNAL", "n": 3, "severity": "critical"}]
+        # Query 2: schema columns
+        schema_rows = [{"table_name": "decisions", "column_name": "id"},
+                       {"table_name": "decisions", "column_name": "ticker"}]
+        # Query 3: cost trend
+        cost_rows = [{"id": 1, "started_at": "2026-05-11", "tok": 1000, "total_findings": 5}]
+        cur.fetchall.side_effect = [findings_rows, schema_rows, cost_rows]
+        return cur
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_emits_audit_gap_finding(self, mock_call):
+        from v2 import audit
+        canned = {
+            "findings": [
+                {
+                    "topic_slug": "missing-thesis-rotation-check",
+                    "title": "No check for stale active theses",
+                    "category": "audit_gap",
+                    "priority": "medium",
+                    "body": "Active theses are not pruned by age.",
+                    "evidence_quote": "Some theses are >60 days old.",
+                    "proposed_check_code": "THESIS_STALE",
+                }
+            ]
+        }
+        usage = {"input_tokens": 100, "output_tokens": 50,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1000}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+
+        findings = audit.check_audit_gaps_opus(cur)
+
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "AUDIT_GAP"
+        assert f.evidence["topic_slug"] == "missing-thesis-rotation-check"
+        assert f.evidence["proposed_check_code"] == "THESIS_STALE"
+        # Usage is stashed under the audit_gaps purpose
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["input_tokens"] == 100
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["latency_ms"] == 1000
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_empty_findings_returns_empty_list(self, mock_call):
+        from v2 import audit
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 100}
+        mock_call.return_value = ({"findings": []}, usage)
+        cur = self._stub_cursor()
+        assert audit.check_audit_gaps_opus(cur) == []
+        # Even on empty, usage is recorded
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["latency_ms"] == 100
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_dedup_within_call(self, mock_call):
+        """Two findings with same topic_slug → only one Finding returned."""
+        from v2 import audit
+        canned = {"findings": [
+            {"topic_slug": "x", "title": "T1", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+            {"topic_slug": "X", "title": "T2 dup", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 1, "output_tokens": 1,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 1
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_caps_at_10_findings(self, mock_call):
+        from v2 import audit
+        many = [
+            {"topic_slug": f"slug-{i}", "title": f"T{i}",
+             "category": "audit_gap", "priority": "low", "body": "..."}
+            for i in range(15)
+        ]
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": many}, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 10
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_invalid_items_silently_dropped(self, mock_call):
+        from v2 import audit
+        canned = {"findings": [
+            {},  # missing everything
+            {"topic_slug": "ok", "title": "T", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 1
+        assert findings[0].evidence["topic_slug"] == "ok"
