@@ -15,6 +15,22 @@
 <h3>Body</h3>
 <pre>{{ finding.body }}</pre>
 
+{% if finding.evidence and finding.evidence.jira %}
+  {% set jira = finding.evidence.jira %}
+  <h3>Jira</h3>
+  <p>
+    {% if jira.issue_key %}
+      <a href="{{ jira_browse_base }}/browse/{{ jira.issue_key }}"
+         target="_blank" rel="noopener">{{ jira.issue_key }}</a>
+      <span>({{ jira.status }})</span>
+    {% else %}
+      <span>{{ jira.status }}</span>
+      {% if jira.error %}<span> &mdash; {{ jira.error }}</span>{% endif %}
+      {% if jira.reason %}<span> &mdash; {{ jira.reason }}</span>{% endif %}
+    {% endif %}
+  </p>
+{% endif %}
+
 <h3>Evidence</h3>
 <pre>{{ finding.evidence|tojson(indent=2) }}</pre>
 </body></html>
