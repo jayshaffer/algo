@@ -6,11 +6,10 @@ from benchmark import (
     get_deposit_history,
     get_spy_benchmark,
 )
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, render_template, request
 from queries import (
     close_thesis,
     get_agent_event_types,
-    get_audit_finding,
     get_current_strategy,
     get_decision,
     get_decision_signal_refs_batch,
@@ -19,14 +18,12 @@ from queries import (
     get_decision_tweets,
     get_equity_curve,
     get_latest_snapshot,
-    get_open_audit_findings,
     get_open_orders,
     get_performance_metrics,
     get_playbook_action,
     get_playbook_actions,
     get_positions,
     get_recent_agent_events,
-    get_recent_audit_runs,
     get_recent_decisions,
     get_recent_macro_signals,
     get_recent_session_costs,
@@ -56,7 +53,6 @@ from queries import (
     get_ticker_theses,
     get_today_playbook,
     lookup_session_id_by_date,
-    update_audit_finding_status,
 )
 
 app = Flask(__name__)
@@ -408,32 +404,6 @@ def events_page():
         current_type=event_type,
         current_session=session_id,
     )
-
-
-@app.route("/audit")
-def audit_page():
-    findings = get_open_audit_findings()
-    runs = get_recent_audit_runs()
-    return render_template("audit.html", findings=findings, runs=runs)
-
-
-@app.route("/audit/findings/<int:finding_id>")
-def audit_finding_page(finding_id):
-    f = get_audit_finding(finding_id)
-    if not f:
-        return "Not found", 404
-    import os
-    jira_browse_base = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
-    return render_template("audit_finding.html", finding=f,
-                           jira_browse_base=jira_browse_base)
-
-
-@app.route("/audit/findings/<int:finding_id>/status", methods=["POST"])
-def audit_finding_status(finding_id):
-    status = request.form.get("status")
-    note = request.form.get("note")
-    update_audit_finding_status(finding_id, status, note)
-    return redirect(url_for("audit_page"))
 
 
 if __name__ == "__main__":
