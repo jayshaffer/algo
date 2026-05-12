@@ -119,17 +119,26 @@ def _make_backfill_autofix(decision_ids: list[int]):
 def check_missing_backfill(cur) -> list[Finding]:
     """Decisions past the 7d/30d window with NULL outcome_*/benchmark_*.
     Each missing row drops a learning signal; auto-fix re-runs the existing
-    backfill function."""
+    backfill function.
+
+    Uses trading-day cutoff (not calendar days) so the eligibility predicate
+    matches what backfill_decision_outcomes can actually fill — its exit_date
+    is N trading days after the decision, so a calendar-day cutoff over-flags
+    decisions whose trading-day window hasn't closed yet.
+    """
+    from datetime import date as _date
+    from v2.backfill import trading_day_cutoff
     findings = []
     for window, code in (("7d", "BACKFILL_GAP_7D"), ("30d", "BACKFILL_GAP_30D")):
         days = 7 if window == "7d" else 30
+        cutoff = trading_day_cutoff(_date.today(), days)
         cur.execute(f"""
             SELECT id FROM decisions
             WHERE action IN ('buy','sell')
-              AND date <= now()::date - %s
+              AND date <= %s
               AND (outcome_{window} IS NULL OR benchmark_{window} IS NULL)
             ORDER BY id
-        """, (days,))
+        """, (cutoff,))
         ids = [r["id"] for r in cur.fetchall()]
         if not ids:
             continue

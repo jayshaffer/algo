@@ -996,6 +996,24 @@ def fail_session_stage(session_id: int, stage_name: str, error: str, usage=None)
             """, (error, session_id, stage_name))
 
 
+def close_orphan_running_stages(session_id: int, reason: str = "session ended with stage still running") -> list[str]:
+    """Flip any session_stages still 'running' for this session_id to 'failed'.
+
+    Belt-and-suspenders for cases where a stage entered try/except but the
+    process was killed before fail_session_stage could write, leaving the row
+    pinned at 'running' forever (the STAGE_RUNNING_STALE audit check).
+    Returns the names of stages that were swept.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE session_stages
+            SET status = 'failed', completed_at = NOW(), error = %s
+            WHERE session_id = %s AND status = 'running'
+            RETURNING stage_name
+        """, (reason, session_id))
+        return [row["stage_name"] for row in cur.fetchall()]
+
+
 def get_completed_stages(session_id: int) -> set[str]:
     with get_cursor() as cur:
         cur.execute("""

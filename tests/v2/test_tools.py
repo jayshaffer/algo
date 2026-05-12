@@ -317,17 +317,34 @@ class TestCreateThesis:
         mock_cursor.fetchall.return_value = []
         # insert_thesis returns new ID
         mock_cursor.fetchone.return_value = {"id": 5}
-        result = tool_create_thesis(
-            ticker="GOOG",
-            direction="long",
-            thesis="AI growth",
-            entry_trigger="Price > $100",
-            exit_trigger="Price > $150",
-            invalidation="AI hype fades",
-            confidence="high",
-        )
+        # validate_signal_refs returns the input as-is (one valid ref)
+        with patch(
+            "v2.tools.validate_signal_refs",
+            return_value=[{"type": "news_signal", "id": 1}],
+        ), patch("v2.tools.insert_thesis_signals"):
+            result = tool_create_thesis(
+                ticker="GOOG",
+                direction="long",
+                thesis="AI growth",
+                entry_trigger="Price > $100",
+                exit_trigger="Price > $150",
+                invalidation="AI hype fades",
+                confidence="high",
+                signal_refs=[{"type": "news_signal", "id": 1}],
+            )
         assert "Created thesis ID 5" in result
         assert "GOOG" in result
+
+    def test_rejects_missing_signal_refs(self, mock_db, mock_cursor):
+        """create_thesis without signal_refs is rejected (audit finding 69)."""
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = {"id": 5}
+        result = tool_create_thesis(
+            ticker="GOOG", direction="long", thesis="AI growth",
+            entry_trigger="Price > $100", exit_trigger="Price > $150",
+            invalidation="AI hype fades", confidence="high",
+        )
+        assert "Error" in result and "signal_ref" in result
 
 
 class TestCreateThesisSignalRefs:
@@ -396,18 +413,21 @@ class TestCreateThesisSignalRefs:
     @patch("v2.tools.insert_thesis")
     @patch("v2.tools.get_positions")
     @patch("v2.tools.get_active_theses")
-    def test_works_without_signal_refs(self, mock_theses, mock_positions,
-                                        mock_insert, mock_insert_links):
-        """Backwards-compat: signal_refs is optional (e.g., adopted positions)."""
+    def test_rejects_without_signal_refs(self, mock_theses, mock_positions,
+                                          mock_insert, mock_insert_links):
+        """Audit finding 69 fix: create_thesis with no signal_refs is rejected.
+        Use tool_adopt_thesis for orphan-position housekeeping (which still
+        accepts empty signal_refs)."""
         mock_theses.return_value = []
         mock_positions.return_value = []
-        mock_insert.return_value = 5
         result = tool_create_thesis(
             ticker="GOOG", direction="long", thesis="AI growth",
             entry_trigger="...", exit_trigger="...", invalidation="...",
             confidence="high",
         )
-        assert "Created thesis ID 5" in result
+        assert "Error" in result
+        assert "signal_ref" in result
+        mock_insert.assert_not_called()
         mock_insert_links.assert_not_called()
 
 
