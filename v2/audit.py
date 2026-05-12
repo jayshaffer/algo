@@ -397,6 +397,60 @@ def check_cost_trend(cur) -> list[Finding]:
     )]
 
 
+def check_audit_llm_cost_trend(cur) -> list[Finding]:
+    """Per-purpose 7d-vs-prior-7d audit LLM token usage. Flag >=2x growth.
+
+    Reads audit_llm_calls; emits one info finding listing all spiking purposes.
+    Separate from check_cost_trend (which reads session_stages).
+    """
+    cur.execute("""
+        WITH recent AS (
+            SELECT purpose,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM audit_llm_calls
+            WHERE created_at > now() - interval '7 days'
+            GROUP BY purpose
+        ),
+        prior AS (
+            SELECT purpose,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM audit_llm_calls
+            WHERE created_at > now() - interval '14 days'
+              AND created_at <= now() - interval '7 days'
+            GROUP BY purpose
+        )
+        SELECT COALESCE(r.purpose, p.purpose) AS purpose,
+               COALESCE(r.tok, 0) AS recent_tok,
+               COALESCE(p.tok, 0) AS prior_tok
+        FROM recent r FULL OUTER JOIN prior p ON r.purpose = p.purpose
+    """)
+    spikes = []
+    for r in cur.fetchall():
+        if not r["prior_tok"]:
+            continue
+        if r["recent_tok"] >= 2 * r["prior_tok"]:
+            spikes.append({
+                "purpose": r["purpose"],
+                "recent_tok": int(r["recent_tok"]),
+                "prior_tok": int(r["prior_tok"]),
+                "ratio": round(r["recent_tok"] / r["prior_tok"], 2),
+            })
+    if not spikes:
+        return []
+    return [Finding(
+        check_code="AUDIT_LLM_COST_TREND_SPIKE", tier=3, severity="info",
+        title=f"{len(spikes)} audit LLM purpose(s) with token usage >=2x prior 7-day window",
+        body="Per-purpose 7-day rolling audit LLM token totals doubled vs. prior 7-day window.",
+        affected_count=len(spikes),
+        evidence={"purposes": spikes},
+        auto_fix=None,
+    )]
+
+
 # --- Tier 3: decisions missing signal_refs --------------------------------
 
 def check_decisions_missing_signal_refs(cur) -> list[Finding]:
@@ -1460,6 +1514,7 @@ CHECKS: list = [
     "check_attribution_category_coverage",
     "check_stage_failure_rate",
     "check_cost_trend",
+    "check_audit_llm_cost_trend",
     "check_decisions_missing_signal_refs",
     "check_theses_missing_signal_refs",
     "check_strategist_using_reversal_tool",

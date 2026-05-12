@@ -445,6 +445,45 @@ class TestCheckCostTrend:
         assert check_cost_trend(cur) == []
 
 
+class TestCheckAuditLlmCostTrend:
+    def test_flags_doubled_purpose(self):
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 500, "prior_tok": 100},
+            {"purpose": "rule_judgment", "recent_tok": 110, "prior_tok": 100},
+        ]
+        findings = check_audit_llm_cost_trend(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "AUDIT_LLM_COST_TREND_SPIKE"
+        assert f.tier == 3
+        assert f.severity == "info"
+        purposes = [p["purpose"] for p in f.evidence["purposes"]]
+        assert purposes == ["audit_gaps"]
+        spike = f.evidence["purposes"][0]
+        assert spike["ratio"] == 5.0
+        assert spike["recent_tok"] == 500
+        assert spike["prior_tok"] == 100
+
+    def test_no_spike_returns_empty(self):
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 110, "prior_tok": 100},
+        ]
+        assert check_audit_llm_cost_trend(cur) == []
+
+    def test_zero_prior_skipped(self):
+        """Don't divide by zero / don't flag new purposes with no history."""
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 500, "prior_tok": 0},
+        ]
+        assert check_audit_llm_cost_trend(cur) == []
+
+
 # --- Decisions missing signal_refs tests (refined: bucket by source) ---
 
 class TestCheckDecisionsMissingSignalRefs:
