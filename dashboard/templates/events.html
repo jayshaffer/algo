@@ -60,7 +60,8 @@
                     </td>
                     <td class="py-2 align-top text-xs">
                         {% if e.session_id %}
-                        <a href="/events?session={{ e.session_id }}" class="text-blue-600 hover:underline">{{ e.session_id }}</a>
+                        <a href="/session/{{ e.session_id }}" class="text-blue-600 hover:underline">{{ e.session_id }}</a>
+                        <a href="/events?session={{ e.session_id }}{% if current_type %}&type={{ current_type }}{% endif %}" class="text-gray-400 hover:text-gray-600 ml-1" title="Filter events to this session">⋯</a>
                         {% else %}—{% endif %}
                     </td>
                     <td class="py-2 align-top text-xs">{{ e.stage_name or '—' }}</td>

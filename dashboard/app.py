@@ -6,19 +6,23 @@ from benchmark import (
     get_deposit_history,
     get_spy_benchmark,
 )
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 from queries import (
     close_thesis,
     get_agent_event_types,
     get_audit_finding,
     get_current_strategy,
+    get_decision,
     get_decision_signal_refs_batch,
+    get_decision_signals_full,
     get_decision_stats,
+    get_decision_tweets,
     get_equity_curve,
     get_latest_snapshot,
     get_open_audit_findings,
     get_open_orders,
     get_performance_metrics,
+    get_playbook_action,
     get_playbook_actions,
     get_positions,
     get_recent_agent_events,
@@ -28,14 +32,30 @@ from queries import (
     get_recent_session_costs,
     get_recent_ticker_signals,
     get_recent_tweets,
+    get_session,
+    get_session_decisions,
+    get_session_events,
+    get_session_memo,
     get_session_stage_costs,
+    get_session_theses_created,
+    get_session_tweets,
     get_signal_attribution,
     get_signal_summary,
     get_strategy_memos,
     get_strategy_rules,
     get_theses,
+    get_thesis,
+    get_thesis_decisions,
+    get_thesis_playbook_actions,
     get_thesis_stats,
+    get_ticker_attribution,
+    get_ticker_decisions,
+    get_ticker_open_orders,
+    get_ticker_position,
+    get_ticker_signals,
+    get_ticker_theses,
     get_today_playbook,
+    lookup_session_id_by_date,
     update_audit_finding_status,
 )
 
@@ -91,23 +111,29 @@ def playbook():
 
 @app.route("/attribution")
 def attribution():
-    """Signal attribution dashboard."""
-    scores = get_signal_attribution()
-    return render_template("attribution.html", scores=scores)
+    """Signal attribution dashboard, optionally filtered to one category."""
+    category = request.args.get("category") or None
+    scores = get_signal_attribution(category=category)
+    return render_template(
+        "attribution.html",
+        scores=scores,
+        current_category=category,
+    )
 
 
 @app.route("/signals")
 def signals():
-    """Market signals page."""
-    ticker_signals = get_recent_ticker_signals(days=7, limit=50)
-    macro_signals = get_recent_macro_signals(days=7, limit=20)
+    """Market signals page (optionally filtered by category)."""
+    category = request.args.get("category") or None
+    ticker_signals = get_recent_ticker_signals(days=7, limit=50, category=category)
+    macro_signals = get_recent_macro_signals(days=7, limit=20, category=category)
     signal_summary = get_signal_summary(days=7)
-
     return render_template(
         "signals.html",
         ticker_signals=ticker_signals,
         macro_signals=macro_signals,
         signal_summary=signal_summary,
+        current_category=category,
     )
 
 
@@ -142,6 +168,94 @@ def decisions():
         decisions=recent_decisions,
         stats=stats,
         signal_refs=signal_refs,
+    )
+
+
+@app.route("/decision/<int:decision_id>")
+def decision_detail(decision_id):
+    """Single decision deep-dive with linked signals, thesis, and session."""
+    decision = get_decision(decision_id)
+    if not decision:
+        abort(404)
+    signals = get_decision_signals_full(decision_id)
+    tweets = get_decision_tweets(decision_id)
+    parent_action = (
+        get_playbook_action(decision["playbook_action_id"])
+        if decision.get("playbook_action_id")
+        else None
+    )
+    session_id = lookup_session_id_by_date(decision["date"])
+    return render_template(
+        "decision_detail.html",
+        decision=decision,
+        signals=signals,
+        tweets=tweets,
+        parent_action=parent_action,
+        session_id=session_id,
+    )
+
+
+@app.route("/thesis/<int:thesis_id>")
+def thesis_detail(thesis_id):
+    """Single thesis with linked decisions and playbook actions."""
+    thesis = get_thesis(thesis_id)
+    if not thesis:
+        abort(404)
+    decisions = get_thesis_decisions(thesis_id)
+    actions = get_thesis_playbook_actions(thesis_id)
+    origin_session_id = lookup_session_id_by_date(thesis["created_at"].date()) if thesis.get("created_at") else None
+    return render_template(
+        "thesis_detail.html",
+        thesis=thesis,
+        decisions=decisions,
+        actions=actions,
+        origin_session_id=origin_session_id,
+    )
+
+
+@app.route("/ticker/<sym>")
+def ticker_overview(sym):
+    """Aggregate view of position, theses, decisions, signals for one ticker."""
+    sym = sym.upper()
+    position = get_ticker_position(sym)
+    theses = get_ticker_theses(sym)
+    decisions = get_ticker_decisions(sym)
+    signals = get_ticker_signals(sym)
+    open_orders = get_ticker_open_orders(sym)
+    attribution = get_ticker_attribution(sym)
+    return render_template(
+        "ticker.html",
+        sym=sym,
+        position=position,
+        theses=theses,
+        decisions=decisions,
+        signals=signals,
+        open_orders=open_orders,
+        attribution=attribution,
+    )
+
+
+@app.route("/session/<int:session_id>")
+def session_detail(session_id):
+    """Unified per-session view: stages, events, decisions, theses, tweets, memo."""
+    session = get_session(session_id)
+    if not session:
+        abort(404)
+    stages = get_session_stage_costs(session_id)
+    decisions = get_session_decisions(session_id)
+    theses_created = get_session_theses_created(session_id)
+    memo = get_session_memo(session_id)
+    tweets = get_session_tweets(session_id)
+    events = get_session_events(session_id, limit=200)
+    return render_template(
+        "session_detail.html",
+        session=session,
+        stages=stages,
+        decisions=decisions,
+        theses_created=theses_created,
+        memo=memo,
+        tweets=tweets,
+        events=events,
     )
 
 
@@ -186,7 +300,12 @@ def strategy():
     """Strategy state, rules, and memos page."""
     state = get_current_strategy()
     rules = get_strategy_rules(status='active')
-    memos = get_strategy_memos(days=30)
+    memos_raw = get_strategy_memos(days=30)
+    memos = []
+    for m in memos_raw:
+        m = dict(m)
+        m["session_id"] = lookup_session_id_by_date(m["session_date"])
+        memos.append(m)
     return render_template("strategy.html", state=state, rules=rules, memos=memos)
 
 

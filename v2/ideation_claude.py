@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from .claude_client import extract_final_text, get_claude_client, run_agentic_loop
+from .claude_client import AgentPurpose, extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
 from .formation import build_formation_context, get_orphan_positions
 from .pricing import UnknownModelError, stage_cost_usd
@@ -230,6 +230,7 @@ def _run_claude_loop(
         max_turns=max_turns,
         session_id=session_id,
         stage_name=stage_name,
+        purpose=AgentPurpose.STRATEGIST_LOOP,
     )
 
     created, updated, closed, adopted = count_actions(result.messages)

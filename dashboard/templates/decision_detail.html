@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}Decision #{{ decision.id }} - Alpaca Trading{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/decisions" class="text-sm text-blue-600 hover:underline">← All decisions</a>
+</div>
+
+<h1 class="text-2xl font-bold mb-2">
+    Decision #{{ decision.id }} —
+    <a href="/ticker/{{ decision.ticker }}" class="text-blue-600 hover:underline">{{ decision.ticker }}</a>
+</h1>
+<div class="text-sm text-gray-500 mb-6">
+    {{ decision.date.strftime('%Y-%m-%d') if decision.date else '' }}
+    {% if session_id %}
+    · <a href="/session/{{ session_id }}" class="text-blue-600 hover:underline">Session #{{ session_id }}</a>
+    {% endif %}
+</div>
+
+<!-- Action / outcome summary -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Action</div>
+        <div class="text-2xl font-bold {% if decision.action == 'buy' %}text-green-600{% elif decision.action == 'sell' %}text-red-600{% endif %}">
+            {{ decision.action|upper }}
+        </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Quantity</div>
+        <div class="text-2xl font-bold">{{ decision.quantity or '-' }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">Price</div>
+        <div class="text-2xl font-bold">{{ "$%.2f"|format(decision.price|float) if decision.price else '-' }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">7d Outcome</div>
+        <div class="text-2xl font-bold {% if decision.outcome_7d and decision.outcome_7d > 0 %}text-green-600{% elif decision.outcome_7d and decision.outcome_7d < 0 %}text-red-600{% endif %}">
+            {{ "%.1f"|format(decision.outcome_7d|float) if decision.outcome_7d is not none else '-' }}%
+        </div>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-gray-500 text-sm">30d Outcome</div>
+        <div class="text-2xl font-bold {% if decision.outcome_30d and decision.outcome_30d > 0 %}text-green-600{% elif decision.outcome_30d and decision.outcome_30d < 0 %}text-red-600{% endif %}">
+            {{ "%.1f"|format(decision.outcome_30d|float) if decision.outcome_30d is not none else '-' }}%
+        </div>
+    </div>
+</div>
+
+<!-- Reasoning -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Reasoning</h2></div>
+    <div class="p-4 whitespace-pre-line text-gray-700">{{ decision.reasoning or 'No reasoning recorded' }}</div>
+</div>
+
+<!-- Parent playbook action -->
+{% if parent_action %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Parent Playbook Action</h2></div>
+    <div class="p-4 text-sm">
+        <div class="mb-2">
+            <span class="font-medium">Action:</span> {{ parent_action.action }}
+            · <span class="font-medium">Confidence:</span> {{ parent_action.confidence or '-' }}
+        </div>
+        <div class="text-gray-600 mb-2">{{ parent_action.reasoning }}</div>
+        {% if parent_action.thesis_id %}
+        <a href="/thesis/{{ parent_action.thesis_id }}" class="text-blue-600 hover:underline">
+            View thesis #{{ parent_action.thesis_id }} →
+        </a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Source signals -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Source Signals</h2></div>
+    <div class="p-4">
+        {% if signals %}
+        <div class="space-y-3">
+            {% for s in signals %}
+            {% if s.signal_type == 'news_signal' %}
+            <div id="signal-news-{{ s.signal_id }}" class="border-l-4 border-blue-400 pl-3 py-1">
+                <div class="text-xs text-blue-700 font-mono mb-0.5">news_signal #{{ s.signal_id }}</div>
+                <div class="font-medium">{{ s.news_headline }}</div>
+                {% if s.news_summary %}<div class="text-sm text-gray-600 mt-0.5">{{ s.news_summary }}</div>{% endif %}
+                <div class="text-xs text-gray-500 mt-1 flex gap-2 flex-wrap">
+                    {% if s.news_ticker %}<a href="/ticker/{{ s.news_ticker }}" class="text-blue-600 hover:underline">{{ s.news_ticker }}</a>{% endif %}
+                    <a href="/attribution?category=news:{{ s.news_category }}" class="bg-gray-100 px-2 rounded hover:bg-gray-200">{{ s.news_category }}</a>
+                    <span class="sentiment-{{ s.news_sentiment }}">{{ s.news_sentiment }}</span>
+                    <span>conf: {{ s.news_confidence }}</span>
+                    <span>{{ s.news_published_at.strftime('%Y-%m-%d %H:%M') if s.news_published_at else '' }}</span>
+                </div>
+            </div>
+            {% elif s.signal_type == 'macro_signal' %}
+            <div id="signal-macro-{{ s.signal_id }}" class="border-l-4 border-purple-400 pl-3 py-1">
+                <div class="text-xs text-purple-700 font-mono mb-0.5">macro_signal #{{ s.signal_id }}</div>
+                <div class="font-medium">{{ s.macro_headline }}</div>
+                <div class="text-xs text-gray-500 mt-1 flex gap-2 flex-wrap">
+                    <a href="/attribution?category=macro:{{ s.macro_category }}" class="bg-gray-100 px-2 rounded hover:bg-gray-200">{{ s.macro_category }}</a>
+                    <span class="sentiment-{{ s.macro_sentiment }}">{{ s.macro_sentiment }}</span>
+                    {% if s.macro_affected_sectors %}<span>Sectors: {{ s.macro_affected_sectors|join(', ') }}</span>{% endif %}
+                    <span>{{ s.macro_published_at.strftime('%Y-%m-%d %H:%M') if s.macro_published_at else '' }}</span>
+                </div>
+            </div>
+            {% elif s.signal_type == 'thesis' %}
+            <div class="border-l-4 border-green-400 pl-3 py-1">
+                <div class="text-xs text-green-700 font-mono mb-0.5">thesis #{{ s.signal_id }}</div>
+                <div class="font-medium">
+                    <a href="/thesis/{{ s.signal_id }}" class="text-blue-600 hover:underline">{{ s.thesis_text or '(thesis text missing)' }}</a>
+                </div>
+                <div class="text-xs text-gray-500 mt-1 flex gap-2">
+                    {% if s.thesis_ticker %}<a href="/ticker/{{ s.thesis_ticker }}" class="text-blue-600 hover:underline">{{ s.thesis_ticker }}</a>{% endif %}
+                    <span>{{ s.thesis_direction or '' }}</span>
+                    <span>{{ s.thesis_status or '' }}</span>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No signals linked to this decision.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tweets from this decision -->
+{% if tweets %}
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Tweets</h2></div>
+    <div class="divide-y">
+        {% for t in tweets %}
+        <div class="p-4">
+            <div class="text-xs text-gray-500 mb-1">
+                {{ t.platform }} · {{ t.session_date }}
+                {% if t.posted %}<span class="text-green-700">posted</span>
+                {% elif t.error %}<span class="text-red-700">failed</span>
+                {% else %}<span class="text-yellow-700">pending</span>
+                {% endif %}
+            </div>
+            <p class="text-gray-700 whitespace-pre-line">{{ t.tweet_text }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

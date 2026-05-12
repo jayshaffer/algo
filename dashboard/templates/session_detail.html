@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}Session #{{ session.id }} - Alpaca Trading{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/costs" class="text-sm text-blue-600 hover:underline">← All sessions</a>
+</div>
+
+<h1 class="text-2xl font-bold mb-2">Session #{{ session.id }}</h1>
+<div class="text-sm text-gray-500 mb-6">
+    {{ session.session_date }} · {{ session.session_type }} · {{ session.status }}
+    {% if session.started_at %} · started {{ session.started_at.strftime('%H:%M:%S') }}{% endif %}
+    {% if session.completed_at %} · completed {{ session.completed_at.strftime('%H:%M:%S') }}{% endif %}
+</div>
+
+{% if session.error %}
+<div class="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
+    <div class="text-red-800 font-medium mb-1">Session Error</div>
+    <pre class="text-red-700 text-sm whitespace-pre-wrap">{{ session.error }}</pre>
+</div>
+{% endif %}
+
+<!-- Stages -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Stages</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if stages %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Stage</th><th class="pb-2">Status</th><th class="pb-2">Model</th><th class="pb-2 text-right">Input</th><th class="pb-2 text-right">Output</th><th class="pb-2 text-right">Cost USD</th>
+            </tr></thead>
+            <tbody>
+            {% for s in stages %}
+            <tr class="border-t">
+                <td class="py-2 font-mono text-xs">{{ s.stage_name }}</td>
+                <td class="py-2">{{ s.status }}</td>
+                <td class="py-2 text-xs">{{ s.model or '-' }}</td>
+                <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.input_tokens or 0) }}</td>
+                <td class="py-2 text-right font-mono">{{ '{:,}'.format(s.output_tokens or 0) }}</td>
+                <td class="py-2 text-right font-mono">{% if s.cost_usd is not none %}${{ '%.4f' % s.cost_usd|float }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No stage cost rows recorded.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Decisions made -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Decisions</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if decisions %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Ticker</th><th class="pb-2">Action</th><th class="pb-2">Qty</th><th class="pb-2">Price</th><th class="pb-2"></th>
+            </tr></thead>
+            <tbody>
+            {% for d in decisions %}
+            <tr class="border-t">
+                <td class="py-2"><a href="/ticker/{{ d.ticker }}" class="text-blue-600 hover:underline font-semibold">{{ d.ticker }}</a></td>
+                <td class="py-2">{{ d.action|upper }}</td>
+                <td class="py-2">{{ d.quantity or '-' }}</td>
+                <td class="py-2">{{ "$%.2f"|format(d.price|float) if d.price else '-' }}</td>
+                <td class="py-2"><a href="/decision/{{ d.id }}" class="text-blue-600 hover:underline">view →</a></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No decisions in this session.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Theses created -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Theses Created</h2></div>
+    <div class="p-4">
+        {% if theses_created %}
+        <div class="space-y-2">
+            {% for t in theses_created %}
+            <div class="border rounded p-3 text-sm">
+                <div class="flex gap-2 items-center mb-1">
+                    <a href="/thesis/{{ t.id }}" class="text-blue-600 hover:underline font-semibold">#{{ t.id }}</a>
+                    <a href="/ticker/{{ t.ticker }}" class="text-blue-600 hover:underline">{{ t.ticker }}</a>
+                    <span class="px-2 py-0.5 rounded text-xs bg-gray-100">{{ t.direction }}</span>
+                </div>
+                <div class="text-gray-600">{{ t.thesis }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500">No theses created in this session.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Memo -->
+{% if memo %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Memo</h2></div>
+    <div class="p-4 whitespace-pre-line text-gray-700 text-sm">{{ memo.content }}</div>
+</div>
+{% endif %}
+
+<!-- Tweets -->
+{% if tweets %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Tweets</h2></div>
+    <div class="divide-y">
+        {% for t in tweets %}
+        <div class="p-4">
+            <div class="text-xs text-gray-500 mb-1">
+                {{ t.platform }} · {{ t.tweet_type }}
+                {% if t.decision_id %} · <a href="/decision/{{ t.decision_id }}" class="text-blue-600 hover:underline">decision #{{ t.decision_id }}</a>{% endif %}
+            </div>
+            <p class="text-gray-700 whitespace-pre-line text-sm">{{ t.tweet_text }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Events -->
+<div class="bg-white rounded-lg shadow">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">Events ({{ events|length }})</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if events %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Time</th><th class="pb-2">Stage</th><th class="pb-2">Event</th><th class="pb-2">Payload</th>
+            </tr></thead>
+            <tbody>
+            {% for e in events %}
+            <tr class="border-t">
+                <td class="py-2 align-top text-xs text-gray-500 whitespace-nowrap">{{ e.occurred_at.strftime('%H:%M:%S') if e.occurred_at else '' }}</td>
+                <td class="py-2 align-top text-xs">{{ e.stage_name or '—' }}</td>
+                <td class="py-2 align-top"><span class="bg-gray-100 px-2 py-0.5 rounded text-xs font-mono">{{ e.event_type }}</span></td>
+                <td class="py-2 align-top"><pre class="text-xs text-gray-700 whitespace-pre-wrap break-all max-w-2xl">{{ e.payload|tojson(indent=2) }}</pre></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No agent events for this session.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

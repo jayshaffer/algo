@@ -56,7 +56,7 @@
             <tbody>
                 {% for pos in positions %}
                 <tr class="border-t">
-                    <td class="py-2 font-semibold">{{ pos.ticker }}</td>
+                    <td class="py-2 font-semibold"><a href="/ticker/{{ pos.ticker }}" class="text-blue-600 hover:underline">{{ pos.ticker }}</a></td>
                     <td class="py-2">{{ pos.shares }}</td>
                     <td class="py-2">${{ "%.2f"|format(pos.avg_cost|float) }}</td>
                     <td class="py-2">${{ "%.2f"|format((pos.shares|float * pos.avg_cost|float)) }}</td>
@@ -95,7 +95,7 @@
             <tbody>
                 {% for o in open_orders %}
                 <tr class="border-t">
-                    <td class="py-2 font-semibold">{{ o.ticker }}</td>
+                    <td class="py-2 font-semibold"><a href="/ticker/{{ o.ticker }}" class="text-blue-600 hover:underline">{{ o.ticker }}</a></td>
                     <td class="py-2">
                         <span class="px-2 py-0.5 rounded text-sm {% if o.side == 'buy' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
                             {{ o.side|upper }}
@@ -135,7 +135,11 @@
         {% endif %}
         {% if playbook.watch_list %}
         <div class="text-sm">
-            <span class="bg-gray-100 px-2 py-1 rounded">Watchlist: {{ playbook.watch_list|join(', ') }}</span>
+            <span class="bg-gray-100 px-2 py-1 rounded">Watchlist:
+                {% for ticker in playbook.watch_list %}
+                <a href="/ticker/{{ ticker }}" class="text-blue-600 hover:underline">{{ ticker }}</a>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            </span>
         </div>
         {% endif %}
         <a href="/playbook" class="text-blue-600 text-sm hover:underline mt-2 inline-block">View full playbook</a>

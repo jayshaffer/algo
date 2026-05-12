@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.conftest import (
+    make_agent_event_row,
     make_attribution_row,
     make_decision_row,
     make_macro_signal_row,
@@ -16,10 +17,12 @@ from tests.conftest import (
     make_playbook_action_row,
     make_playbook_row,
     make_position_row,
+    make_session_row,
     make_snapshot_row,
     make_strategy_memo_row,
     make_strategy_rule_row,
     make_strategy_state_row,
+    make_thesis_row,
     make_tweet_row,
 )
 
@@ -88,6 +91,27 @@ def _reset_query_mocks():
     mock_queries.get_strategy_rules.return_value = []
     mock_queries.get_strategy_memos.return_value = []
     mock_queries.get_recent_tweets.return_value = []
+    mock_queries.get_decision.return_value = None
+    mock_queries.get_decision_signals_full.return_value = []
+    mock_queries.get_decision_tweets.return_value = []
+    mock_queries.get_playbook_action.return_value = None
+    mock_queries.lookup_session_id_by_date.return_value = None
+    mock_queries.get_thesis.return_value = None
+    mock_queries.get_thesis_decisions.return_value = []
+    mock_queries.get_thesis_playbook_actions.return_value = []
+    mock_queries.get_ticker_position.return_value = None
+    mock_queries.get_ticker_theses.return_value = []
+    mock_queries.get_ticker_decisions.return_value = []
+    mock_queries.get_ticker_signals.return_value = []
+    mock_queries.get_ticker_open_orders.return_value = []
+    mock_queries.get_ticker_attribution.return_value = []
+    mock_queries.get_session.return_value = None
+    mock_queries.get_session_stage_costs.return_value = []
+    mock_queries.get_session_decisions.return_value = []
+    mock_queries.get_session_theses_created.return_value = []
+    mock_queries.get_session_memo.return_value = None
+    mock_queries.get_session_tweets.return_value = []
+    mock_queries.get_session_events.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -203,6 +227,18 @@ class TestPortfolioPage:
         assert resp.status_code == 200
         assert b"mdash" in resp.data
 
+    def test_position_ticker_links_to_ticker_page(self, client):
+        mock_queries.get_positions.return_value = [make_position_row(ticker="AAPL")]
+        mock_queries.get_open_orders.return_value = []
+        resp = client.get("/")
+        assert b'href="/ticker/AAPL"' in resp.data
+
+    def test_open_order_ticker_links(self, client):
+        mock_queries.get_positions.return_value = []
+        mock_queries.get_open_orders.return_value = [make_open_order_row(ticker="TSLA")]
+        resp = client.get("/")
+        assert b'href="/ticker/TSLA"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Playbook page
@@ -261,6 +297,15 @@ class TestPlaybookPage:
         assert resp.status_code == 200
         mock_queries.get_playbook_actions.assert_not_called()
 
+    def test_playbook_links_ticker_and_thesis(self, client):
+        mock_queries.get_today_playbook.return_value = make_playbook_row()
+        mock_queries.get_playbook_actions.return_value = [
+            make_playbook_action_row(ticker="NVDA", thesis_id=7),
+        ]
+        resp = client.get("/playbook")
+        assert b'href="/ticker/NVDA"' in resp.data
+        assert b'href="/thesis/7"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Attribution page
@@ -285,6 +330,23 @@ class TestAttributionPage:
         assert resp.status_code == 200
         assert b"No attribution data available" in resp.data
 
+    def test_attribution_categories_link_and_filter(self, client):
+        mock_queries.get_signal_attribution.return_value = [
+            make_attribution_row(category="news:earnings"),
+        ]
+        resp = client.get("/attribution")
+        # Category cell should be a link that filters the same page
+        assert b'href="/attribution?category=news%3Aearnings"' in resp.data or \
+               b'href="/attribution?category=news:earnings"' in resp.data
+        # Anchor target for cross-page links
+        assert b'id="cat-news:earnings"' in resp.data
+
+    def test_attribution_accepts_category_filter(self, client):
+        mock_queries.get_signal_attribution.return_value = []
+        resp = client.get("/attribution?category=news:earnings")
+        assert resp.status_code == 200
+        mock_queries.get_signal_attribution.assert_called_with(category="news:earnings")
+
 
 # ---------------------------------------------------------------------------
 # Signals page
@@ -297,8 +359,8 @@ class TestSignalsPage:
     def test_signals_renders(self, client):
         resp = client.get("/signals")
         assert resp.status_code == 200
-        mock_queries.get_recent_ticker_signals.assert_called_once_with(days=7, limit=50)
-        mock_queries.get_recent_macro_signals.assert_called_once_with(days=7, limit=20)
+        mock_queries.get_recent_ticker_signals.assert_called_once_with(days=7, limit=50, category=None)
+        mock_queries.get_recent_macro_signals.assert_called_once_with(days=7, limit=20, category=None)
         mock_queries.get_signal_summary.assert_called_once_with(days=7)
 
     def test_signals_with_data(self, client):
@@ -310,6 +372,27 @@ class TestSignalsPage:
 
         resp = client.get("/signals")
         assert resp.status_code == 200
+
+    def test_signals_links_tickers_and_categories(self, client):
+        mock_queries.get_recent_ticker_signals.return_value = [
+            make_news_signal_row(ticker="AAPL", category="earnings"),
+        ]
+        mock_queries.get_recent_macro_signals.return_value = []
+        mock_queries.get_signal_summary.return_value = [
+            {"ticker": "AAPL", "bullish": 2, "bearish": 1, "neutral": 0},
+        ]
+        resp = client.get("/signals")
+        assert b'href="/ticker/AAPL"' in resp.data
+        assert b'href="/attribution?category=news%3Aearnings"' in resp.data or \
+               b'href="/attribution?category=news:earnings"' in resp.data
+
+    def test_signals_category_filter_param(self, client):
+        mock_queries.get_recent_ticker_signals.return_value = []
+        mock_queries.get_recent_macro_signals.return_value = []
+        mock_queries.get_signal_summary.return_value = []
+        resp = client.get("/signals?category=earnings")
+        assert resp.status_code == 200
+        mock_queries.get_recent_ticker_signals.assert_called_with(days=7, limit=50, category="earnings")
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +423,12 @@ class TestThesesPage:
         resp = client.get("/theses?status=all&sort=ticker")
         assert resp.status_code == 200
         mock_queries.get_theses.assert_called_once_with("all", "ticker")
+
+    def test_theses_link_ticker_and_detail(self, client):
+        mock_queries.get_theses.return_value = [make_thesis_row(id=11, ticker="MSFT")]
+        resp = client.get("/theses")
+        assert b'href="/ticker/MSFT"' in resp.data
+        assert b'href="/thesis/11"' in resp.data
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +498,24 @@ class TestDecisionsPage:
 
         resp = client.get("/decisions")
         assert resp.status_code == 200
+
+    def test_decisions_link_ticker_signal_refs_and_detail(self, client):
+        mock_queries.get_recent_decisions.return_value = [
+            make_decision_row(id=20, ticker="GOOG", playbook_action_id=5),
+        ]
+        mock_queries.get_decision_signal_refs_batch.return_value = {
+            20: [
+                {"signal_type": "news_signal", "signal_id": 100, "label": "Big news"},
+                {"signal_type": "thesis", "signal_id": 7, "label": "Strong thesis"},
+            ],
+        }
+        resp = client.get("/decisions")
+        assert b'href="/ticker/GOOG"' in resp.data
+        assert b'href="/decision/20"' in resp.data
+        # news signal links into decision detail anchor
+        assert b'href="/decision/20#signal-news-100"' in resp.data
+        # thesis ref links directly to thesis detail
+        assert b'href="/thesis/7"' in resp.data
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +848,25 @@ class TestStrategyPage:
         assert resp.status_code == 200
         assert b"No memos in the last 30 days" in resp.data
 
+    def test_strategy_memo_links_to_session(self, client):
+        memo_date = date(2026, 5, 11)
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [
+            make_strategy_memo_row(session_date=memo_date),
+        ]
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/strategy")
+        assert b'href="/session/42"' in resp.data
+
+    def test_strategy_memo_without_session(self, client):
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [make_strategy_memo_row()]
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/strategy")
+        assert resp.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Tweets page
@@ -777,6 +903,14 @@ class TestTweetsPage:
         assert resp.status_code == 200
         assert b"Failed" in resp.data
         assert b"Rate limit exceeded" in resp.data
+
+    def test_tweets_link_session_and_decision(self, client):
+        mock_queries.get_recent_tweets.return_value = [
+            {**make_tweet_row(id=1), "decision_id": 11, "session_id": 42},
+        ]
+        resp = client.get("/tweets")
+        assert b'href="/session/42"' in resp.data
+        assert b'href="/decision/11"' in resp.data
 
 
 # ---------------------------------------------------------------------------
@@ -888,6 +1022,23 @@ class TestCostsPage:
         resp = client.get("/costs/999")
         assert resp.status_code == 404
 
+    def test_session_date_links_to_session_detail(self, client):
+        mock_queries.get_recent_session_costs.return_value = [{
+            "session_id": 42,
+            "session_date": date(2026, 5, 11),
+            "session_type": "daily",
+            "status": "completed",
+            "total_cost_usd": Decimal("0.50"),
+            "total_input_tokens": 1000,
+            "total_output_tokens": 200,
+            "total_cache_creation_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "started_at": datetime(2026, 5, 11, 10, 0),
+            "completed_at": datetime(2026, 5, 11, 10, 5),
+        }]
+        resp = client.get("/costs")
+        assert b'href="/session/42"' in resp.data
+
 
 # ---------------------------------------------------------------------------
 # Events page (agent_events viewer)
@@ -949,3 +1100,176 @@ class TestEventsPage:
         mock_queries.get_recent_agent_events.assert_called_once_with(
             limit=200, event_type=None, session_id=42
         )
+
+    def test_event_session_links_to_session_detail(self, client):
+        mock_queries.get_recent_agent_events.return_value = [make_agent_event_row(session_id=42)]
+        mock_queries.get_agent_event_types.return_value = []
+        resp = client.get("/events")
+        assert b'href="/session/42"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Decision detail
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionDetail:
+    def test_renders_200_with_decision(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5, ticker="AAPL")
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/decision/5")
+        assert resp.status_code == 200
+        assert b"AAPL" in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_decision.return_value = None
+        resp = client.get("/decision/999")
+        assert resp.status_code == 404
+
+    def test_renders_signal_refs(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5)
+        mock_queries.get_decision_signals_full.return_value = [
+            {
+                "signal_type": "news_signal", "signal_id": 100,
+                "news_headline": "Big earnings beat",
+                "news_summary": "Apple report", "news_category": "earnings",
+                "news_sentiment": "bullish", "news_confidence": "high",
+                "news_published_at": datetime(2026, 5, 11, 10, 0),
+                "news_ticker": "AAPL",
+                "macro_headline": None, "macro_category": None,
+                "macro_affected_sectors": None, "macro_sentiment": None,
+                "macro_published_at": None,
+                "thesis_text": None, "thesis_ticker": None,
+                "thesis_direction": None, "thesis_status": None,
+            },
+        ]
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/decision/5")
+        assert resp.status_code == 200
+        assert b"Big earnings beat" in resp.data
+        # Anchor target for inbound links from /decisions
+        assert b'id="signal-news-100"' in resp.data
+
+    def test_links_to_session_when_session_exists(self, client):
+        mock_queries.get_decision.return_value = make_decision_row(id=5)
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/decision/5")
+        assert b'href="/session/42"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Thesis detail
+# ---------------------------------------------------------------------------
+
+
+class TestThesisDetail:
+    def test_renders_200(self, client):
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA")
+        mock_queries.get_thesis_decisions.return_value = []
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/thesis/3")
+        assert resp.status_code == 200
+        assert b"NVDA" in resp.data
+        # Ticker link present
+        assert b'href="/ticker/NVDA"' in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_thesis.return_value = None
+        resp = client.get("/thesis/999")
+        assert resp.status_code == 404
+
+    def test_shows_linked_decisions(self, client):
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA")
+        mock_queries.get_thesis_decisions.return_value = [
+            make_decision_row(id=10, ticker="NVDA", action="buy"),
+        ]
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.return_value = None
+        resp = client.get("/thesis/3")
+        assert b'href="/decision/10"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Ticker overview
+# ---------------------------------------------------------------------------
+
+
+class TestTickerOverview:
+    def test_renders_with_position(self, client):
+        mock_queries.get_ticker_position.return_value = make_position_row(ticker="AAPL")
+        mock_queries.get_ticker_theses.return_value = []
+        mock_queries.get_ticker_decisions.return_value = []
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/AAPL")
+        assert resp.status_code == 200
+        assert b"AAPL" in resp.data
+
+    def test_renders_when_never_traded(self, client):
+        """Ticker page renders even for symbols never traded — shows empty state, not 404."""
+        mock_queries.get_ticker_position.return_value = None
+        mock_queries.get_ticker_theses.return_value = []
+        mock_queries.get_ticker_decisions.return_value = []
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/ZZZZ")
+        assert resp.status_code == 200
+        assert b"ZZZZ" in resp.data
+
+    def test_links_to_decisions_and_theses(self, client):
+        mock_queries.get_ticker_position.return_value = None
+        mock_queries.get_ticker_theses.return_value = [make_thesis_row(id=7, ticker="AAPL")]
+        mock_queries.get_ticker_decisions.return_value = [make_decision_row(id=11, ticker="AAPL")]
+        mock_queries.get_ticker_signals.return_value = []
+        mock_queries.get_ticker_open_orders.return_value = []
+        mock_queries.get_ticker_attribution.return_value = []
+        resp = client.get("/ticker/AAPL")
+        assert b'href="/thesis/7"' in resp.data
+        assert b'href="/decision/11"' in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Session detail
+# ---------------------------------------------------------------------------
+
+
+class TestSessionDetail:
+    def test_renders_200(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"Session #42" in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_session.return_value = None
+        resp = client.get("/session/999")
+        assert resp.status_code == 404
+
+    def test_renders_decisions_with_links(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = [make_decision_row(id=11, ticker="AAPL")]
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        resp = client.get("/session/42")
+        assert b'href="/decision/11"' in resp.data
+        assert b'href="/ticker/AAPL"' in resp.data

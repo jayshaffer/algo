@@ -51,7 +51,7 @@
                 {% for action in actions %}
                 <tr class="border-t">
                     <td class="py-2 text-gray-500">{{ action.priority or '-' }}</td>
-                    <td class="py-2 font-semibold">{{ action.ticker }}</td>
+                    <td class="py-2 font-semibold"><a href="/ticker/{{ action.ticker }}" class="text-blue-600 hover:underline">{{ action.ticker }}</a></td>
                     <td class="py-2">
                         <span class="px-2 py-0.5 rounded text-sm {% if action.action == 'buy' %}bg-green-100 text-green-800{% elif action.action == 'sell' %}bg-red-100 text-red-800{% else %}bg-gray-100 text-gray-800{% endif %}">
                             {{ action.action }}
@@ -59,7 +59,7 @@
                     </td>
                     <td class="py-2 text-sm">
                         {% if action.thesis_id %}
-                        <a href="/theses?status=all" class="text-blue-600 hover:underline">
+                        <a href="/thesis/{{ action.thesis_id }}" class="text-blue-600 hover:underline">
                             {{ action.thesis_direction|upper if action.thesis_direction else '' }} #{{ action.thesis_id }}
                         </a>
                         {% else %}
@@ -104,7 +104,7 @@
     <div class="p-4">
         <div class="flex flex-wrap gap-2">
             {% for ticker in playbook.watch_list %}
-            <span class="bg-blue-100 text-blue-800 px-3 py-1 rounded font-medium">{{ ticker }}</span>
+            <a href="/ticker/{{ ticker }}" class="bg-blue-100 text-blue-800 px-3 py-1 rounded font-medium hover:bg-blue-200">{{ ticker }}</a>
             {% endfor %}
         </div>
     </div>

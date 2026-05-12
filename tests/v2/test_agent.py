@@ -9,6 +9,7 @@ from v2.agent import (
     ExecutorDecision,
     ExecutorInput,
     PlaybookAction,
+    TRADING_SYSTEM_PROMPT,
     get_trading_decisions,
 )
 
@@ -185,6 +186,35 @@ class TestGetTradingDecisions:
 
         assert isinstance(response, AgentResponse)
         assert response.market_summary == "Quiet day"
+
+    def test_does_not_wrap_system_prompt_in_ephemeral_cache(self):
+        """Executor runs once per day; 5-minute ephemeral cache never hits.
+        The system kwarg should be passed as a plain string, not a
+        cache_control-wrapped list."""
+        captured = {}
+
+        def fake_call(client, **kwargs):
+            captured.update(kwargs)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=10, output_tokens=10)
+            return resp
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={"cash": "50000"},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="Neutral", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", side_effect=fake_call):
+            get_trading_decisions(executor_input)
+
+        assert isinstance(captured["system"], str), \
+            f"system should be a plain string (cache wrapper is dead weight for once-per-day executor); got {type(captured['system'])}: {captured['system']!r}"
+        assert captured["system"] == TRADING_SYSTEM_PROMPT, \
+            "system kwarg should be exactly TRADING_SYSTEM_PROMPT (not a truncation or substitute)"
 
     def test_parses_decisions_with_playbook_action_id(self):
         json_response = '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL","action":"buy","quantity":2.5,"reasoning":"Entry hit","confidence":"high","is_off_playbook":false,"signal_refs":[{"type":"news_signal","id":5}]}],"thesis_invalidations":[],"market_summary":"Active day","risk_assessment":"Medium"}'
@@ -585,3 +615,82 @@ class TestExecutorTelemetryWiring:
         assert captured.get("session_id") == 42
         assert captured.get("stage_name") == "trading"
         assert captured.get("purpose") == "executor"
+
+
+class TestDefaultExecutorModelEnvOverride:
+    """ALGO_EXECUTOR_MODEL env var should override the hardcoded default
+    so paper/prod can flip via .env without code changes."""
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        import importlib
+        import v2.agent as agent_module
+
+        monkeypatch.setenv("ALGO_EXECUTOR_MODEL", "claude-sonnet-4-6")
+        # Force re-evaluation of the module-level default
+        importlib.reload(agent_module)
+        assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-sonnet-4-6"
+
+        # Clean up: reload with env unset to restore original state
+        monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
+        importlib.reload(agent_module)
+
+    def test_falls_back_to_haiku_when_env_unset(self, monkeypatch):
+        import importlib
+        import v2.agent as agent_module
+
+        monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
+        # Force re-evaluation of the module-level default
+        importlib.reload(agent_module)
+        assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-haiku-4-5-20251001"
+
+        # Already in the correct state, no need to clean up
+
+
+class TestExecutorMaxTokensEnvOverride:
+    """ALGO_EXECUTOR_MAX_TOKENS env var should override the default cap.
+    The default is raised to 8192 to give headroom for multi-action
+    playbooks; the audit module's check_executor_max_tokens_hit was
+    catching real truncations at 4096."""
+
+    def test_default_is_8192_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("ALGO_EXECUTOR_MAX_TOKENS", raising=False)
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+        assert agent_module.EXECUTOR_MAX_TOKENS == 8192
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "12000")
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+        assert agent_module.EXECUTOR_MAX_TOKENS == 12000
+
+    def test_max_tokens_passed_to_api_call(self, monkeypatch):
+        """The configured value must reach _call_with_retry, not a stale
+        constant captured at function-def time."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "9999")
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+
+        captured = {}
+        def fake_call(client, **kwargs):
+            captured.update(kwargs)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=10, output_tokens=10)
+            return resp
+
+        executor_input = agent_module.ExecutorInput(
+            playbook_actions=[], positions=[], account={"cash": "50000"},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="Neutral", risk_notes="",
+        )
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", side_effect=fake_call):
+            agent_module.get_trading_decisions(executor_input)
+        assert captured["max_tokens"] == 9999

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
@@ -25,7 +26,8 @@ EXECUTOR_RAW_TEXT_CAP = 4096
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_EXECUTOR_MODEL = os.environ.get("ALGO_EXECUTOR_MODEL", "claude-haiku-4-5-20251001")
+EXECUTOR_MAX_TOKENS = int(os.environ.get("ALGO_EXECUTOR_MAX_TOKENS", "8192"))
 
 
 def _safe_int(value) -> int | None:
@@ -222,15 +224,11 @@ def get_trading_decisions(
     }
     input_json = json.dumps(input_data, default=str)
 
-    cached_system = [
-        {"type": "text", "text": TRADING_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
-    ]
-
     response = _call_with_retry(
         client,
         model=model,
-        max_tokens=4096,
-        system=cached_system,
+        max_tokens=EXECUTOR_MAX_TOKENS,
+        system=TRADING_SYSTEM_PROMPT,
         messages=[
             {
                 "role": "user",
