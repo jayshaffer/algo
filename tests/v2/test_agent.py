@@ -9,6 +9,7 @@ from v2.agent import (
     ExecutorDecision,
     ExecutorInput,
     PlaybookAction,
+    TRADING_SYSTEM_PROMPT,
     get_trading_decisions,
 )
 
@@ -185,6 +186,35 @@ class TestGetTradingDecisions:
 
         assert isinstance(response, AgentResponse)
         assert response.market_summary == "Quiet day"
+
+    def test_does_not_wrap_system_prompt_in_ephemeral_cache(self):
+        """Executor runs once per day; 5-minute ephemeral cache never hits.
+        The system kwarg should be passed as a plain string, not a
+        cache_control-wrapped list."""
+        captured = {}
+
+        def fake_call(client, **kwargs):
+            captured.update(kwargs)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=10, output_tokens=10)
+            return resp
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={"cash": "50000"},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="Neutral", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", side_effect=fake_call):
+            get_trading_decisions(executor_input)
+
+        assert isinstance(captured["system"], str), \
+            f"system should be a plain string (cache wrapper is dead weight for once-per-day executor); got {type(captured['system'])}: {captured['system']!r}"
+        assert captured["system"] == TRADING_SYSTEM_PROMPT, \
+            "system kwarg should be exactly TRADING_SYSTEM_PROMPT (not a truncation or substitute)"
 
     def test_parses_decisions_with_playbook_action_id(self):
         json_response = '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL","action":"buy","quantity":2.5,"reasoning":"Entry hit","confidence":"high","is_off_playbook":false,"signal_refs":[{"type":"news_signal","id":5}]}],"thesis_invalidations":[],"market_summary":"Active day","risk_assessment":"Medium"}'
