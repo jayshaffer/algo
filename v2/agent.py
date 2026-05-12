@@ -27,6 +27,7 @@ EXECUTOR_RAW_TEXT_CAP = 4096
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXECUTOR_MODEL = os.environ.get("ALGO_EXECUTOR_MODEL", "claude-haiku-4-5-20251001")
+EXECUTOR_MAX_TOKENS = int(os.environ.get("ALGO_EXECUTOR_MAX_TOKENS", "8192"))
 
 
 def _safe_int(value) -> int | None:
@@ -226,7 +227,7 @@ def get_trading_decisions(
     response = _call_with_retry(
         client,
         model=model,
-        max_tokens=4096,
+        max_tokens=EXECUTOR_MAX_TOKENS,
         system=TRADING_SYSTEM_PROMPT,
         messages=[
             {

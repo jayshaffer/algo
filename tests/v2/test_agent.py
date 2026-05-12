@@ -644,3 +644,53 @@ class TestDefaultExecutorModelEnvOverride:
         assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-haiku-4-5-20251001"
 
         # Already in the correct state, no need to clean up
+
+
+class TestExecutorMaxTokensEnvOverride:
+    """ALGO_EXECUTOR_MAX_TOKENS env var should override the default cap.
+    The default is raised to 8192 to give headroom for multi-action
+    playbooks; the audit module's check_executor_max_tokens_hit was
+    catching real truncations at 4096."""
+
+    def test_default_is_8192_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("ALGO_EXECUTOR_MAX_TOKENS", raising=False)
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+        assert agent_module.EXECUTOR_MAX_TOKENS == 8192
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "12000")
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+        assert agent_module.EXECUTOR_MAX_TOKENS == 12000
+
+    def test_max_tokens_passed_to_api_call(self, monkeypatch):
+        """The configured value must reach _call_with_retry, not a stale
+        constant captured at function-def time."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "9999")
+        import importlib
+        import v2.agent as agent_module
+        importlib.reload(agent_module)
+
+        captured = {}
+        def fake_call(client, **kwargs):
+            captured.update(kwargs)
+            resp = MagicMock()
+            resp.content = [MagicMock(text='{"decisions":[],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}')]
+            resp.stop_reason = "end_turn"
+            resp.usage = MagicMock(input_tokens=10, output_tokens=10)
+            return resp
+
+        executor_input = agent_module.ExecutorInput(
+            playbook_actions=[], positions=[], account={"cash": "50000"},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="Neutral", risk_notes="",
+        )
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", side_effect=fake_call):
+            agent_module.get_trading_decisions(executor_input)
+        assert captured["max_tokens"] == 9999
