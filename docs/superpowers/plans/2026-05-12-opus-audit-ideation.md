@@ -12,6 +12,59 @@
 
 ---
 
+## Test Conventions (IMPORTANT — read before writing any test)
+
+`tests/v2/test_audit.py` and `tests/v2/test_audit_dashboard.py` follow a strict
+mock-everything pattern. **No test in this plan should touch a real Postgres
+database.** The test code shown in each task's "Step 1: Write the failing test"
+demonstrates intent — adapt the mechanism to match these conventions:
+
+1. **Inside a check function** (e.g. `check_audit_llm_cost_trend`):
+   ```python
+   cur = MagicMock()
+   cur.fetchall.side_effect = [<query1_rows>, <query2_rows>, ...]
+   cur.fetchone.return_value = <single_row_or_None>
+   findings = check_function(cur)
+   ```
+   The check receives the mock `cur` directly — no `get_cursor` involved.
+
+2. **DB helpers in `v2/database/trading_db.py`** (e.g. `insert_audit_llm_call`):
+   ```python
+   @patch("v2.database.trading_db.get_cursor")
+   def test_insert_audit_llm_call_writes_row(self, mock_get_cursor):
+       cur = MagicMock()
+       cur.fetchone.return_value = {"id": 42}
+       mock_get_cursor.return_value.__enter__.return_value = cur
+       from v2.database.trading_db import insert_audit_llm_call
+       row_id = insert_audit_llm_call(...)
+       assert row_id == 42
+       sql = cur.execute.call_args[0][0]
+       assert "audit_llm_calls" in sql
+   ```
+
+3. **Runner integration tests** (e.g. testing `run_audit` end-to-end): patch
+   every trading_db helper the runner imports, plus `v2.audit.get_cursor`. See
+   `TestRunner.test_per_check_isolation` at `tests/v2/test_audit.py:1137-1166`
+   for the canonical pattern (7 patches stacked). Assertions go on
+   `mock_insert_audit_finding.call_args_list` to verify what *would* have been
+   written. Assertions on `mock_insert_audit_llm_call` cover LLM-call rows.
+
+4. **Class organization:** Group new tests in `class TestCheckAuditLlmCostTrend`,
+   `class TestCheckAuditGapsOpus`, `class TestCheckAppImprovementsOpus`,
+   `class TestOpusFingerprintHelpers`, etc. — one class per unit. See the
+   existing class layout (`TestCheckRuleJudgment` at line 586, `TestRunner` at
+   line 1137) for shape.
+
+5. **Jira tests** (`tests/v2/test_audit_jira.py`): mock `v2.audit_jira.requests.get`
+   and `v2.audit_jira.requests.post` with `unittest.mock.patch`. No real HTTP.
+
+When this plan's "Step 1: Write the failing test" snippet uses real DB imports
+or fixtures, treat it as a behavior spec and reshape the test to match the
+patterns above. Behavior under test stays identical; mechanism follows the
+project convention.
+
+---
+
 ## File Structure
 
 **Commit 1 — schema + LLM call accounting**
