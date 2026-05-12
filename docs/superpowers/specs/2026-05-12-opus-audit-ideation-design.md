@@ -210,13 +210,16 @@ CREATE INDEX ix_audit_llm_calls_run ON audit_llm_calls(audit_run_id);
 
 Up to three rows per audit run (one Haiku rule-judgment + two Opus). The
 existing `audit_runs.input_tokens` / `output_tokens` / `cache_*` columns are
-left in place but stop being written on new runs. The existing
-`check_cost_trend` check is rewritten to aggregate from `audit_llm_calls`,
-broken down by `purpose`, so an Opus regression cannot hide behind summed
-Haiku usage.
+left in place but stop being written on new runs.
 
-No backfill — historic per-call breakdown is unrecoverable. The cost-trend
-check tolerates the gap by ignoring runs older than the migration timestamp.
+A new check `check_audit_llm_cost_trend` is added (separate from the existing
+`check_cost_trend`, which aggregates `session_stages` and is unrelated). The
+new check compares last-7d vs prior-7d total tokens per `purpose` and emits
+an info finding when any purpose's usage doubles. This is what catches an
+Opus regression — an Opus spike cannot hide behind summed Haiku usage because
+the breakdown is per `purpose`.
+
+No backfill — historic per-call breakdown is unrecoverable.
 
 ## Configuration surface
 
@@ -286,11 +289,13 @@ Three independently shippable commits:
 
 - Add `db/init/026_audit_llm_calls.sql`.
 - New helpers in `v2/database/trading_db.py`: `insert_audit_llm_call`,
-  cost-trend query rewrite.
+  and a query that aggregates per-`purpose` 7d-vs-prior-7d token totals.
 - Wire the existing Haiku `check_rule_judgment` to write a row.
 - Stop writing `audit_runs.input_tokens` / etc. (leave the columns in place).
-- Update `check_cost_trend` to read from the new table.
-- No new behavior visible — but new visibility on per-call costs.
+- Add new check `check_audit_llm_cost_trend` to `CHECKS` (does not modify
+  the existing `check_cost_trend`, which reads `session_stages` and is
+  unrelated).
+- No new user-facing behavior — but new visibility on per-call costs.
 
 ### Commit 2 — Opus checks, no Jira
 
