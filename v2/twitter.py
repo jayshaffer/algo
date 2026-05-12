@@ -6,6 +6,7 @@ Generates and posts tweets about trading activity using Claude.
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -175,7 +176,7 @@ Rules:
 - Maximum 200 characters. 2-3 short sentences. That's it.
 - Stay in character — Mr. Krabs at all times
 - Pick ONE thing worth mentioning — the main trade or the P&L, not both
-- Use 1-2 cashtags ($AAPL, $NVDA) only for tickers you're actually talking about
+- Use at most ONE cashtag ($AAPL) — Twitter rejects posts with more than one. Refer to additional tickers by plain ticker (AAPL, no $).
 - Ground it in the actual trading data — what was bought/sold, how P&L looked
 - If it was a quiet day, fret about the doubloons not coming in fast enough
 - No lists, no rundowns, no "also" — one clean take"""
@@ -253,6 +254,26 @@ def get_twitter_client():
     )
 
 
+# Twitter rejects posts with more than one cashtag ($SYMBOL) since ~2026-05.
+# Matches $ followed by 1-5 uppercase letters at a word boundary — so $130
+# and $5,000 (dollar amounts) are not touched.
+_CASHTAG_RE = re.compile(r"\$([A-Z]{1,5})\b")
+
+
+def _reduce_cashtags_to_one(text: str) -> str:
+    """Keep the first $TICKER; strip the $ from any subsequent cashtags."""
+    seen = False
+
+    def repl(m: re.Match) -> str:
+        nonlocal seen
+        if not seen:
+            seen = True
+            return m.group(0)
+        return m.group(1)
+
+    return _CASHTAG_RE.sub(repl, text)
+
+
 def post_tweet(tweet: dict, client=None) -> dict:
     """Post a single tweet via the Twitter API."""
     if client is None:
@@ -261,14 +282,17 @@ def post_tweet(tweet: dict, client=None) -> dict:
         return {"text": tweet["text"], "type": tweet.get("type", "commentary"), "posted": False, "tweet_id": None, "error": "No Twitter credentials"}
 
     tweet_type = tweet.get("type", "commentary")
+    text_to_post = _reduce_cashtags_to_one(tweet["text"])
+    if text_to_post != tweet["text"]:
+        logger.info("Reduced cashtags before posting (Twitter allows 1)")
     try:
-        response = client.create_tweet(text=tweet["text"])
+        response = client.create_tweet(text=text_to_post)
         tweet_id = str(response.data["id"])
-        logger.info("Posted tweet %s: %s...", tweet_id, tweet["text"][:50])
-        return {"text": tweet["text"], "type": tweet_type, "posted": True, "tweet_id": tweet_id, "error": None}
+        logger.info("Posted tweet %s: %s...", tweet_id, text_to_post[:50])
+        return {"text": text_to_post, "type": tweet_type, "posted": True, "tweet_id": tweet_id, "error": None}
     except Exception as e:
         logger.error("Failed to post tweet: %s", e)
-        return {"text": tweet["text"], "type": tweet_type, "posted": False, "tweet_id": None, "error": str(e)}
+        return {"text": text_to_post, "type": tweet_type, "posted": False, "tweet_id": None, "error": str(e)}
 
 
 # ---------------------------------------------------------------------------

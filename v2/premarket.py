@@ -82,7 +82,7 @@ Rules:
 - Reference 1–2 names from your current theses or pre-market movers.
 - One observation about what you're watching today.
 - No P&L claims, no historical performance flexes — ye haven't earned today's doubloons yet.
-- $CASHTAG only for tickers you mention."""
+- At most ONE $CASHTAG (Twitter rejects posts with more than one). Refer to additional tickers by plain ticker (AAPL, no $)."""
 
 
 def generate_premarket_post(

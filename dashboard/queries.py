@@ -898,7 +898,7 @@ def get_ticker_attribution(sym: str, days: int = 90):
               AND d.date > CURRENT_DATE - INTERVAL '%s days'
               AND ds.signal_type IN ('news_signal', 'macro_signal')
               AND ds.signal_id IS NOT NULL
-            GROUP BY category, ds.signal_type
+            GROUP BY 1, ds.signal_type
             ORDER BY sample_size DESC
         """, (sym, days))
         return cur.fetchall()
