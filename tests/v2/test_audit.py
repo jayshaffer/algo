@@ -1247,6 +1247,53 @@ class TestRunner:
         assert summary.auto_fixed == 3
         assert len(n_fixes) == 3
 
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_rule_judgment_records_llm_call_row(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        # Fake rule_judgment check that stashes usage like the real one
+        from v2 import audit as audit_mod
+        def fake_rule_judgment(c):
+            audit_mod._LAST_RULE_JUDGMENT_USAGE.clear()
+            audit_mod._LAST_RULE_JUDGMENT_USAGE.update({
+                "input_tokens": 1234,
+                "output_tokens": 56,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "latency_ms": 2000,
+            })
+            return []
+        fake_rule_judgment.__name__ = "check_rule_judgment"
+
+        with patch("v2.audit.CHECKS", [fake_rule_judgment]):
+            run_audit(apply=False)
+
+        assert mock_insert_llm.called
+        kwargs = mock_insert_llm.call_args.kwargs
+        assert kwargs["purpose"] == "rule_judgment"
+        assert kwargs["model"] == audit_mod.RULE_JUDGMENT_MODEL
+        assert kwargs["input_tokens"] == 1234
+        assert kwargs["output_tokens"] == 56
+        assert kwargs["latency_ms"] == 2000
+
+        # finalize_audit_run should NOT receive deprecated token kwargs anymore
+        finalize_kwargs = mock_finalize.call_args.kwargs
+        for k in ("input_tokens", "output_tokens", "cache_creation_tokens",
+                 "cache_read_tokens", "model"):
+            assert k not in finalize_kwargs, f"{k} should no longer be passed"
+
 
 # --- CLI tests (Task 16) ---
 

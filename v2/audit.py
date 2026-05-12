@@ -598,17 +598,23 @@ def _build_rule_judgment_prompt(rules, attribution, citation_counts, summary) ->
 
 
 def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
-    """Returns (parsed_json, usage_dict). Separate function for easy stubbing."""
+    """Returns (parsed_json, usage_dict). Separate function for easy stubbing.
+
+    usage_dict includes 'latency_ms' alongside the four token fields.
+    """
+    import time
     from anthropic import Anthropic
     import os
 
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    t0 = time.monotonic()
     response = client.messages.create(
         model=RULE_JUDGMENT_MODEL,
         max_tokens=RULE_JUDGMENT_MAX_TOKENS,
         system=RULE_JUDGE_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
+    latency_ms = int((time.monotonic() - t0) * 1000)
     text = "".join(b.text for b in response.content if hasattr(b, "text"))
     parsed = _extract_json(text)
     usage = {
@@ -616,6 +622,7 @@ def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
         "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
         "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
         "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "latency_ms": latency_ms,
     }
     return parsed, usage
 
@@ -1436,6 +1443,7 @@ from v2.database.connection import get_cursor
 from v2.database.trading_db import (
     insert_audit_run,
     insert_audit_finding,
+    insert_audit_llm_call,
     finalize_audit_run,
     supersede_stale_open_findings,
     try_advisory_audit_lock,
@@ -1529,6 +1537,17 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
 
                 if check.__name__ == "check_rule_judgment":
                     rule_judgment_usage = get_last_rule_judgment_usage()
+                    if rule_judgment_usage:
+                        insert_audit_llm_call(
+                            audit_run_id=run_id,
+                            purpose="rule_judgment",
+                            model=RULE_JUDGMENT_MODEL,
+                            input_tokens=rule_judgment_usage.get("input_tokens", 0),
+                            output_tokens=rule_judgment_usage.get("output_tokens", 0),
+                            cache_creation_tokens=rule_judgment_usage.get("cache_creation_tokens", 0),
+                            cache_read_tokens=rule_judgment_usage.get("cache_read_tokens", 0),
+                            latency_ms=rule_judgment_usage.get("latency_ms"),
+                        )
 
                 for f in findings:
                     current_fingerprints.add(f.fingerprint)
@@ -1578,11 +1597,9 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
             total_findings=emitted,
             auto_fixed=auto_fixed,
             failed_checks=failed_checks,
-            model=RULE_JUDGMENT_MODEL if rule_judgment_usage else None,
-            input_tokens=rule_judgment_usage.get("input_tokens"),
-            output_tokens=rule_judgment_usage.get("output_tokens"),
-            cache_creation_tokens=rule_judgment_usage.get("cache_creation_tokens"),
-            cache_read_tokens=rule_judgment_usage.get("cache_read_tokens"),
+            # LLM accounting moved to audit_llm_calls table; legacy
+            # token columns on audit_runs are no longer populated.
+            # See spec 2026-05-12-opus-audit-ideation-design.md.
         )
 
         summary.findings_emitted = emitted
