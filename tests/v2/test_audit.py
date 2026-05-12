@@ -1565,3 +1565,99 @@ class TestCheckAuditGapsOpus:
         findings = audit.check_audit_gaps_opus(cur)
         assert len(findings) == 1
         assert findings[0].evidence["topic_slug"] == "ok"
+
+
+class TestCheckAppImprovementsOpus:
+    def _stub_cursor(self):
+        """Cursor whose fetchall returns the six queries _build_app_improvements_prompt makes."""
+        cur = MagicMock()
+        memos = [{"id": 1, "created_at": "2026-05-01", "body": "Memo body excerpt..."}]
+        rules = [{"id": 27, "status": "active", "rule_text": "Cap deployment...",
+                  "retired_at": None}]
+        attribution = [{"category": "thesis", "sample_size": 30, "sample_size_30d": 23,
+                        "avg_outcome_7d": -0.4, "win_rate_7d": 0.47,
+                        "avg_outcome_30d": -0.5, "win_rate_30d": 0.45}]
+        decisions = [{"id": 5, "date": "2026-05-10", "ticker": "AAPL", "action": "buy",
+                      "notional": 1000, "outcome_7d_pct": 1.2, "outcome_30d_pct": 3.4}]
+        theses = [{"id": 1, "ticker": "AAPL", "status": "active", "summary": "Bullish...",
+                   "outcome_pct": None, "closed_at": None}]
+        snapshots = [{"snapshot_date": "2026-05-10", "equity": 50000.0}]
+        cur.fetchall.side_effect = [memos, rules, attribution, decisions, theses, snapshots]
+        return cur
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_emits_app_improvement_finding(self, mock_call):
+        from v2 import audit
+        canned = {
+            "findings": [{
+                "topic_slug": "add-regime-detector",
+                "title": "Add a regime-detector signal",
+                "category": "app_improvement",
+                "priority": "high",
+                "body": "Detect bull/bear regimes from SPY trend...",
+                "evidence_quote": "Recent decisions ignore market regime.",
+            }]
+        }
+        usage = {"input_tokens": 200, "output_tokens": 80,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1500}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+
+        findings = audit.check_app_improvements_opus(cur)
+
+        assert len(findings) == 1
+        assert findings[0].check_code == "APP_IMPROVEMENT"
+        assert findings[0].evidence["topic_slug"] == "add-regime-detector"
+        assert audit.get_last_opus_ideation_usage("app_improvements")["input_tokens"] == 200
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_truncates_when_over_cap(self, mock_call, monkeypatch):
+        """If prompt is huge, the builder truncates and appends a TRUNCATED marker."""
+        from v2 import audit
+        # Set the cap to something very small so even the stub triggers truncation
+        monkeypatch.setenv("ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS", "10")
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": []}, usage)
+        cur = self._stub_cursor()
+        audit.check_app_improvements_opus(cur)
+        # Verify the call_opus_ideation was passed a truncated prompt
+        sent_prompt = mock_call.call_args[0][1]  # second positional arg
+        assert "[INPUT TRUNCATED]" in sent_prompt
+        # Approx: cap=10 tokens → 40 chars limit + marker
+        assert len(sent_prompt) < 200
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_caps_at_10_findings(self, mock_call):
+        from v2 import audit
+        many = [
+            {"topic_slug": f"slug-{i}", "title": f"T{i}",
+             "category": "app_improvement", "priority": "low", "body": "..."}
+            for i in range(15)
+        ]
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": many}, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_app_improvements_opus(cur)
+        assert len(findings) == 10
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_invalid_items_dropped(self, mock_call):
+        from v2 import audit
+        canned = {"findings": [
+            {"title": "missing slug"},
+            {"topic_slug": "ok", "title": "T", "category": "app_improvement",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_app_improvements_opus(cur)
+        assert len(findings) == 1
+        assert findings[0].evidence["topic_slug"] == "ok"

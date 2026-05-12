@@ -1722,6 +1722,176 @@ def check_audit_gaps_opus(cur) -> list[Finding]:
     return findings
 
 
+OPUS_APP_IMPROVEMENTS_SYSTEM = """\
+You are an architect reviewing an agentic trading system. Given recent
+session reflections, active and retired rules, signal attribution, recent
+decisions and their outcomes, active/closed theses, equity trend, and a
+high-level module manifest, propose application-level improvements:
+new features, modeling changes, data sources, risk improvements, or UX
+changes that would plausibly improve outcomes. Be conservative.
+
+Output JSON only:
+{
+  "findings": [
+    {"topic_slug": "kebab-case-stable-id",
+     "title": "short imperative phrasing",
+     "category": "app_improvement",
+     "priority": "high"|"medium"|"low",
+     "body": "1-3 short paragraphs",
+     "evidence_quote": "specific motivating data point"}
+  ]
+}
+
+The topic_slug must be a stable identifier for the underlying idea so the
+same proposal on a future day yields the same slug. Max 10 findings.
+Empty findings array is fine if you cannot find anything defensible.
+"""
+
+
+def _build_app_improvements_prompt(cur) -> str:
+    """Assemble user prompt. Issues six queries in order, then a manifest read.
+
+    Truncates the assembled prompt to ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS
+    (default 60_000, char-approx by ×4) and appends [INPUT TRUNCATED] when
+    capped.
+    """
+    cur.execute("""
+        SELECT id, created_at, body
+        FROM strategy_memos
+        ORDER BY created_at DESC
+        LIMIT 14
+    """)
+    memos = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, status, rule_text, retired_at
+        FROM strategy_rules
+        WHERE status='active'
+           OR (status='retired' AND retired_at > now() - interval '30 days')
+        ORDER BY status, id
+    """)
+    rules = cur.fetchall()
+
+    cur.execute("""
+        SELECT category, sample_size, sample_size_30d,
+               avg_outcome_7d, win_rate_7d, avg_outcome_30d, win_rate_30d
+        FROM signal_attribution
+    """)
+    attribution = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, date, ticker, action, notional,
+               outcome_7d_pct, outcome_30d_pct
+        FROM decisions
+        WHERE date > now()::date - 14
+        ORDER BY date DESC, id DESC
+        LIMIT 200
+    """)
+    decisions = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, ticker, status, summary, outcome_pct, closed_at
+        FROM theses
+        WHERE status='active'
+           OR (status IN ('closed','retired')
+               AND closed_at > now() - interval '30 days')
+        ORDER BY status, id DESC
+    """)
+    theses = cur.fetchall()
+
+    cur.execute("""
+        SELECT snapshot_date, equity
+        FROM account_snapshots
+        WHERE snapshot_date > now()::date - 30
+        ORDER BY snapshot_date DESC
+    """)
+    snapshots = cur.fetchall()
+
+    import os, pathlib
+    module_manifest: list[tuple[str, str]] = []
+    v2_dir = pathlib.Path(__file__).resolve().parent
+    for path in sorted(v2_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            first_lines = path.read_text(encoding="utf-8").splitlines()[:6]
+        except OSError:
+            continue
+        doc = ""
+        for ln in first_lines:
+            s = ln.strip().strip('"').strip("'")
+            if s and not s.startswith("#") and not s.startswith("from") and not s.startswith("import"):
+                doc = s
+                break
+        module_manifest.append((path.name, doc[:160]))
+
+    parts = ["## Recent strategy memos (last 14)\n"]
+    for m in memos:
+        body_excerpt = (m["body"] or "")[:600]
+        parts.append(f"### memo {m['id']} @ {m['created_at']}\n{body_excerpt}\n")
+    parts.append("\n## Rules (active + retired-30d)\n")
+    for r in rules:
+        parts.append(f"- rule {r['id']} [{r['status']}]: {r['rule_text']}")
+    parts.append("\n## signal_attribution snapshot\n")
+    for a in attribution:
+        parts.append(
+            f"- {a['category']}: n={a['sample_size']} n30={a['sample_size_30d']} "
+            f"out7={a['avg_outcome_7d']} win7={a['win_rate_7d']} "
+            f"out30={a['avg_outcome_30d']} win30={a['win_rate_30d']}"
+        )
+    parts.append("\n## Recent decisions (last 14d, up to 200)\n")
+    for d in decisions:
+        parts.append(
+            f"- {d['date']} {d['ticker']} {d['action']} notional={d['notional']} "
+            f"out7={d['outcome_7d_pct']} out30={d['outcome_30d_pct']}"
+        )
+    parts.append("\n## Theses (active + recently-closed)\n")
+    for t in theses:
+        parts.append(f"- thesis {t['id']} {t['ticker']} [{t['status']}] out={t['outcome_pct']}: {t['summary']}")
+    parts.append("\n## Account snapshots (last 30d)\n")
+    for s in snapshots:
+        parts.append(f"- {s['snapshot_date']}: equity={s['equity']}")
+    parts.append("\n## v2 module manifest\n")
+    for name, doc in module_manifest:
+        parts.append(f"- {name}: {doc}")
+
+    raw = "\n".join(parts)
+    cap_str = os.environ.get("ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS")
+    try:
+        cap = int(cap_str) if cap_str else OPUS_INPUT_TOKEN_CAP_DEFAULT
+    except ValueError:
+        cap = OPUS_INPUT_TOKEN_CAP_DEFAULT
+    # Rough char-to-token approximation: 4 chars/token.
+    max_chars = cap * 4
+    if len(raw) > max_chars:
+        log.warning("Opus app-improvements prompt truncated: %d > %d chars",
+                    len(raw), max_chars)
+        raw = raw[:max_chars] + "\n\n[INPUT TRUNCATED]"
+    return raw
+
+
+def check_app_improvements_opus(cur) -> list[Finding]:
+    """Single Opus call proposing application-level improvements."""
+    prompt = _build_app_improvements_prompt(cur)
+    parsed, usage = _call_opus_ideation(OPUS_APP_IMPROVEMENTS_SYSTEM, prompt)
+    _LAST_OPUS_IDEATION_USAGE["app_improvements"] = usage
+
+    findings: list[Finding] = []
+    seen_slugs: set[str] = set()
+    for item in (parsed.get("findings") or [])[:20]:
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        if f is None:
+            continue
+        slug = f.evidence["topic_slug"]
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        findings.append(f)
+        if len(findings) >= 10:
+            break
+    return findings
+
+
 # --- Runner ---------------------------------------------------------------
 
 from v2.database.connection import get_cursor
