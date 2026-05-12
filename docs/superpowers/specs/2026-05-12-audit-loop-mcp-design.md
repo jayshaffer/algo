@@ -87,7 +87,7 @@ future option if local /loop becomes operationally annoying.
 - `tests/v2/test_audit_dashboard.py`
 - Dashboard audit pages (`/audit/`, finding detail pages) and their
   templates. Specific file list deferred to the implementation plan.
-- DB migration: drop `audit_findings`, drop `audit_llm_calls`.
+- DB migration: drop `audit_findings`, `audit_llm_calls`, and `audit_runs` (the parent table; `audit_llm_calls` FK-references it). Also drop `db/init/025_audit_findings.sql` so fresh DBs don't recreate them.
 - Env vars in `.env` / `.env.paper` and docs (`CLAUDE.md`):
   `ALGO_AUDIT_FILE_JIRA`, `ALGO_AUDIT_JIRA_MAX_CREATES`,
   `ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS`, `JIRA_EMAIL`, `JIRA_API_TOKEN`,
