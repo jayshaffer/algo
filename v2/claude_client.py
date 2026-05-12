@@ -336,6 +336,7 @@ def run_agentic_loop(
     max_turns: int = 20,
     session_id: int | None = None,
     stage_name: str | None = None,
+    purpose: str = AgentPurpose.STRATEGIST_LOOP,
 ) -> AgenticLoopResult:
     """Run an agentic loop where Claude uses tools until it completes its task."""
     messages = [{"role": "user", "content": initial_message}]
@@ -372,6 +373,9 @@ def run_agentic_loop(
                 system=cached_system,
                 tools=cached_tools,
                 messages=_messages_with_cache_breakpoint(pruned),
+                session_id=session_id,
+                stage_name=stage_name,
+                purpose=purpose,
             )
         except anthropic.BadRequestError as e:
             # Graceful degradation for context-length-exceeded: the

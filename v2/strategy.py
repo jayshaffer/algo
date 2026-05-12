@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from functools import partial
 
 from .attribution import get_attribution_summary
-from .claude_client import get_claude_client, run_agentic_loop
+from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
     get_current_strategy_state,
     get_recent_decisions,
@@ -603,6 +603,7 @@ def run_strategy_reflection(
         max_turns=max_turns,
         session_id=session_id,
         stage_name="reflection",
+        purpose=AgentPurpose.REFLECTION_LOOP,
     )
 
     proposed, retired, identity_updated, memo_written = _count_actions(result.messages)
