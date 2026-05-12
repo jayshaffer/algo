@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re as _re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -47,6 +48,77 @@ class Finding:
             separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_SLUG_RE = _re.compile(r"[^a-z0-9]+")
+_VALID_OPUS_CATEGORIES = {"audit_gap", "app_improvement"}
+_VALID_OPUS_PRIORITIES = {"high", "medium", "low"}
+
+
+def _normalize_slug(s: str) -> str:
+    """Kebab-case normalization: lowercase, alphanumerics + single hyphens."""
+    return _SLUG_RE.sub("-", s.lower()).strip("-")
+
+
+def _opus_topic_fingerprint(check_code: str, topic_slug: str) -> str:
+    """Coarse fingerprint: hash(check_code + ":" + normalized_slug) only.
+
+    Deliberately ignores evidence prose so daily re-emissions of the same
+    underlying topic collapse to one open finding. See spec
+    2026-05-12-opus-audit-ideation-design.md.
+    """
+    canonical = f"{check_code}:{_normalize_slug(topic_slug)}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _opus_finding_from_json(item: dict, *, default_category: str) -> "Finding | None":
+    """Map one Opus finding dict to a Finding. Returns None on validation failure.
+
+    Stashes the coarse topic-based fingerprint in evidence['_fp_override'];
+    the audit runner pops it and uses it as the insert fingerprint instead
+    of the default Finding.fingerprint property.
+    """
+    slug_raw = item.get("topic_slug") or ""
+    title = item.get("title") or ""
+    body = item.get("body") or ""
+    if not slug_raw or not title:
+        return None
+    slug = _normalize_slug(slug_raw)
+    if not slug:
+        return None
+
+    category = item.get("category")
+    if category not in _VALID_OPUS_CATEGORIES:
+        category = default_category
+    priority = item.get("priority")
+    if priority not in _VALID_OPUS_PRIORITIES:
+        priority = "medium"
+
+    check_code = "AUDIT_GAP" if category == "audit_gap" else "APP_IMPROVEMENT"
+
+    evidence: dict = {
+        "topic_slug": slug,
+        "category": category,
+        "priority": priority,
+        "evidence_quote": (item.get("evidence_quote") or "")[:600],
+    }
+    if category == "audit_gap" and item.get("proposed_check_code"):
+        evidence["proposed_check_code"] = str(item["proposed_check_code"])[:64]
+
+    f = Finding(
+        check_code=check_code,
+        tier=3,
+        severity="info",
+        title=title[:200],
+        body=body[:2000],
+        affected_count=1,
+        evidence=evidence,
+        auto_fix=None,
+    )
+    # Coarse fingerprint override — runner reads this instead of f.fingerprint.
+    # See spec; ignoring evidence prose is deliberate.
+    f.evidence["_fp_override"] = _opus_topic_fingerprint(check_code, slug)
+    return f
 
 
 @dataclass

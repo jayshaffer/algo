@@ -1371,3 +1371,86 @@ class TestOpusIdeationConstants:
     def test_call_opus_ideation_is_callable(self):
         from v2 import audit
         assert callable(audit._call_opus_ideation)
+
+
+class TestOpusFindingHelpers:
+    def test_topic_slug_normalization_is_stable(self):
+        from v2.audit import _opus_topic_fingerprint
+        fp_a = _opus_topic_fingerprint("AUDIT_GAP", "Add Regime Detector")
+        fp_b = _opus_topic_fingerprint("AUDIT_GAP", "add-regime-detector")
+        fp_c = _opus_topic_fingerprint("AUDIT_GAP", "  Add Regime Detector!! ")
+        assert fp_a == fp_b == fp_c
+
+    def test_topic_slug_distinguishes_check_codes(self):
+        from v2.audit import _opus_topic_fingerprint
+        assert _opus_topic_fingerprint("AUDIT_GAP", "x") != _opus_topic_fingerprint("APP_IMPROVEMENT", "x")
+
+    def test_finding_from_json_valid(self):
+        from v2.audit import _opus_finding_from_json
+        item = {
+            "topic_slug": "Add Regime Detector",
+            "title": "Add a regime-detector module",
+            "category": "app_improvement",
+            "priority": "high",
+            "body": "Detect bull/bear regimes from SPY trend...",
+            "evidence_quote": "Recent decisions ignore SPY context.",
+        }
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        assert f is not None
+        assert f.check_code == "APP_IMPROVEMENT"
+        assert f.tier == 3 and f.severity == "info"
+        assert f.evidence["topic_slug"] == "add-regime-detector"
+        assert f.evidence["priority"] == "high"
+        assert f.evidence["category"] == "app_improvement"
+        # Fingerprint override is stashed for runner pickup
+        assert "_fp_override" in f.evidence
+
+    def test_finding_from_json_audit_gap_includes_proposed_code(self):
+        from v2.audit import _opus_finding_from_json
+        item = {
+            "topic_slug": "missing-foo",
+            "title": "Missing foo check",
+            "category": "audit_gap",
+            "priority": "medium",
+            "body": "...",
+            "proposed_check_code": "FOO_MISSING",
+        }
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        assert f.check_code == "AUDIT_GAP"
+        assert f.evidence["proposed_check_code"] == "FOO_MISSING"
+
+    def test_finding_from_json_missing_required_returns_none(self):
+        from v2.audit import _opus_finding_from_json
+        assert _opus_finding_from_json({}, default_category="app_improvement") is None
+        # missing title
+        assert _opus_finding_from_json({"topic_slug": "x"}, default_category="app_improvement") is None
+        # missing topic_slug
+        assert _opus_finding_from_json({"title": "x"}, default_category="app_improvement") is None
+        # slug normalizes to empty string
+        assert _opus_finding_from_json({"topic_slug": "!!!", "title": "x"},
+                                       default_category="app_improvement") is None
+
+    def test_finding_from_json_invalid_category_falls_back(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T", "category": "garbage",
+                "body": "b", "priority": "medium"}
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        assert f.evidence["category"] == "audit_gap"
+
+    def test_finding_from_json_invalid_priority_defaults_to_medium(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T", "category": "app_improvement",
+                "body": "b", "priority": "garbage"}
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        assert f.evidence["priority"] == "medium"
+
+    def test_finding_from_json_caps_long_fields(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T" * 500, "category": "app_improvement",
+                "body": "B" * 5000, "priority": "high",
+                "evidence_quote": "Q" * 5000}
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        # Caps from spec: title 200, body 2000, evidence_quote 600
+        assert len(f.title) <= 200
+        assert len(f.body) <= 2000
+        assert len(f.evidence["evidence_quote"]) <= 600
