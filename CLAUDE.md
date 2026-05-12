@@ -189,3 +189,8 @@ Required in `.env`:
 - `ALPACA_PAPER` — `true` or `false`, must agree with `ALPACA_BASE_URL`. Cross-checked at module load — mismatched values raise immediately to prevent silent paper/prod misrouting.
 - `ANTHROPIC_API_KEY` — Anthropic API key for Claude
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — Database credentials
+
+Optional knobs (read at module import — container restart required after changing):
+- `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
+- `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Audit's `check_executor_max_tokens_hit` flags truncations; raise this knob if it fires.
+- `ALGO_ENABLE_TRADE_POSTS`, `ALGO_TRADE_POST_DRY_RUN` — covered in the live-trade pipeline section above.
