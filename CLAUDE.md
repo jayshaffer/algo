@@ -192,12 +192,7 @@ Required in `.env`:
 
 Optional knobs (read at module import — container restart required after changing):
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
-- `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Audit's `check_executor_max_tokens_hit` flags truncations; raise this knob if it fires.
+- `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
 - `ALGO_ENABLE_TRADE_POSTS`, `ALGO_TRADE_POST_DRY_RUN` — covered in the live-trade pipeline section above.
-- `ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS` — caps the input-prompt size for each Opus ideation audit check (`check_audit_gaps_opus`, `check_app_improvements_opus`). Defaults to `60000` (~$0.90 input/call worst-case at Opus 4.7 pricing before cache discounts). When exceeded, the prompt builder truncates the lowest-priority sections and appends an `[INPUT TRUNCATED]` marker; a warning is logged.
 
-**Audit Jira filing** (gated; off by default — the audit writes findings to `audit_findings` either way):
-- `ALGO_AUDIT_FILE_JIRA=1` — file Jira tickets for new Opus ideation findings on every audit run. Equivalent to passing `--file-jira` on the CLI. When off, Opus findings record `evidence.jira = {"status": "disabled"}`.
-- `ALGO_AUDIT_JIRA_MAX_CREATES` — per-run cap on new tickets created (default `5`). Dedup hits against existing open Jira issues (matched by `audit-fingerprint:<hash>` label) do NOT count against the cap; only successful POSTs do. Findings past the cap record `evidence.jira = {"status": "capped"}`.
-- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_AUDIT_PROJECT_KEY` — Atlassian credentials and project key (e.g. `https://workspace.atlassian.net`, `ALGO`). If any is missing, Jira filing is silently disabled and findings record `evidence.jira = {"status": "disabled"}`. `JIRA_BASE_URL` is also used by the dashboard to build clickable issue links.
-- `JIRA_AUDIT_ISSUE_TYPE` — issue type for filed tickets (default `Task`).
+**Audit:** the audit runs as a Claude Code `/loop 24h` session driven by `docs/audit-playbook.md`. It files Jira tickets via the Atlassian MCP (no `JIRA_*` env vars required). See spec `docs/superpowers/specs/2026-05-12-audit-loop-mcp-design.md`.
