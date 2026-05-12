@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
@@ -25,7 +26,7 @@ EXECUTOR_RAW_TEXT_CAP = 4096
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_EXECUTOR_MODEL = os.environ.get("ALGO_EXECUTOR_MODEL", "claude-haiku-4-5-20251001")
 
 
 def _safe_int(value) -> int | None:

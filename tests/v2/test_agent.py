@@ -615,3 +615,32 @@ class TestExecutorTelemetryWiring:
         assert captured.get("session_id") == 42
         assert captured.get("stage_name") == "trading"
         assert captured.get("purpose") == "executor"
+
+
+class TestDefaultExecutorModelEnvOverride:
+    """ALGO_EXECUTOR_MODEL env var should override the hardcoded default
+    so paper/prod can flip via .env without code changes."""
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        import importlib
+        import v2.agent as agent_module
+
+        monkeypatch.setenv("ALGO_EXECUTOR_MODEL", "claude-sonnet-4-6")
+        # Force re-evaluation of the module-level default
+        importlib.reload(agent_module)
+        assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-sonnet-4-6"
+
+        # Clean up: reload with env unset to restore original state
+        monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
+        importlib.reload(agent_module)
+
+    def test_falls_back_to_haiku_when_env_unset(self, monkeypatch):
+        import importlib
+        import v2.agent as agent_module
+
+        monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
+        # Force re-evaluation of the module-level default
+        importlib.reload(agent_module)
+        assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-haiku-4-5-20251001"
+
+        # Already in the correct state, no need to clean up
