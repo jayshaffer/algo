@@ -616,49 +616,6 @@ def get_session_events(session_id: int, limit: int = 200):
     return get_recent_agent_events(limit=limit, session_id=session_id)
 
 
-# --- Audit queries ---
-
-def get_open_audit_findings():
-    with get_cursor() as cur:
-        cur.execute("""
-            SELECT id, audit_run_id, check_code, tier, severity, title,
-                   affected_count, created_at, evidence
-            FROM audit_findings WHERE status='open'
-            ORDER BY
-              CASE severity WHEN 'critical' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
-              tier, created_at DESC
-        """)
-        return cur.fetchall()
-
-
-def get_audit_finding(finding_id: int):
-    with get_cursor() as cur:
-        cur.execute("SELECT * FROM audit_findings WHERE id=%s", (finding_id,))
-        return cur.fetchone()
-
-
-def get_recent_audit_runs(limit: int = 14):
-    with get_cursor() as cur:
-        cur.execute("""
-            SELECT id, started_at, completed_at, mode, total_findings,
-                   auto_fixed, failed_checks, model,
-                   input_tokens, output_tokens,
-                   cache_creation_tokens, cache_read_tokens
-            FROM audit_runs ORDER BY started_at DESC LIMIT %s
-        """, (limit,))
-        return cur.fetchall()
-
-
-def update_audit_finding_status(finding_id: int, status: str, note: str | None):
-    if status not in ("acknowledged", "resolved"):
-        raise ValueError(f"manual status must be acknowledged or resolved, got {status!r}")
-    with get_cursor() as cur:
-        cur.execute(
-            "UPDATE audit_findings SET status=%s, resolved_at=now(), resolved_note=%s WHERE id=%s",
-            (status, note, finding_id),
-        )
-
-
 def lookup_session_id_by_date(d, session_type: str = 'daily'):
     """Return the most recent sessions.id for a given date + type, or None.
 
