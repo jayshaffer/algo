@@ -1964,13 +1964,24 @@ def _emit_check_failure(*, run_id: int, check_name: str, exc: Exception):
     )
 
 
-def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> AuditRunSummary:
+def run_audit(
+    apply: bool = False,
+    max_auto_fix: int = MAX_AUTO_FIX_DEFAULT,
+    file_jira: bool = False,
+) -> AuditRunSummary:
     if not try_advisory_audit_lock():
         log.warning("Audit already running (advisory lock contention); exiting cleanly")
         return AuditRunSummary(run_id=None)
 
     summary = AuditRunSummary(run_id=None)
     rule_judgment_usage: dict = {}
+    import os as _os
+    file_jira_enabled = file_jira or _os.environ.get("ALGO_AUDIT_FILE_JIRA") == "1"
+    try:
+        jira_create_cap = int(_os.environ.get("ALGO_AUDIT_JIRA_MAX_CREATES", "5"))
+    except ValueError:
+        jira_create_cap = 5
+    jira_created_this_run = 0
     try:
         _reset_opus_ideation_usage()
         run_id = insert_audit_run(mode="apply" if apply else "check")
@@ -2033,6 +2044,22 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
                         fp_override = f.evidence.pop("_fp_override")
                     fingerprint = fp_override if fp_override else f.fingerprint
                     current_fingerprints.add(fingerprint)
+
+                    # Jira filing for Opus ideation findings only
+                    is_opus_finding = f.check_code in ("AUDIT_GAP", "APP_IMPROVEMENT")
+                    if is_opus_finding:
+                        if not file_jira_enabled:
+                            f.evidence["jira"] = {"status": "disabled"}
+                        elif jira_created_this_run >= jira_create_cap:
+                            f.evidence["jira"] = {"status": "capped"}
+                        else:
+                            from v2 import audit_jira
+                            jira_result = audit_jira.file_jira_ticket(
+                                f, fingerprint=fingerprint, run_id=run_id,
+                            )
+                            f.evidence["jira"] = jira_result
+                            if jira_result.get("status") == "created":
+                                jira_created_this_run += 1
 
                     inserted_id = insert_audit_finding(
                         audit_run_id=run_id,
@@ -2105,13 +2132,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="Apply Tier-1 auto-fixes (default: propose-only)")
     parser.add_argument("--max-auto-fix", type=int, default=MAX_AUTO_FIX_DEFAULT,
                         help=f"Cap on auto-fixes per run (default {MAX_AUTO_FIX_DEFAULT})")
+    parser.add_argument("--file-jira", action="store_true",
+                        help="File Jira tickets for new Opus ideation findings "
+                             "(also enabled by ALGO_AUDIT_FILE_JIRA=1)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     try:
-        summary = run_audit(apply=args.apply, max_auto_fix=args.max_auto_fix)
+        summary = run_audit(apply=args.apply, max_auto_fix=args.max_auto_fix,
+                            file_jira=args.file_jira)
     except Exception:
         log.exception("Audit run failed unrecoverably")
         return 2

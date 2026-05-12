@@ -1431,6 +1431,152 @@ class TestRunner:
 
 # --- CLI tests (Task 16) ---
 
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_off_by_default_records_disabled(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [Finding(
+                "AUDIT_GAP", 3, "info", "t", "b", 1,
+                {"topic_slug": "slug-1", "category": "audit_gap", "priority": "low",
+                 "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", "slug-1")},
+                None,
+            )]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False)  # file_jira defaults False
+
+        gap_call = next(c for c in mock_finding.call_args_list
+                        if c.kwargs["check_code"] == "AUDIT_GAP")
+        assert gap_call.kwargs["evidence"]["jira"] == {"status": "disabled"}
+
+    @patch("v2.audit_jira.file_jira_ticket")
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_caps_creates_at_max(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm, mock_file,
+        monkeypatch,
+    ):
+        """When --file-jira and 3 findings + cap=2, file 2, last gets 'capped'."""
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        monkeypatch.setenv("ALGO_AUDIT_JIRA_MAX_CREATES", "2")
+
+        create_count = [0]
+        def fake_file(finding, *, fingerprint, run_id):
+            create_count[0] += 1
+            return {"status": "created", "issue_key": f"ALGO-{create_count[0]}"}
+        mock_file.side_effect = fake_file
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [
+                Finding("AUDIT_GAP", 3, "info", f"T{i}", "b", 1,
+                        {"topic_slug": f"slug-{i}", "category": "audit_gap",
+                         "priority": "low",
+                         "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", f"slug-{i}")},
+                        None)
+                for i in range(3)
+            ]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False, file_jira=True)
+
+        # Only 2 file_jira_ticket calls were issued
+        assert mock_file.call_count == 2
+
+        # 3 findings inserted; last has status=capped, first two have status=created
+        gap_calls = [c for c in mock_finding.call_args_list
+                     if c.kwargs["check_code"] == "AUDIT_GAP"]
+        assert len(gap_calls) == 3
+        statuses = [c.kwargs["evidence"]["jira"]["status"] for c in gap_calls]
+        assert sorted(statuses) == ["capped", "created", "created"]
+
+    @patch("v2.audit_jira.file_jira_ticket",
+           return_value={"status": "existing", "issue_key": "ALGO-9"})
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_dedup_hits_do_not_count_against_cap(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm, mock_file,
+        monkeypatch,
+    ):
+        """Existing-issue dedup hits don't consume the cap budget."""
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+        monkeypatch.setenv("ALGO_AUDIT_JIRA_MAX_CREATES", "1")
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [
+                Finding("AUDIT_GAP", 3, "info", f"T{i}", "b", 1,
+                        {"topic_slug": f"slug-{i}", "category": "audit_gap",
+                         "priority": "low",
+                         "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", f"slug-{i}")},
+                        None)
+                for i in range(3)
+            ]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False, file_jira=True)
+
+        # All 3 findings consulted file_jira_ticket (no cap hit)
+        assert mock_file.call_count == 3
+        gap_calls = [c for c in mock_finding.call_args_list
+                     if c.kwargs["check_code"] == "AUDIT_GAP"]
+        statuses = [c.kwargs["evidence"]["jira"]["status"] for c in gap_calls]
+        assert statuses == ["existing"] * 3
+
+
 class TestCli:
     @patch("v2.audit.run_audit")
     def test_default_is_check_mode(self, mock_run):
@@ -1454,6 +1600,20 @@ class TestCli:
         mock_run.return_value = MagicMock(has_critical_open=True)
         rc = main(argv=[])
         assert rc == 1
+
+    @patch("v2.audit.run_audit")
+    def test_cli_file_jira_flag_passed_through(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        main(argv=["--file-jira"])
+        assert mock_run.call_args.kwargs["file_jira"] is True
+
+    @patch("v2.audit.run_audit")
+    def test_cli_file_jira_default_false(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        main(argv=[])
+        assert mock_run.call_args.kwargs.get("file_jira", False) is False
 
 
 class TestOpusIdeationConstants:
