@@ -65,3 +65,86 @@ def find_existing_issue(fingerprint: str) -> str | None:
     resp.raise_for_status()
     issues = resp.json().get("issues") or []
     return issues[0]["key"] if issues else None
+
+
+import json
+
+PRIORITY_MAP = {"high": "High", "medium": "Medium", "low": "Low"}
+
+
+def _build_description(finding, run_id: int, fingerprint: str) -> str:
+    evidence = finding.evidence or {}
+    slug = evidence.get("topic_slug", "")
+    quote = evidence.get("evidence_quote", "")
+    lines = [finding.body or ""]
+    if quote:
+        lines.append("")
+        lines.append("**Evidence:**")
+        lines.append(f"> {quote}")
+    lines.append("")
+    lines.append("---")
+    lines.append(
+        f"Filed by audit run #{run_id}. Topic: `{slug}`. Fingerprint: `{fingerprint}`."
+    )
+    return "\n".join(lines)
+
+
+def _build_create_payload(finding, run_id: int, fingerprint: str, cfg: dict) -> dict:
+    category = (finding.evidence or {}).get("category", "app_improvement")
+    priority = (finding.evidence or {}).get("priority", "medium")
+    summary = f"[audit:{category}] {finding.title}"[:250]
+    fields: dict = {
+        "project": {"key": cfg["project_key"]},
+        "issuetype": {"name": cfg["issue_type"]},
+        "summary": summary,
+        "description": _build_description(finding, run_id, fingerprint),
+        "labels": [
+            f"audit-fingerprint:{fingerprint}",
+            "audit-source:opus-ideation",
+            f"audit-category:{category}",
+        ],
+    }
+    if priority in PRIORITY_MAP:
+        fields["priority"] = {"name": PRIORITY_MAP[priority]}
+    return {"fields": fields}
+
+
+def file_jira_ticket(finding, *, fingerprint: str, run_id: int) -> dict:
+    """File a Jira ticket for an Opus ideation finding.
+
+    Returns a status dict suitable for stashing in finding.evidence['jira']:
+        {"status": "existing"|"created"|"failed"|"disabled", ...}.
+    Never raises — all exceptions are caught and recorded.
+    """
+    try:
+        cfg = _config()
+    except JiraConfigMissing as exc:
+        log.info("Jira filing disabled: %s", exc)
+        return {"status": "disabled", "reason": "config_missing"}
+
+    try:
+        existing = find_existing_issue(fingerprint)
+    except Exception as exc:
+        log.exception("Jira dedup search failed for %s", fingerprint)
+        return {"status": "failed", "error": f"dedup_search: {exc}"}
+
+    if existing:
+        return {"status": "existing", "issue_key": existing}
+
+    payload = _build_create_payload(finding, run_id, fingerprint, cfg)
+    try:
+        resp = requests.post(
+            f"{cfg['base_url']}/rest/api/3/issue",
+            data=json.dumps(payload),
+            auth=_auth(cfg),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=REQUEST_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        log.exception("Jira create failed for fingerprint=%s", fingerprint)
+        return {"status": "failed", "error": str(exc)}
+
+    body = resp.json() if resp.content else {}
+    issue_key = body.get("key") or ""
+    return {"status": "created", "issue_key": issue_key}
