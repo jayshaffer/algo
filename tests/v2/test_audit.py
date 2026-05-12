@@ -78,6 +78,32 @@ class TestAuditDbHelpers:
         from v2.database.trading_db import try_advisory_audit_lock
         assert try_advisory_audit_lock() is True
 
+    @patch("v2.database.trading_db.get_cursor")
+    def test_insert_audit_llm_call_returns_id(self, mock_get_cursor):
+        cur = MagicMock()
+        cur.fetchone.return_value = {"id": 42}
+        mock_get_cursor.return_value.__enter__.return_value = cur
+        from v2.database.trading_db import insert_audit_llm_call
+        row_id = insert_audit_llm_call(
+            audit_run_id=1,
+            purpose="rule_judgment",
+            model="claude-haiku-4-5-20251001",
+            input_tokens=1000,
+            output_tokens=200,
+            cache_creation_tokens=0,
+            cache_read_tokens=0,
+            latency_ms=2345,
+        )
+        assert row_id == 42
+        sql = cur.execute.call_args[0][0]
+        assert "audit_llm_calls" in sql
+        params = cur.execute.call_args[0][1]
+        # Spot-check positional params: purpose, model, input_tokens, latency_ms
+        assert "rule_judgment" in params
+        assert "claude-haiku-4-5-20251001" in params
+        assert 1000 in params
+        assert 2345 in params
+
 
 # --- Finding dataclass tests (Task 3) ---
 
