@@ -1039,3 +1039,51 @@ class TestAgenticLoopPerTurnTelemetry:
         assert agent_calls[0]["session_id"] == 42
         assert agent_calls[0]["payload"]["purpose"] == "reflection_loop", \
             f"agent_call should record loop's purpose, got {agent_calls[0]['payload'].get('purpose')!r}"
+
+    def test_loop_completion_event_includes_cache_tokens(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import v2.claude_client as cc
+
+        events = []
+        monkeypatch.setattr(
+            "v2.claude_client.record_event",
+            lambda **kwargs: events.append(kwargs),
+        )
+
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.content = [MagicMock(type="text", text="done")]
+        response.usage = MagicMock(
+            input_tokens=100, output_tokens=50,
+            cache_creation_input_tokens=200,
+            cache_read_input_tokens=300,
+        )
+
+        stream_cm = MagicMock()
+        stream_cm.__enter__ = MagicMock(return_value=MagicMock(
+            get_final_message=MagicMock(return_value=response)
+        ))
+        stream_cm.__exit__ = MagicMock(return_value=False)
+
+        client = MagicMock()
+        client.messages.stream = MagicMock(return_value=stream_cm)
+
+        cc.run_agentic_loop(
+            client=client,
+            model="claude-test",
+            system="sys",
+            initial_message="hi",
+            tools=[],
+            tool_handlers={},
+            max_turns=1,
+            session_id=1,
+            stage_name="reflection",
+        )
+
+        completions = [e for e in events if e["event_type"] == "loop_completion"]
+        assert len(completions) == 1
+        payload = completions[0]["payload"]
+        assert payload["cache_creation_tokens"] == 200, \
+            f"loop_completion missing cache_creation_tokens: {payload}"
+        assert payload["cache_read_tokens"] == 300, \
+            f"loop_completion missing cache_read_tokens: {payload}"

@@ -540,6 +540,8 @@ def run_agentic_loop(
             "model": model,
             "input_tokens": total_input_tokens,
             "output_tokens": total_output_tokens,
+            "cache_creation_tokens": total_cache_creation,
+            "cache_read_tokens": total_cache_read,
         },
     )
 
