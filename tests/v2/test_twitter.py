@@ -10,6 +10,7 @@ import pytest
 from v2.database.trading_db import get_tweets_for_date, insert_tweet, posted_tweet_exists, posted_tweet_for_decision_exists
 from v2.twitter import (
     TwitterStageResult,
+    _reduce_cashtags_to_one,
     gather_tweet_context,
     generate_tweet,
     get_twitter_client,
@@ -491,6 +492,54 @@ class TestPostTweet:
         result = post_tweet(tweet)
         assert result["posted"] is False
         assert "No Twitter credentials" in result["error"]
+
+    @patch("v2.twitter.get_twitter_client")
+    def test_strips_extra_cashtags_before_posting(self, mock_get_client):
+        """Twitter rejects >1 cashtag; post_tweet keeps the first and strips $ from the rest."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = {"id": "12345"}
+        mock_client.create_tweet.return_value = mock_response
+        mock_get_client.return_value = mock_client
+        tweet = {"text": "Added to $AMZN & $GOOGL today.", "type": "recap"}
+        result = post_tweet(tweet)
+        mock_client.create_tweet.assert_called_once_with(text="Added to $AMZN & GOOGL today.")
+        assert result["posted"] is True
+        assert result["text"] == "Added to $AMZN & GOOGL today."
+
+
+class TestReduceCashtagsToOne:
+    """Verify cashtag-reduction helper."""
+
+    def test_single_cashtag_unchanged(self):
+        assert _reduce_cashtags_to_one("Bought $NVDA today") == "Bought $NVDA today"
+
+    def test_no_cashtags_unchanged(self):
+        assert _reduce_cashtags_to_one("Quiet market today.") == "Quiet market today."
+
+    def test_keeps_first_strips_rest(self):
+        assert (
+            _reduce_cashtags_to_one("Eyes on $CEG and $DDOG today")
+            == "Eyes on $CEG and DDOG today"
+        )
+
+    def test_three_cashtags(self):
+        assert (
+            _reduce_cashtags_to_one("$DIS and $FTNT, but $AMD is the play")
+            == "$DIS and FTNT, but AMD is the play"
+        )
+
+    def test_dollar_amounts_not_touched(self):
+        assert (
+            _reduce_cashtags_to_one("$AMZN chartin' a course toward $130 (was $5,000)")
+            == "$AMZN chartin' a course toward $130 (was $5,000)"
+        )
+
+    def test_dollar_amount_then_cashtags(self):
+        assert (
+            _reduce_cashtags_to_one("$130 target on $AMZN and $GOOGL")
+            == "$130 target on $AMZN and GOOGL"
+        )
 
 
 class TestRunTwitterStage:
