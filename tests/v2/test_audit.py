@@ -1359,3 +1359,15 @@ class TestCli:
         mock_run.return_value = MagicMock(has_critical_open=True)
         rc = main(argv=[])
         assert rc == 1
+
+
+class TestOpusIdeationConstants:
+    def test_model_constant_is_opus_4_7(self):
+        from v2 import audit
+        assert audit.OPUS_IDEATION_MODEL == "claude-opus-4-7"
+        assert audit.OPUS_IDEATION_MAX_TOKENS == 4000
+        assert audit.OPUS_INPUT_TOKEN_CAP_DEFAULT == 60_000
+
+    def test_call_opus_ideation_is_callable(self):
+        from v2 import audit
+        assert callable(audit._call_opus_ideation)

@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 MAX_AUTO_FIX_DEFAULT = 100
 RULE_JUDGMENT_MODEL = "claude-haiku-4-5-20251001"
 RULE_JUDGMENT_MAX_TOKENS = 4000
+OPUS_IDEATION_MODEL = "claude-opus-4-7"
+OPUS_IDEATION_MAX_TOKENS = 4000
+OPUS_INPUT_TOKEN_CAP_DEFAULT = 60_000
 
 
 @dataclass
@@ -666,6 +669,38 @@ def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
         model=RULE_JUDGMENT_MODEL,
         max_tokens=RULE_JUDGMENT_MAX_TOKENS,
         system=RULE_JUDGE_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    text = "".join(b.text for b in response.content if hasattr(b, "text"))
+    parsed = _extract_json(text)
+    usage = {
+        "input_tokens": getattr(response.usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "latency_ms": latency_ms,
+    }
+    return parsed, usage
+
+
+def _call_opus_ideation(system: str, prompt: str) -> tuple[dict, dict]:
+    """Single Opus call returning (parsed_json, usage_with_latency_ms).
+
+    Caches the `system` block via cache_control so repeated daily runs
+    amortize the system-prompt cost. Used by check_audit_gaps_opus and
+    check_app_improvements_opus.
+    """
+    import time
+    from anthropic import Anthropic
+    import os
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    t0 = time.monotonic()
+    response = client.messages.create(
+        model=OPUS_IDEATION_MODEL,
+        max_tokens=OPUS_IDEATION_MAX_TOKENS,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": prompt}],
     )
     latency_ms = int((time.monotonic() - t0) * 1000)
