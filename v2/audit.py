@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re as _re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -22,6 +23,9 @@ log = logging.getLogger(__name__)
 MAX_AUTO_FIX_DEFAULT = 100
 RULE_JUDGMENT_MODEL = "claude-haiku-4-5-20251001"
 RULE_JUDGMENT_MAX_TOKENS = 4000
+OPUS_IDEATION_MODEL = "claude-opus-4-7"
+OPUS_IDEATION_MAX_TOKENS = 4000
+OPUS_INPUT_TOKEN_CAP_DEFAULT = 60_000
 
 
 @dataclass
@@ -44,6 +48,77 @@ class Finding:
             separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_SLUG_RE = _re.compile(r"[^a-z0-9]+")
+_VALID_OPUS_CATEGORIES = {"audit_gap", "app_improvement"}
+_VALID_OPUS_PRIORITIES = {"high", "medium", "low"}
+
+
+def _normalize_slug(s: str) -> str:
+    """Kebab-case normalization: lowercase, alphanumerics + single hyphens."""
+    return _SLUG_RE.sub("-", s.lower()).strip("-")
+
+
+def _opus_topic_fingerprint(check_code: str, topic_slug: str) -> str:
+    """Coarse fingerprint: hash(check_code + ":" + normalized_slug) only.
+
+    Deliberately ignores evidence prose so daily re-emissions of the same
+    underlying topic collapse to one open finding. See spec
+    2026-05-12-opus-audit-ideation-design.md.
+    """
+    canonical = f"{check_code}:{_normalize_slug(topic_slug)}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _opus_finding_from_json(item: dict, *, default_category: str) -> "Finding | None":
+    """Map one Opus finding dict to a Finding. Returns None on validation failure.
+
+    Stashes the coarse topic-based fingerprint in evidence['_fp_override'];
+    the audit runner pops it and uses it as the insert fingerprint instead
+    of the default Finding.fingerprint property.
+    """
+    slug_raw = item.get("topic_slug") or ""
+    title = item.get("title") or ""
+    body = item.get("body") or ""
+    if not slug_raw or not title:
+        return None
+    slug = _normalize_slug(slug_raw)
+    if not slug:
+        return None
+
+    category = item.get("category")
+    if category not in _VALID_OPUS_CATEGORIES:
+        category = default_category
+    priority = item.get("priority")
+    if priority not in _VALID_OPUS_PRIORITIES:
+        priority = "medium"
+
+    check_code = "AUDIT_GAP" if category == "audit_gap" else "APP_IMPROVEMENT"
+
+    evidence: dict = {
+        "topic_slug": slug,
+        "category": category,
+        "priority": priority,
+        "evidence_quote": (item.get("evidence_quote") or "")[:600],
+    }
+    if category == "audit_gap" and item.get("proposed_check_code"):
+        evidence["proposed_check_code"] = str(item["proposed_check_code"])[:64]
+
+    f = Finding(
+        check_code=check_code,
+        tier=3,
+        severity="info",
+        title=title[:200],
+        body=body[:2000],
+        affected_count=1,
+        evidence=evidence,
+        auto_fix=None,
+    )
+    # Coarse fingerprint override — runner reads this instead of f.fingerprint.
+    # See spec; ignoring evidence prose is deliberate.
+    f.evidence["_fp_override"] = _opus_topic_fingerprint(check_code, slug)
+    return f
 
 
 @dataclass
@@ -397,6 +472,60 @@ def check_cost_trend(cur) -> list[Finding]:
     )]
 
 
+def check_audit_llm_cost_trend(cur) -> list[Finding]:
+    """Per-purpose 7d-vs-prior-7d audit LLM token usage. Flag >=2x growth.
+
+    Reads audit_llm_calls; emits one info finding listing all spiking purposes.
+    Separate from check_cost_trend (which reads session_stages).
+    """
+    cur.execute("""
+        WITH recent AS (
+            SELECT purpose,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM audit_llm_calls
+            WHERE created_at > now() - interval '7 days'
+            GROUP BY purpose
+        ),
+        prior AS (
+            SELECT purpose,
+                   SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                      +COALESCE(cache_creation_tokens,0)
+                      +COALESCE(cache_read_tokens,0)) AS tok
+            FROM audit_llm_calls
+            WHERE created_at > now() - interval '14 days'
+              AND created_at <= now() - interval '7 days'
+            GROUP BY purpose
+        )
+        SELECT COALESCE(r.purpose, p.purpose) AS purpose,
+               COALESCE(r.tok, 0) AS recent_tok,
+               COALESCE(p.tok, 0) AS prior_tok
+        FROM recent r FULL OUTER JOIN prior p ON r.purpose = p.purpose
+    """)
+    spikes = []
+    for r in cur.fetchall():
+        if not r["prior_tok"]:
+            continue
+        if r["recent_tok"] >= 2 * r["prior_tok"]:
+            spikes.append({
+                "purpose": r["purpose"],
+                "recent_tok": int(r["recent_tok"]),
+                "prior_tok": int(r["prior_tok"]),
+                "ratio": round(r["recent_tok"] / r["prior_tok"], 2),
+            })
+    if not spikes:
+        return []
+    return [Finding(
+        check_code="AUDIT_LLM_COST_TREND_SPIKE", tier=3, severity="info",
+        title=f"{len(spikes)} audit LLM purpose(s) with token usage >=2x prior 7-day window",
+        body="Per-purpose 7-day rolling audit LLM token totals doubled vs. prior 7-day window.",
+        affected_count=len(spikes),
+        evidence={"purposes": spikes},
+        auto_fix=None,
+    )]
+
+
 # --- Tier 3: decisions missing signal_refs --------------------------------
 
 def check_decisions_missing_signal_refs(cur) -> list[Finding]:
@@ -598,17 +727,23 @@ def _build_rule_judgment_prompt(rules, attribution, citation_counts, summary) ->
 
 
 def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
-    """Returns (parsed_json, usage_dict). Separate function for easy stubbing."""
+    """Returns (parsed_json, usage_dict). Separate function for easy stubbing.
+
+    usage_dict includes 'latency_ms' alongside the four token fields.
+    """
+    import time
     from anthropic import Anthropic
     import os
 
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    t0 = time.monotonic()
     response = client.messages.create(
         model=RULE_JUDGMENT_MODEL,
         max_tokens=RULE_JUDGMENT_MAX_TOKENS,
         system=RULE_JUDGE_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
+    latency_ms = int((time.monotonic() - t0) * 1000)
     text = "".join(b.text for b in response.content if hasattr(b, "text"))
     parsed = _extract_json(text)
     usage = {
@@ -616,6 +751,39 @@ def _call_rule_judgment_llm(prompt: str) -> tuple[dict, dict]:
         "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
         "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
         "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "latency_ms": latency_ms,
+    }
+    return parsed, usage
+
+
+def _call_opus_ideation(system: str, prompt: str) -> tuple[dict, dict]:
+    """Single Opus call returning (parsed_json, usage_with_latency_ms).
+
+    Caches the `system` block via cache_control so repeated daily runs
+    amortize the system-prompt cost. Used by check_audit_gaps_opus and
+    check_app_improvements_opus.
+    """
+    import time
+    from anthropic import Anthropic
+    import os
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    t0 = time.monotonic()
+    response = client.messages.create(
+        model=OPUS_IDEATION_MODEL,
+        max_tokens=OPUS_IDEATION_MAX_TOKENS,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": prompt}],
+    )
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    text = "".join(b.text for b in response.content if hasattr(b, "text"))
+    parsed = _extract_json(text)
+    usage = {
+        "input_tokens": getattr(response.usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(response.usage, "output_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "latency_ms": latency_ms,
     }
     return parsed, usage
 
@@ -640,6 +808,19 @@ def get_last_rule_judgment_usage() -> dict:
 
 def _reset_rule_judgment_usage() -> None:
     _LAST_RULE_JUDGMENT_USAGE.clear()
+
+
+_LAST_OPUS_IDEATION_USAGE: dict[str, dict] = {}
+
+
+def get_last_opus_ideation_usage(purpose: str) -> dict:
+    """Return a copy of the most recent Opus ideation usage for a purpose."""
+    return _LAST_OPUS_IDEATION_USAGE.get(purpose, {}).copy()
+
+
+def _reset_opus_ideation_usage() -> None:
+    """Clear all stashed Opus ideation usage. Called once per audit run."""
+    _LAST_OPUS_IDEATION_USAGE.clear()
 
 
 # --- Phase 1: agent_events-driven checks ---------------------------------
@@ -1430,12 +1611,294 @@ def check_rule_judgment(cur) -> list[Finding]:
     return findings
 
 
+# --- Phase 3: Opus 4.7 ideation checks -----------------------------------
+
+OPUS_AUDIT_GAPS_SYSTEM = """\
+You are auditing the auditor of an agentic trading system. Given (1) the list
+of existing audit check codes, (2) the audit's recent findings by check_code,
+(3) a high-level DB schema, and (4) audit cost trend, propose NEW audit
+checks that would catch integrity, strategy, or learning-loop problems the
+current audit does not cover. Be conservative. Prefer specific checks with
+clearly testable conditions over vague ones.
+
+Output JSON only:
+{
+  "findings": [
+    {"topic_slug": "kebab-case-stable-id",
+     "title": "short imperative phrasing",
+     "category": "audit_gap",
+     "priority": "high"|"medium"|"low",
+     "body": "1-3 short paragraphs",
+     "evidence_quote": "specific motivating data point",
+     "proposed_check_code": "PROPOSED_NEW_CODE"}
+  ]
+}
+
+The topic_slug must be a stable identifier for the underlying gap so that
+the same proposal on a future day yields the same slug. Max 10 findings.
+Empty findings array is fine if you cannot find anything defensible.
+"""
+
+
+def _build_audit_gaps_prompt(cur) -> str:
+    """Assemble the user prompt for check_audit_gaps_opus.
+
+    Issues three queries in order:
+      1. Recent findings summary (by check_code + severity).
+      2. DB schema (columns of key tables).
+      3. Recent audit_runs cost trend.
+    """
+    cur.execute("""
+        SELECT check_code, COUNT(DISTINCT fingerprint) AS n, severity
+        FROM audit_findings
+        WHERE created_at > now() - interval '30 days'
+        GROUP BY check_code, severity
+        ORDER BY n DESC
+    """)
+    findings_summary = cur.fetchall()
+
+    cur.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND table_name IN ('decisions','decision_signals','news_signals',
+                             'macro_signals','theses','strategy_rules',
+                             'agent_events','agent_calls','sessions',
+                             'session_stages','signal_attribution')
+        ORDER BY table_name, ordinal_position
+    """)
+    schema_rows = cur.fetchall()
+    schema_by_table: dict[str, list[str]] = {}
+    for r in schema_rows:
+        schema_by_table.setdefault(r["table_name"], []).append(r["column_name"])
+
+    cur.execute("""
+        SELECT ar.id, ar.started_at,
+               COALESCE(SUM(ac.input_tokens+ac.output_tokens
+                           +ac.cache_creation_tokens+ac.cache_read_tokens),0) AS tok,
+               ar.total_findings
+        FROM audit_runs ar
+        LEFT JOIN audit_llm_calls ac ON ac.audit_run_id = ar.id
+        WHERE ar.started_at > now() - interval '14 days'
+        GROUP BY ar.id
+        ORDER BY ar.started_at DESC
+        LIMIT 14
+    """)
+    cost_trend = cur.fetchall()
+
+    parts = ["## Existing audit check codes\n"]
+    parts.extend(f"- {name}" for name in CHECKS if isinstance(name, str))
+    parts.append("\n## Last 30 days of findings (by check_code)\n")
+    for r in findings_summary:
+        parts.append(f"- {r['check_code']} [{r['severity']}]: {r['n']} distinct fingerprints")
+    parts.append("\n## DB schema (selected tables)\n")
+    for t, cols in schema_by_table.items():
+        parts.append(f"### {t}\n{', '.join(cols)}\n")
+    parts.append("\n## Recent audit runs (last 14, total tokens + finding count)\n")
+    for r in cost_trend:
+        parts.append(f"- run {r['id']} @ {r['started_at']}: tok={r['tok']} findings={r['total_findings']}")
+    return "\n".join(parts)
+
+
+def check_audit_gaps_opus(cur) -> list[Finding]:
+    """Single Opus call proposing new audit checks. Tier 3 / severity info."""
+    prompt = _build_audit_gaps_prompt(cur)
+    parsed, usage = _call_opus_ideation(OPUS_AUDIT_GAPS_SYSTEM, prompt)
+    _LAST_OPUS_IDEATION_USAGE["audit_gaps"] = usage
+
+    findings: list[Finding] = []
+    seen_slugs: set[str] = set()
+    for item in (parsed.get("findings") or [])[:20]:
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        if f is None:
+            continue
+        slug = f.evidence["topic_slug"]
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        findings.append(f)
+        if len(findings) >= 10:
+            break
+    return findings
+
+
+OPUS_APP_IMPROVEMENTS_SYSTEM = """\
+You are an architect reviewing an agentic trading system. Given recent
+session reflections, active and retired rules, signal attribution, recent
+decisions and their outcomes, active/closed theses, equity trend, and a
+high-level module manifest, propose application-level improvements:
+new features, modeling changes, data sources, risk improvements, or UX
+changes that would plausibly improve outcomes. Be conservative.
+
+Output JSON only:
+{
+  "findings": [
+    {"topic_slug": "kebab-case-stable-id",
+     "title": "short imperative phrasing",
+     "category": "app_improvement",
+     "priority": "high"|"medium"|"low",
+     "body": "1-3 short paragraphs",
+     "evidence_quote": "specific motivating data point"}
+  ]
+}
+
+The topic_slug must be a stable identifier for the underlying idea so the
+same proposal on a future day yields the same slug. Max 10 findings.
+Empty findings array is fine if you cannot find anything defensible.
+"""
+
+
+def _build_app_improvements_prompt(cur) -> str:
+    """Assemble user prompt. Issues six queries in order, then a manifest read.
+
+    Truncates the assembled prompt to ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS
+    (default 60_000, char-approx by ×4) and appends [INPUT TRUNCATED] when
+    capped.
+    """
+    cur.execute("""
+        SELECT id, created_at, body
+        FROM strategy_memos
+        ORDER BY created_at DESC
+        LIMIT 14
+    """)
+    memos = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, status, rule_text, retired_at
+        FROM strategy_rules
+        WHERE status='active'
+           OR (status='retired' AND retired_at > now() - interval '30 days')
+        ORDER BY status, id
+    """)
+    rules = cur.fetchall()
+
+    cur.execute("""
+        SELECT category, sample_size, sample_size_30d,
+               avg_outcome_7d, win_rate_7d, avg_outcome_30d, win_rate_30d
+        FROM signal_attribution
+    """)
+    attribution = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, date, ticker, action, notional,
+               outcome_7d_pct, outcome_30d_pct
+        FROM decisions
+        WHERE date > now()::date - 14
+        ORDER BY date DESC, id DESC
+        LIMIT 200
+    """)
+    decisions = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, ticker, status, summary, outcome_pct, closed_at
+        FROM theses
+        WHERE status='active'
+           OR (status IN ('closed','retired')
+               AND closed_at > now() - interval '30 days')
+        ORDER BY status, id DESC
+    """)
+    theses = cur.fetchall()
+
+    cur.execute("""
+        SELECT snapshot_date, equity
+        FROM account_snapshots
+        WHERE snapshot_date > now()::date - 30
+        ORDER BY snapshot_date DESC
+    """)
+    snapshots = cur.fetchall()
+
+    import os, pathlib
+    module_manifest: list[tuple[str, str]] = []
+    v2_dir = pathlib.Path(__file__).resolve().parent
+    for path in sorted(v2_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            first_lines = path.read_text(encoding="utf-8").splitlines()[:6]
+        except OSError:
+            continue
+        doc = ""
+        for ln in first_lines:
+            s = ln.strip().strip('"').strip("'")
+            if s and not s.startswith("#") and not s.startswith("from") and not s.startswith("import"):
+                doc = s
+                break
+        module_manifest.append((path.name, doc[:160]))
+
+    parts = ["## Recent strategy memos (last 14)\n"]
+    for m in memos:
+        body_excerpt = (m["body"] or "")[:600]
+        parts.append(f"### memo {m['id']} @ {m['created_at']}\n{body_excerpt}\n")
+    parts.append("\n## Rules (active + retired-30d)\n")
+    for r in rules:
+        parts.append(f"- rule {r['id']} [{r['status']}]: {r['rule_text']}")
+    parts.append("\n## signal_attribution snapshot\n")
+    for a in attribution:
+        parts.append(
+            f"- {a['category']}: n={a['sample_size']} n30={a['sample_size_30d']} "
+            f"out7={a['avg_outcome_7d']} win7={a['win_rate_7d']} "
+            f"out30={a['avg_outcome_30d']} win30={a['win_rate_30d']}"
+        )
+    parts.append("\n## Recent decisions (last 14d, up to 200)\n")
+    for d in decisions:
+        parts.append(
+            f"- {d['date']} {d['ticker']} {d['action']} notional={d['notional']} "
+            f"out7={d['outcome_7d_pct']} out30={d['outcome_30d_pct']}"
+        )
+    parts.append("\n## Theses (active + recently-closed)\n")
+    for t in theses:
+        parts.append(f"- thesis {t['id']} {t['ticker']} [{t['status']}] out={t['outcome_pct']}: {t['summary']}")
+    parts.append("\n## Account snapshots (last 30d)\n")
+    for s in snapshots:
+        parts.append(f"- {s['snapshot_date']}: equity={s['equity']}")
+    parts.append("\n## v2 module manifest\n")
+    for name, doc in module_manifest:
+        parts.append(f"- {name}: {doc}")
+
+    raw = "\n".join(parts)
+    cap_str = os.environ.get("ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS")
+    try:
+        cap = int(cap_str) if cap_str else OPUS_INPUT_TOKEN_CAP_DEFAULT
+    except ValueError:
+        cap = OPUS_INPUT_TOKEN_CAP_DEFAULT
+    # Rough char-to-token approximation: 4 chars/token.
+    max_chars = cap * 4
+    if len(raw) > max_chars:
+        log.warning("Opus app-improvements prompt truncated: %d > %d chars",
+                    len(raw), max_chars)
+        raw = raw[:max_chars] + "\n\n[INPUT TRUNCATED]"
+    return raw
+
+
+def check_app_improvements_opus(cur) -> list[Finding]:
+    """Single Opus call proposing application-level improvements."""
+    prompt = _build_app_improvements_prompt(cur)
+    parsed, usage = _call_opus_ideation(OPUS_APP_IMPROVEMENTS_SYSTEM, prompt)
+    _LAST_OPUS_IDEATION_USAGE["app_improvements"] = usage
+
+    findings: list[Finding] = []
+    seen_slugs: set[str] = set()
+    for item in (parsed.get("findings") or [])[:20]:
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        if f is None:
+            continue
+        slug = f.evidence["topic_slug"]
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        findings.append(f)
+        if len(findings) >= 10:
+            break
+    return findings
+
+
 # --- Runner ---------------------------------------------------------------
 
 from v2.database.connection import get_cursor
 from v2.database.trading_db import (
     insert_audit_run,
     insert_audit_finding,
+    insert_audit_llm_call,
     finalize_audit_run,
     supersede_stale_open_findings,
     try_advisory_audit_lock,
@@ -1452,6 +1915,7 @@ CHECKS: list = [
     "check_attribution_category_coverage",
     "check_stage_failure_rate",
     "check_cost_trend",
+    "check_audit_llm_cost_trend",
     "check_decisions_missing_signal_refs",
     "check_theses_missing_signal_refs",
     "check_strategist_using_reversal_tool",
@@ -1469,6 +1933,8 @@ CHECKS: list = [
     "check_loop_max_turns_hit",
     "check_cache_hit_ratio_degradation",
     "check_agent_call_latency_drift",
+    "check_audit_gaps_opus",
+    "check_app_improvements_opus",
     "check_rule_judgment",
 ]
 
@@ -1498,14 +1964,26 @@ def _emit_check_failure(*, run_id: int, check_name: str, exc: Exception):
     )
 
 
-def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> AuditRunSummary:
+def run_audit(
+    apply: bool = False,
+    max_auto_fix: int = MAX_AUTO_FIX_DEFAULT,
+    file_jira: bool = False,
+) -> AuditRunSummary:
     if not try_advisory_audit_lock():
         log.warning("Audit already running (advisory lock contention); exiting cleanly")
         return AuditRunSummary(run_id=None)
 
     summary = AuditRunSummary(run_id=None)
     rule_judgment_usage: dict = {}
+    import os as _os
+    file_jira_enabled = file_jira or _os.environ.get("ALGO_AUDIT_FILE_JIRA") == "1"
     try:
+        jira_create_cap = int(_os.environ.get("ALGO_AUDIT_JIRA_MAX_CREATES", "5"))
+    except ValueError:
+        jira_create_cap = 5
+    jira_created_this_run = 0
+    try:
+        _reset_opus_ideation_usage()
         run_id = insert_audit_run(mode="apply" if apply else "check")
         summary.run_id = run_id
         log.info("Audit run #%d started (mode=%s)", run_id, "apply" if apply else "check")
@@ -1529,15 +2007,66 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
 
                 if check.__name__ == "check_rule_judgment":
                     rule_judgment_usage = get_last_rule_judgment_usage()
+                    if rule_judgment_usage:
+                        insert_audit_llm_call(
+                            audit_run_id=run_id,
+                            purpose="rule_judgment",
+                            model=RULE_JUDGMENT_MODEL,
+                            input_tokens=rule_judgment_usage.get("input_tokens", 0),
+                            output_tokens=rule_judgment_usage.get("output_tokens", 0),
+                            cache_creation_tokens=rule_judgment_usage.get("cache_creation_tokens", 0),
+                            cache_read_tokens=rule_judgment_usage.get("cache_read_tokens", 0),
+                            latency_ms=rule_judgment_usage.get("latency_ms"),
+                        )
+                elif check.__name__ in ("check_audit_gaps_opus", "check_app_improvements_opus"):
+                    purpose = ("audit_gaps" if check.__name__ == "check_audit_gaps_opus"
+                               else "app_improvements")
+                    usage = get_last_opus_ideation_usage(purpose)
+                    if usage:
+                        insert_audit_llm_call(
+                            audit_run_id=run_id,
+                            purpose=purpose,
+                            model=OPUS_IDEATION_MODEL,
+                            input_tokens=usage.get("input_tokens", 0),
+                            output_tokens=usage.get("output_tokens", 0),
+                            cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+                            cache_read_tokens=usage.get("cache_read_tokens", 0),
+                            latency_ms=usage.get("latency_ms"),
+                        )
 
                 for f in findings:
-                    current_fingerprints.add(f.fingerprint)
+                    # Opus findings stash a coarse topic-slug fingerprint in
+                    # evidence['_fp_override'] so daily re-emissions of the
+                    # same idea collapse. Pop it before insert so it doesn't
+                    # persist into the DB row.
+                    fp_override = None
+                    if isinstance(f.evidence, dict) and "_fp_override" in f.evidence:
+                        fp_override = f.evidence.pop("_fp_override")
+                    fingerprint = fp_override if fp_override else f.fingerprint
+                    current_fingerprints.add(fingerprint)
+
+                    # Jira filing for Opus ideation findings only
+                    is_opus_finding = f.check_code in ("AUDIT_GAP", "APP_IMPROVEMENT")
+                    if is_opus_finding:
+                        if not file_jira_enabled:
+                            f.evidence["jira"] = {"status": "disabled"}
+                        elif jira_created_this_run >= jira_create_cap:
+                            f.evidence["jira"] = {"status": "capped"}
+                        else:
+                            from v2 import audit_jira
+                            jira_result = audit_jira.file_jira_ticket(
+                                f, fingerprint=fingerprint, run_id=run_id,
+                            )
+                            f.evidence["jira"] = jira_result
+                            if jira_result.get("status") == "created":
+                                jira_created_this_run += 1
+
                     inserted_id = insert_audit_finding(
                         audit_run_id=run_id,
                         check_code=f.check_code, tier=f.tier, severity=f.severity,
                         title=f.title, body=f.body,
                         affected_count=f.affected_count, evidence=f.evidence,
-                        fingerprint=f.fingerprint,
+                        fingerprint=fingerprint,
                     )
                     if inserted_id is not None:
                         emitted += 1
@@ -1561,7 +2090,7 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
                                 body=f"Applied auto-fix for {f.check_code}.",
                                 affected_count=f.affected_count,
                                 evidence={**f.evidence, "fix": fix_evidence},
-                                fingerprint=f.fingerprint + ":fixed",
+                                fingerprint=fingerprint + ":fixed",
                                 status="auto_fixed",
                             )
                             auto_fixed += 1
@@ -1578,11 +2107,9 @@ def run_audit(apply: bool = False, max_auto_fix: int = MAX_AUTO_FIX_DEFAULT) -> 
             total_findings=emitted,
             auto_fixed=auto_fixed,
             failed_checks=failed_checks,
-            model=RULE_JUDGMENT_MODEL if rule_judgment_usage else None,
-            input_tokens=rule_judgment_usage.get("input_tokens"),
-            output_tokens=rule_judgment_usage.get("output_tokens"),
-            cache_creation_tokens=rule_judgment_usage.get("cache_creation_tokens"),
-            cache_read_tokens=rule_judgment_usage.get("cache_read_tokens"),
+            # LLM accounting moved to audit_llm_calls table; legacy
+            # token columns on audit_runs are no longer populated.
+            # See spec 2026-05-12-opus-audit-ideation-design.md.
         )
 
         summary.findings_emitted = emitted
@@ -1605,13 +2132,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="Apply Tier-1 auto-fixes (default: propose-only)")
     parser.add_argument("--max-auto-fix", type=int, default=MAX_AUTO_FIX_DEFAULT,
                         help=f"Cap on auto-fixes per run (default {MAX_AUTO_FIX_DEFAULT})")
+    parser.add_argument("--file-jira", action="store_true",
+                        help="File Jira tickets for new Opus ideation findings "
+                             "(also enabled by ALGO_AUDIT_FILE_JIRA=1)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     try:
-        summary = run_audit(apply=args.apply, max_auto_fix=args.max_auto_fix)
+        summary = run_audit(apply=args.apply, max_auto_fix=args.max_auto_fix,
+                            file_jira=args.file_jira)
     except Exception:
         log.exception("Audit run failed unrecoverably")
         return 2

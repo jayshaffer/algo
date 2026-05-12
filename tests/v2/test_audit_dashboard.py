@@ -62,6 +62,41 @@ def test_audit_finding_detail_renders(app_client):
     assert b"\"k\": \"v\"" in response.data
 
 
+def test_audit_finding_detail_renders_jira_link(app_client):
+    """Findings with evidence.jira.issue_key render a clickable Jira link."""
+    finding = {
+        "id": 1, "check_code": "APP_IMPROVEMENT", "title": "Add regime detector",
+        "tier": 3, "severity": "info", "body": "...",
+        "affected_count": 1, "status": "open",
+        "evidence": {
+            "topic_slug": "add-regime-detector",
+            "category": "app_improvement",
+            "jira": {"status": "created", "issue_key": "ALGO-42"},
+        },
+    }
+    with patch("dashboard.app.get_audit_finding", return_value=finding):
+        response = app_client.get("/audit/findings/1")
+    assert response.status_code == 200
+    assert b"ALGO-42" in response.data
+    # Anchor target should reference the issue key
+    assert b"/browse/ALGO-42" in response.data
+
+
+def test_audit_finding_detail_renders_jira_disabled_status(app_client):
+    """Findings with evidence.jira but no issue_key show status text."""
+    finding = {
+        "id": 2, "check_code": "AUDIT_GAP", "title": "Missing foo",
+        "tier": 3, "severity": "info", "body": "...",
+        "affected_count": 1, "status": "open",
+        "evidence": {"topic_slug": "missing-foo",
+                     "jira": {"status": "disabled"}},
+    }
+    with patch("dashboard.app.get_audit_finding", return_value=finding):
+        response = app_client.get("/audit/findings/2")
+    assert response.status_code == 200
+    assert b"disabled" in response.data
+
+
 def test_audit_finding_status_post_updates(app_client):
     with patch("dashboard.app.update_audit_finding_status") as mock_update:
         response = app_client.post("/audit/findings/1/status",

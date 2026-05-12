@@ -78,6 +78,32 @@ class TestAuditDbHelpers:
         from v2.database.trading_db import try_advisory_audit_lock
         assert try_advisory_audit_lock() is True
 
+    @patch("v2.database.trading_db.get_cursor")
+    def test_insert_audit_llm_call_returns_id(self, mock_get_cursor):
+        cur = MagicMock()
+        cur.fetchone.return_value = {"id": 42}
+        mock_get_cursor.return_value.__enter__.return_value = cur
+        from v2.database.trading_db import insert_audit_llm_call
+        row_id = insert_audit_llm_call(
+            audit_run_id=1,
+            purpose="rule_judgment",
+            model="claude-haiku-4-5-20251001",
+            input_tokens=1000,
+            output_tokens=200,
+            cache_creation_tokens=0,
+            cache_read_tokens=0,
+            latency_ms=2345,
+        )
+        assert row_id == 42
+        sql = cur.execute.call_args[0][0]
+        assert "audit_llm_calls" in sql
+        params = cur.execute.call_args[0][1]
+        # Spot-check positional params: purpose, model, input_tokens, latency_ms
+        assert "rule_judgment" in params
+        assert "claude-haiku-4-5-20251001" in params
+        assert 1000 in params
+        assert 2345 in params
+
 
 # --- Finding dataclass tests (Task 3) ---
 
@@ -417,6 +443,45 @@ class TestCheckCostTrend:
             {"stage_name": "x", "recent_tok": 100, "prior_tok": 0},
         ]
         assert check_cost_trend(cur) == []
+
+
+class TestCheckAuditLlmCostTrend:
+    def test_flags_doubled_purpose(self):
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 500, "prior_tok": 100},
+            {"purpose": "rule_judgment", "recent_tok": 110, "prior_tok": 100},
+        ]
+        findings = check_audit_llm_cost_trend(cur)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "AUDIT_LLM_COST_TREND_SPIKE"
+        assert f.tier == 3
+        assert f.severity == "info"
+        purposes = [p["purpose"] for p in f.evidence["purposes"]]
+        assert purposes == ["audit_gaps"]
+        spike = f.evidence["purposes"][0]
+        assert spike["ratio"] == 5.0
+        assert spike["recent_tok"] == 500
+        assert spike["prior_tok"] == 100
+
+    def test_no_spike_returns_empty(self):
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 110, "prior_tok": 100},
+        ]
+        assert check_audit_llm_cost_trend(cur) == []
+
+    def test_zero_prior_skipped(self):
+        """Don't divide by zero / don't flag new purposes with no history."""
+        from v2.audit import check_audit_llm_cost_trend
+        cur = MagicMock()
+        cur.fetchall.return_value = [
+            {"purpose": "audit_gaps", "recent_tok": 500, "prior_tok": 0},
+        ]
+        assert check_audit_llm_cost_trend(cur) == []
 
 
 # --- Decisions missing signal_refs tests (refined: bucket by source) ---
@@ -1221,8 +1286,296 @@ class TestRunner:
         assert summary.auto_fixed == 3
         assert len(n_fixes) == 3
 
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_rule_judgment_records_llm_call_row(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        # Fake rule_judgment check that stashes usage like the real one
+        from v2 import audit as audit_mod
+        def fake_rule_judgment(c):
+            audit_mod._LAST_RULE_JUDGMENT_USAGE.clear()
+            audit_mod._LAST_RULE_JUDGMENT_USAGE.update({
+                "input_tokens": 1234,
+                "output_tokens": 56,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "latency_ms": 2000,
+            })
+            return []
+        fake_rule_judgment.__name__ = "check_rule_judgment"
+
+        with patch("v2.audit.CHECKS", [fake_rule_judgment]):
+            run_audit(apply=False)
+
+        assert mock_insert_llm.called
+        kwargs = mock_insert_llm.call_args.kwargs
+        assert kwargs["purpose"] == "rule_judgment"
+        assert kwargs["model"] == audit_mod.RULE_JUDGMENT_MODEL
+        assert kwargs["input_tokens"] == 1234
+        assert kwargs["output_tokens"] == 56
+        assert kwargs["latency_ms"] == 2000
+
+        # finalize_audit_run should NOT receive deprecated token kwargs anymore
+        finalize_kwargs = mock_finalize.call_args.kwargs
+        for k in ("input_tokens", "output_tokens", "cache_creation_tokens",
+                 "cache_read_tokens", "model"):
+            assert k not in finalize_kwargs, f"{k} should no longer be passed"
+
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_opus_checks_record_llm_calls_and_use_topic_fingerprint(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1000, "output_tokens": 100,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 2000,
+            }
+            f = Finding("AUDIT_GAP", 3, "info", "Missing foo check", "...",
+                        1, {"topic_slug": "missing-foo", "category": "audit_gap",
+                            "priority": "low",
+                            "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", "missing-foo")},
+                        None)
+            return [f]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        def fake_app(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["app_improvements"] = {
+                "input_tokens": 2000, "output_tokens": 200,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 2500,
+            }
+            f = Finding("APP_IMPROVEMENT", 3, "info", "Build the bar", "...",
+                        1, {"topic_slug": "build-bar", "category": "app_improvement",
+                            "priority": "medium",
+                            "_fp_override": _opus_topic_fingerprint("APP_IMPROVEMENT", "build-bar")},
+                        None)
+            return [f]
+        fake_app.__name__ = "check_app_improvements_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap, fake_app]):
+            run_audit(apply=False)
+
+        # Both Opus purposes got LLM-call rows
+        purposes = [c.kwargs["purpose"] for c in mock_insert_llm.call_args_list]
+        assert "audit_gaps" in purposes
+        assert "app_improvements" in purposes
+        gap_call = next(c for c in mock_insert_llm.call_args_list
+                        if c.kwargs["purpose"] == "audit_gaps")
+        assert gap_call.kwargs["model"] == audit_mod.OPUS_IDEATION_MODEL
+        assert gap_call.kwargs["input_tokens"] == 1000
+        assert gap_call.kwargs["latency_ms"] == 2000
+
+        # Findings inserted with topic-slug fingerprint and WITHOUT _fp_override
+        gap_finding_call = next(
+            c for c in mock_finding.call_args_list
+            if c.kwargs["check_code"] == "AUDIT_GAP"
+        )
+        assert gap_finding_call.kwargs["fingerprint"] == _opus_topic_fingerprint(
+            "AUDIT_GAP", "missing-foo"
+        )
+        assert "_fp_override" not in gap_finding_call.kwargs["evidence"]
+
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_run_audit_resets_opus_usage_at_start(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        """A new run_audit invocation must not see stale usage from a prior call."""
+        from v2.audit import run_audit
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        # Pre-populate stale usage from a "previous run"
+        audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {"input_tokens": 99999}
+
+        with patch("v2.audit.CHECKS", []):
+            run_audit(apply=False)
+
+        # After the run, the stash should have been reset; the prior key gone
+        assert "audit_gaps" not in audit_mod._LAST_OPUS_IDEATION_USAGE
+
 
 # --- CLI tests (Task 16) ---
+
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_off_by_default_records_disabled(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm,
+    ):
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [Finding(
+                "AUDIT_GAP", 3, "info", "t", "b", 1,
+                {"topic_slug": "slug-1", "category": "audit_gap", "priority": "low",
+                 "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", "slug-1")},
+                None,
+            )]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False)  # file_jira defaults False
+
+        gap_call = next(c for c in mock_finding.call_args_list
+                        if c.kwargs["check_code"] == "AUDIT_GAP")
+        assert gap_call.kwargs["evidence"]["jira"] == {"status": "disabled"}
+
+    @patch("v2.audit_jira.file_jira_ticket")
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_caps_creates_at_max(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm, mock_file,
+        monkeypatch,
+    ):
+        """When --file-jira and 3 findings + cap=2, file 2, last gets 'capped'."""
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+
+        monkeypatch.setenv("ALGO_AUDIT_JIRA_MAX_CREATES", "2")
+
+        create_count = [0]
+        def fake_file(finding, *, fingerprint, run_id):
+            create_count[0] += 1
+            return {"status": "created", "issue_key": f"ALGO-{create_count[0]}"}
+        mock_file.side_effect = fake_file
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [
+                Finding("AUDIT_GAP", 3, "info", f"T{i}", "b", 1,
+                        {"topic_slug": f"slug-{i}", "category": "audit_gap",
+                         "priority": "low",
+                         "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", f"slug-{i}")},
+                        None)
+                for i in range(3)
+            ]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False, file_jira=True)
+
+        # Only 2 file_jira_ticket calls were issued
+        assert mock_file.call_count == 2
+
+        # 3 findings inserted; last has status=capped, first two have status=created
+        gap_calls = [c for c in mock_finding.call_args_list
+                     if c.kwargs["check_code"] == "AUDIT_GAP"]
+        assert len(gap_calls) == 3
+        statuses = [c.kwargs["evidence"]["jira"]["status"] for c in gap_calls]
+        assert sorted(statuses) == ["capped", "created", "created"]
+
+    @patch("v2.audit_jira.file_jira_ticket",
+           return_value={"status": "existing", "issue_key": "ALGO-9"})
+    @patch("v2.audit.insert_audit_llm_call")
+    @patch("v2.audit.try_advisory_audit_lock", return_value=True)
+    @patch("v2.audit.release_advisory_audit_lock")
+    @patch("v2.audit.finalize_audit_run")
+    @patch("v2.audit.supersede_stale_open_findings", return_value=0)
+    @patch("v2.audit.insert_audit_finding", return_value=1)
+    @patch("v2.audit.insert_audit_run", return_value=99)
+    @patch("v2.audit.get_cursor")
+    def test_file_jira_dedup_hits_do_not_count_against_cap(
+        self, mock_cur, mock_run, mock_finding, mock_supersede,
+        mock_finalize, mock_unlock, mock_lock, mock_insert_llm, mock_file,
+        monkeypatch,
+    ):
+        """Existing-issue dedup hits don't consume the cap budget."""
+        from v2.audit import run_audit, Finding, _opus_topic_fingerprint
+        from v2 import audit as audit_mod
+
+        cur = MagicMock()
+        mock_cur.return_value.__enter__.return_value = cur
+        monkeypatch.setenv("ALGO_AUDIT_JIRA_MAX_CREATES", "1")
+
+        def fake_gap(c):
+            audit_mod._LAST_OPUS_IDEATION_USAGE["audit_gaps"] = {
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "latency_ms": 1,
+            }
+            return [
+                Finding("AUDIT_GAP", 3, "info", f"T{i}", "b", 1,
+                        {"topic_slug": f"slug-{i}", "category": "audit_gap",
+                         "priority": "low",
+                         "_fp_override": _opus_topic_fingerprint("AUDIT_GAP", f"slug-{i}")},
+                        None)
+                for i in range(3)
+            ]
+        fake_gap.__name__ = "check_audit_gaps_opus"
+
+        with patch("v2.audit.CHECKS", [fake_gap]):
+            run_audit(apply=False, file_jira=True)
+
+        # All 3 findings consulted file_jira_ticket (no cap hit)
+        assert mock_file.call_count == 3
+        gap_calls = [c for c in mock_finding.call_args_list
+                     if c.kwargs["check_code"] == "AUDIT_GAP"]
+        statuses = [c.kwargs["evidence"]["jira"]["status"] for c in gap_calls]
+        assert statuses == ["existing"] * 3
+
 
 class TestCli:
     @patch("v2.audit.run_audit")
@@ -1247,3 +1600,319 @@ class TestCli:
         mock_run.return_value = MagicMock(has_critical_open=True)
         rc = main(argv=[])
         assert rc == 1
+
+    @patch("v2.audit.run_audit")
+    def test_cli_file_jira_flag_passed_through(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        main(argv=["--file-jira"])
+        assert mock_run.call_args.kwargs["file_jira"] is True
+
+    @patch("v2.audit.run_audit")
+    def test_cli_file_jira_default_false(self, mock_run):
+        from v2.audit import main
+        mock_run.return_value = MagicMock(has_critical_open=False)
+        main(argv=[])
+        assert mock_run.call_args.kwargs.get("file_jira", False) is False
+
+
+class TestOpusIdeationConstants:
+    def test_model_constant_is_opus_4_7(self):
+        from v2 import audit
+        assert audit.OPUS_IDEATION_MODEL == "claude-opus-4-7"
+        assert audit.OPUS_IDEATION_MAX_TOKENS == 4000
+        assert audit.OPUS_INPUT_TOKEN_CAP_DEFAULT == 60_000
+
+    def test_call_opus_ideation_is_callable(self):
+        from v2 import audit
+        assert callable(audit._call_opus_ideation)
+
+
+class TestOpusFindingHelpers:
+    def test_topic_slug_normalization_is_stable(self):
+        from v2.audit import _opus_topic_fingerprint
+        fp_a = _opus_topic_fingerprint("AUDIT_GAP", "Add Regime Detector")
+        fp_b = _opus_topic_fingerprint("AUDIT_GAP", "add-regime-detector")
+        fp_c = _opus_topic_fingerprint("AUDIT_GAP", "  Add Regime Detector!! ")
+        assert fp_a == fp_b == fp_c
+
+    def test_topic_slug_distinguishes_check_codes(self):
+        from v2.audit import _opus_topic_fingerprint
+        assert _opus_topic_fingerprint("AUDIT_GAP", "x") != _opus_topic_fingerprint("APP_IMPROVEMENT", "x")
+
+    def test_finding_from_json_valid(self):
+        from v2.audit import _opus_finding_from_json
+        item = {
+            "topic_slug": "Add Regime Detector",
+            "title": "Add a regime-detector module",
+            "category": "app_improvement",
+            "priority": "high",
+            "body": "Detect bull/bear regimes from SPY trend...",
+            "evidence_quote": "Recent decisions ignore SPY context.",
+        }
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        assert f is not None
+        assert f.check_code == "APP_IMPROVEMENT"
+        assert f.tier == 3 and f.severity == "info"
+        assert f.evidence["topic_slug"] == "add-regime-detector"
+        assert f.evidence["priority"] == "high"
+        assert f.evidence["category"] == "app_improvement"
+        # Fingerprint override is stashed for runner pickup
+        assert "_fp_override" in f.evidence
+
+    def test_finding_from_json_audit_gap_includes_proposed_code(self):
+        from v2.audit import _opus_finding_from_json
+        item = {
+            "topic_slug": "missing-foo",
+            "title": "Missing foo check",
+            "category": "audit_gap",
+            "priority": "medium",
+            "body": "...",
+            "proposed_check_code": "FOO_MISSING",
+        }
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        assert f.check_code == "AUDIT_GAP"
+        assert f.evidence["proposed_check_code"] == "FOO_MISSING"
+
+    def test_finding_from_json_missing_required_returns_none(self):
+        from v2.audit import _opus_finding_from_json
+        assert _opus_finding_from_json({}, default_category="app_improvement") is None
+        # missing title
+        assert _opus_finding_from_json({"topic_slug": "x"}, default_category="app_improvement") is None
+        # missing topic_slug
+        assert _opus_finding_from_json({"title": "x"}, default_category="app_improvement") is None
+        # slug normalizes to empty string
+        assert _opus_finding_from_json({"topic_slug": "!!!", "title": "x"},
+                                       default_category="app_improvement") is None
+
+    def test_finding_from_json_invalid_category_falls_back(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T", "category": "garbage",
+                "body": "b", "priority": "medium"}
+        f = _opus_finding_from_json(item, default_category="audit_gap")
+        assert f.evidence["category"] == "audit_gap"
+
+    def test_finding_from_json_invalid_priority_defaults_to_medium(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T", "category": "app_improvement",
+                "body": "b", "priority": "garbage"}
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        assert f.evidence["priority"] == "medium"
+
+    def test_finding_from_json_caps_long_fields(self):
+        from v2.audit import _opus_finding_from_json
+        item = {"topic_slug": "x", "title": "T" * 500, "category": "app_improvement",
+                "body": "B" * 5000, "priority": "high",
+                "evidence_quote": "Q" * 5000}
+        f = _opus_finding_from_json(item, default_category="app_improvement")
+        # Caps from spec: title 200, body 2000, evidence_quote 600
+        assert len(f.title) <= 200
+        assert len(f.body) <= 2000
+        assert len(f.evidence["evidence_quote"]) <= 600
+
+
+class TestCheckAuditGapsOpus:
+    def _stub_cursor(self):
+        """A cursor whose fetchall returns the three queries _build_audit_gaps_prompt makes."""
+        cur = MagicMock()
+        # Query 1: findings summary (per check_code, severity)
+        findings_rows = [{"check_code": "ORPHAN_FK_NEWS_SIGNAL", "n": 3, "severity": "critical"}]
+        # Query 2: schema columns
+        schema_rows = [{"table_name": "decisions", "column_name": "id"},
+                       {"table_name": "decisions", "column_name": "ticker"}]
+        # Query 3: cost trend
+        cost_rows = [{"id": 1, "started_at": "2026-05-11", "tok": 1000, "total_findings": 5}]
+        cur.fetchall.side_effect = [findings_rows, schema_rows, cost_rows]
+        return cur
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_emits_audit_gap_finding(self, mock_call):
+        from v2 import audit
+        canned = {
+            "findings": [
+                {
+                    "topic_slug": "missing-thesis-rotation-check",
+                    "title": "No check for stale active theses",
+                    "category": "audit_gap",
+                    "priority": "medium",
+                    "body": "Active theses are not pruned by age.",
+                    "evidence_quote": "Some theses are >60 days old.",
+                    "proposed_check_code": "THESIS_STALE",
+                }
+            ]
+        }
+        usage = {"input_tokens": 100, "output_tokens": 50,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1000}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+
+        findings = audit.check_audit_gaps_opus(cur)
+
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.check_code == "AUDIT_GAP"
+        assert f.evidence["topic_slug"] == "missing-thesis-rotation-check"
+        assert f.evidence["proposed_check_code"] == "THESIS_STALE"
+        # Usage is stashed under the audit_gaps purpose
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["input_tokens"] == 100
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["latency_ms"] == 1000
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_empty_findings_returns_empty_list(self, mock_call):
+        from v2 import audit
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 100}
+        mock_call.return_value = ({"findings": []}, usage)
+        cur = self._stub_cursor()
+        assert audit.check_audit_gaps_opus(cur) == []
+        # Even on empty, usage is recorded
+        assert audit.get_last_opus_ideation_usage("audit_gaps")["latency_ms"] == 100
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_dedup_within_call(self, mock_call):
+        """Two findings with same topic_slug → only one Finding returned."""
+        from v2 import audit
+        canned = {"findings": [
+            {"topic_slug": "x", "title": "T1", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+            {"topic_slug": "X", "title": "T2 dup", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 1, "output_tokens": 1,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 1
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_caps_at_10_findings(self, mock_call):
+        from v2 import audit
+        many = [
+            {"topic_slug": f"slug-{i}", "title": f"T{i}",
+             "category": "audit_gap", "priority": "low", "body": "..."}
+            for i in range(15)
+        ]
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": many}, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 10
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_invalid_items_silently_dropped(self, mock_call):
+        from v2 import audit
+        canned = {"findings": [
+            {},  # missing everything
+            {"topic_slug": "ok", "title": "T", "category": "audit_gap",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_audit_gaps_opus(cur)
+        assert len(findings) == 1
+        assert findings[0].evidence["topic_slug"] == "ok"
+
+
+class TestCheckAppImprovementsOpus:
+    def _stub_cursor(self):
+        """Cursor whose fetchall returns the six queries _build_app_improvements_prompt makes."""
+        cur = MagicMock()
+        memos = [{"id": 1, "created_at": "2026-05-01", "body": "Memo body excerpt..."}]
+        rules = [{"id": 27, "status": "active", "rule_text": "Cap deployment...",
+                  "retired_at": None}]
+        attribution = [{"category": "thesis", "sample_size": 30, "sample_size_30d": 23,
+                        "avg_outcome_7d": -0.4, "win_rate_7d": 0.47,
+                        "avg_outcome_30d": -0.5, "win_rate_30d": 0.45}]
+        decisions = [{"id": 5, "date": "2026-05-10", "ticker": "AAPL", "action": "buy",
+                      "notional": 1000, "outcome_7d_pct": 1.2, "outcome_30d_pct": 3.4}]
+        theses = [{"id": 1, "ticker": "AAPL", "status": "active", "summary": "Bullish...",
+                   "outcome_pct": None, "closed_at": None}]
+        snapshots = [{"snapshot_date": "2026-05-10", "equity": 50000.0}]
+        cur.fetchall.side_effect = [memos, rules, attribution, decisions, theses, snapshots]
+        return cur
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_emits_app_improvement_finding(self, mock_call):
+        from v2 import audit
+        canned = {
+            "findings": [{
+                "topic_slug": "add-regime-detector",
+                "title": "Add a regime-detector signal",
+                "category": "app_improvement",
+                "priority": "high",
+                "body": "Detect bull/bear regimes from SPY trend...",
+                "evidence_quote": "Recent decisions ignore market regime.",
+            }]
+        }
+        usage = {"input_tokens": 200, "output_tokens": 80,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1500}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+
+        findings = audit.check_app_improvements_opus(cur)
+
+        assert len(findings) == 1
+        assert findings[0].check_code == "APP_IMPROVEMENT"
+        assert findings[0].evidence["topic_slug"] == "add-regime-detector"
+        assert audit.get_last_opus_ideation_usage("app_improvements")["input_tokens"] == 200
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_truncates_when_over_cap(self, mock_call, monkeypatch):
+        """If prompt is huge, the builder truncates and appends a TRUNCATED marker."""
+        from v2 import audit
+        # Set the cap to something very small so even the stub triggers truncation
+        monkeypatch.setenv("ALGO_AUDIT_OPUS_MAX_INPUT_TOKENS", "10")
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": []}, usage)
+        cur = self._stub_cursor()
+        audit.check_app_improvements_opus(cur)
+        # Verify the call_opus_ideation was passed a truncated prompt
+        sent_prompt = mock_call.call_args[0][1]  # second positional arg
+        assert "[INPUT TRUNCATED]" in sent_prompt
+        # Approx: cap=10 tokens → 40 chars limit + marker
+        assert len(sent_prompt) < 200
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_caps_at_10_findings(self, mock_call):
+        from v2 import audit
+        many = [
+            {"topic_slug": f"slug-{i}", "title": f"T{i}",
+             "category": "app_improvement", "priority": "low", "body": "..."}
+            for i in range(15)
+        ]
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = ({"findings": many}, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_app_improvements_opus(cur)
+        assert len(findings) == 10
+
+    @patch("v2.audit._call_opus_ideation")
+    def test_invalid_items_dropped(self, mock_call):
+        from v2 import audit
+        canned = {"findings": [
+            {"title": "missing slug"},
+            {"topic_slug": "ok", "title": "T", "category": "app_improvement",
+             "priority": "low", "body": "..."},
+        ]}
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                 "latency_ms": 1}
+        mock_call.return_value = (canned, usage)
+        cur = self._stub_cursor()
+        findings = audit.check_app_improvements_opus(cur)
+        assert len(findings) == 1
+        assert findings[0].evidence["topic_slug"] == "ok"
