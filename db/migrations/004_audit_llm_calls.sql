@@ -1,4 +1,4 @@
--- db/init/029_audit_llm_calls.sql
+-- db/migrations/004_audit_llm_calls.sql
 -- Per-LLM-call token accounting for audit runs.
 -- See docs/superpowers/specs/2026-05-12-opus-audit-ideation-design.md
 
