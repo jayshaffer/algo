@@ -29,6 +29,7 @@ from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .claude_client import capture_usage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 from .database.trading_db import (
+    close_orphan_running_stages,
     complete_session,
     complete_session_stage,
     fail_session,
@@ -475,6 +476,12 @@ def _run_dashboard_stage_wrapper(
 def _finalize_session(result: SessionResult, session_id: int | None) -> None:
     if session_id:
         try:
+            swept = close_orphan_running_stages(session_id)
+            if swept:
+                logger.warning("Closed orphan running stages: %s", swept)
+        except Exception as e:
+            logger.warning("Could not sweep orphan stages: %s", e)
+        try:
             if result.has_errors:
                 error_summary = "; ".join(
                     str(getattr(result, f)) for f in _ERROR_FIELDS if getattr(result, f)
@@ -551,29 +558,30 @@ def run_session(
         result.duration_seconds = time.monotonic() - start
         return result
 
-    attribution_constraints = _run_learning_refresh(result, session_id, completed_stages)
-    _run_pipeline_stage(result, session_id, completed_stages, skip_pipeline, pipeline_hours, pipeline_limit)
-    _run_strategist_stage(
-        result, session_id, completed_stages, skip_ideation,
-        model, max_turns, attribution_constraints, today,
-    )
-    _run_executor_stage(result, session_id, completed_stages, skip_executor, dry_run, executor_model, today)
-    _run_strategy_stage(result, session_id, completed_stages, skip_strategy)
-    if os.environ.get("ALGO_ENABLE_TRADE_POSTS") == "1":
-        # New live-trade pipeline. --skip-twitter / --skip-bluesky still apply
-        # but propagate inside run_trade_posts_stage (which decides per-platform
-        # based on the available client). Treat skip_twitter+skip_bluesky as
-        # an OR-skip of the whole stage for simplicity until we add a dedicated
-        # --skip-trade-posts flag.
-        skip_combined = skip_twitter and skip_bluesky
-        _run_trade_posts_stage_wrapper(result, session_id, completed_stages, skip_combined)
-    else:
-        _run_twitter_stage_wrapper(result, session_id, completed_stages, skip_twitter)
-        _run_bluesky_stage_wrapper(result, session_id, completed_stages, skip_bluesky)
-    _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard)
-
-    result.duration_seconds = time.monotonic() - start
-    _finalize_session(result, session_id)
+    try:
+        attribution_constraints = _run_learning_refresh(result, session_id, completed_stages)
+        _run_pipeline_stage(result, session_id, completed_stages, skip_pipeline, pipeline_hours, pipeline_limit)
+        _run_strategist_stage(
+            result, session_id, completed_stages, skip_ideation,
+            model, max_turns, attribution_constraints, today,
+        )
+        _run_executor_stage(result, session_id, completed_stages, skip_executor, dry_run, executor_model, today)
+        _run_strategy_stage(result, session_id, completed_stages, skip_strategy)
+        if os.environ.get("ALGO_ENABLE_TRADE_POSTS") == "1":
+            # New live-trade pipeline. --skip-twitter / --skip-bluesky still apply
+            # but propagate inside run_trade_posts_stage (which decides per-platform
+            # based on the available client). Treat skip_twitter+skip_bluesky as
+            # an OR-skip of the whole stage for simplicity until we add a dedicated
+            # --skip-trade-posts flag.
+            skip_combined = skip_twitter and skip_bluesky
+            _run_trade_posts_stage_wrapper(result, session_id, completed_stages, skip_combined)
+        else:
+            _run_twitter_stage_wrapper(result, session_id, completed_stages, skip_twitter)
+            _run_bluesky_stage_wrapper(result, session_id, completed_stages, skip_bluesky)
+        _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard)
+    finally:
+        result.duration_seconds = time.monotonic() - start
+        _finalize_session(result, session_id)
     return result
 
 

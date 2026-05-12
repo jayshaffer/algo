@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -49,7 +50,13 @@ from .intents import (
     resolve_buy_intent,
     resolve_sell_intent,
 )
-from .risk import MAX_SECTOR_PCT, SECTOR_MAP, check_sector_cap_for_buy, check_sector_concentration
+from .risk import (
+    MAX_SECTOR_PCT,
+    SECTOR_MAP,
+    check_churn_gate,
+    check_sector_cap_for_buy,
+    check_sector_concentration,
+)
 from .telemetry import record_event
 
 logger = logging.getLogger("trader")
@@ -419,7 +426,51 @@ def _resolve_logged_qty(result, decision) -> Decimal | None:
     return None
 
 
+_RULE_CITATION_RE = re.compile(r"\brule\s*#?\s*(\d+)\b", re.IGNORECASE)
+
+
+def _extract_rule_gate_ids(reasoning: str | None) -> list[int]:
+    """Find rule numbers cited in the executor's free-text reasoning.
+
+    Heuristic: matches "Rule 27", "rule #27", "RULE27", etc. Used to mint
+    'rule_gate' decision_signals so audit Rule 42 / Rule 32 enforcement
+    becomes observable without changing the executor's JSON contract.
+    """
+    if not reasoning:
+        return []
+    return sorted({int(m.group(1)) for m in _RULE_CITATION_RE.finditer(reasoning)})
+
+
+def _filter_existing_rule_ids(rule_ids: list[int]) -> list[int]:
+    """Drop rule_ids that don't exist in strategy_rules (active or retired)."""
+    if not rule_ids:
+        return []
+    from .database.connection import get_cursor
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id FROM strategy_rules WHERE id = ANY(%s)",
+            (rule_ids,),
+        )
+        return [row["id"] for row in cur.fetchall()]
+
+
 def _log_signal_links(decision_id: int, decision, errors: list[str]) -> None:
+    """Persist decision_signals for a single decision.
+
+    Beyond the strategist-cited refs, this also emits meta rows for the
+    audit's rule-citation checks:
+
+      * rule_gate:<rule_id> — every Rule N mentioned in `reasoning` that
+        exists in strategy_rules. Closes audit RULE_DEAD on Rule 42 (and
+        keeps Rule 32 / Rule 40 visible when the executor cites them).
+      * signal_gap:<decision_id> — for buy/sell decisions whose
+        non-meta refs are empty or thesis-only. Closes audit RULE_DEAD
+        on Rule 32 (the rule mandates flagging signal-attribution gaps).
+    """
+    meta_links: list[tuple] = []
+    persisted_news_macro = 0
+    persisted_thesis = 0
+
     if decision.signal_refs:
         try:
             validated_refs = validate_signal_refs(decision.signal_refs)
@@ -435,13 +486,34 @@ def _log_signal_links(decision_id: int, decision, errors: list[str]) -> None:
                     for ref in validated_refs
                 ]
                 insert_decision_signals_batch(signal_links)
+                for ref in validated_refs:
+                    if ref["type"] == "thesis":
+                        persisted_thesis += 1
+                    else:
+                        persisted_news_macro += 1
         except Exception as e:
             errors.append(f"Failed to log signal links for {decision.ticker}: {e}")
-    elif decision.action in ("buy", "sell"):
+
+    if decision.action in ("buy", "sell") and persisted_news_macro == 0:
+        # Rule 32: any decision whose rationale cites corroboration but
+        # signals=[] or signals=[thesis] only is an "incompletely attributed"
+        # decision; flag with a signal-gap marker row so reflection and the
+        # audit can see how often this happens.
+        meta_links.append((decision_id, "signal_gap", decision_id))
         logger.warning(
-            "%s: no signal_refs cited — decision will be excluded from attribution",
+            "%s: no concrete signal_refs cited — emitting signal_gap marker",
             decision.ticker,
         )
+
+    rule_ids = _filter_existing_rule_ids(_extract_rule_gate_ids(decision.reasoning))
+    for rid in rule_ids:
+        meta_links.append((decision_id, "rule_gate", rid))
+
+    if meta_links:
+        try:
+            insert_decision_signals_batch(meta_links)
+        except Exception as e:
+            errors.append(f"Failed to log meta signal links for {decision.ticker}: {e}")
 
 
 @dataclass
@@ -513,6 +585,31 @@ def _prepare_decision(
         return None
 
     decision.quantity = resolved_qty
+
+    # Rule 43: churn-review gate. Block any new buy/sell on a symbol that
+    # has accumulated CHURN_PAIR_THRESHOLD round-trip pairs in the last
+    # CHURN_WINDOW_DAYS. Applies to both directions because the rule
+    # targets the round-tripping pattern, not the next leg.
+    churn_breach = check_churn_gate(decision.ticker, reference_date=session_date)
+    if churn_breach:
+        errors.append(f"{decision.ticker} churn gate: {churn_breach}")
+        logger.warning("%s: REJECTED (churn gate) - %s", decision.ticker, churn_breach)
+        decision.reasoning = (
+            f"[REJECTED: {churn_breach}] (Rule 43 churn gate) {decision.reasoning}"
+        )
+        decision.action = "invalid"
+        totals.trades_failed += 1
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="risk_block",
+            payload={
+                "ticker": decision.ticker,
+                "rule_id": 43,
+                "reason_text": churn_breach,
+            },
+        )
+        return None
 
     # P3.30: hard sector-concentration gate for buys. Sells naturally reduce
     # exposure; this check only fires on buys. The same MAX_SECTOR_PCT is

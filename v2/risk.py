@@ -1,4 +1,5 @@
 """Portfolio-level risk checks."""
+from datetime import date, timedelta
 from decimal import Decimal
 
 SECTOR_MAP = {
@@ -22,6 +23,13 @@ SECTOR_MAP = {
 
 MAX_SECTOR_PCT = Decimal("0.40")
 MAX_POSITION_PCT = Decimal("0.10")  # max single-ticker exposure as a fraction of portfolio
+
+# Rule 43: churn-review gate. Six or more round-trip pairs (opposing
+# buy/sell actions within 7 days of each other) on a single symbol in a
+# 30-day window triggers a mandatory review before further trading.
+CHURN_PAIR_THRESHOLD = 6
+CHURN_WINDOW_DAYS = 30
+CHURN_PAIR_WINDOW_DAYS = 7
 
 
 def check_sector_concentration(
@@ -92,5 +100,82 @@ def check_sector_cap_for_buy(
         return (
             f"Sector '{sector}' projected exposure {pct:.0%} would exceed "
             f"{cap:.0%} cap (${projected:,.0f} of ${portfolio_value:,.0f})"
+        )
+    return None
+
+
+def count_round_trip_pairs(
+    ticker: str,
+    reference_date: date | None = None,
+    window_days: int = CHURN_WINDOW_DAYS,
+    pair_window_days: int = CHURN_PAIR_WINDOW_DAYS,
+) -> int:
+    """Count opposing buy/sell pairs on `ticker` within `pair_window_days`
+    of each other over the last `window_days`.
+
+    Algorithm: greedy match — sort the symbol's decisions ascending by
+    date; for each entry, if an opposite-action decision sits within
+    `pair_window_days`, mark both consumed and count one pair. A buy
+    consumed against an earlier sell counts the same as the reverse.
+    """
+    from .database.connection import get_cursor
+
+    if reference_date is None:
+        reference_date = date.today()
+    cutoff = reference_date - timedelta(days=window_days)
+
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, date, action
+            FROM decisions
+            WHERE ticker = %s
+              AND action IN ('buy', 'sell')
+              AND date > %s
+              AND date <= %s
+            ORDER BY date ASC, id ASC
+            """,
+            (ticker, cutoff, reference_date),
+        )
+        rows = list(cur.fetchall())
+
+    consumed = set()
+    pairs = 0
+    for i, row in enumerate(rows):
+        if row["id"] in consumed:
+            continue
+        for j in range(i + 1, len(rows)):
+            other = rows[j]
+            if other["id"] in consumed:
+                continue
+            if (other["date"] - row["date"]).days > pair_window_days:
+                break
+            if other["action"] != row["action"]:
+                consumed.add(row["id"])
+                consumed.add(other["id"])
+                pairs += 1
+                break
+    return pairs
+
+
+def check_churn_gate(
+    ticker: str,
+    reference_date: date | None = None,
+) -> str | None:
+    """Rule 43 gate: block trading if `ticker` has accumulated
+    CHURN_PAIR_THRESHOLD or more round-trip pairs in the last
+    CHURN_WINDOW_DAYS days.
+
+    Returns a breach message if the threshold is met, else None. The
+    caller is responsible for converting the breach into a HOLD decision
+    and emitting a `rule_gate:43` decision_signals row.
+    """
+    pairs = count_round_trip_pairs(ticker, reference_date=reference_date)
+    if pairs >= CHURN_PAIR_THRESHOLD:
+        return (
+            f"Churn gate (Rule 43): {ticker} has {pairs} round-trip pairs "
+            f"in the last {CHURN_WINDOW_DAYS}d "
+            f"(threshold {CHURN_PAIR_THRESHOLD}). Churn review required "
+            f"before further trading."
         )
     return None

@@ -144,6 +144,10 @@ def tool_create_thesis(
     citing the evidence that justified this thesis. IDs must come from
     get_news_signals / get_macro_signals / get_active_theses output. Invalid
     IDs are stripped at write time and reported back in the tool result.
+
+    At least one signal_ref is REQUIRED so downstream attribution can score the
+    decision. Use tool_adopt_thesis instead for theses created from already-held
+    orphan positions.
     """
     ticker = _norm_ticker(ticker) or ""
     logger.info(f"Creating thesis for {ticker} ({direction})")
@@ -159,6 +163,19 @@ def tool_create_thesis(
     positions = {p["ticker"] for p in get_positions()}
     if ticker in positions:
         return f"Error: {ticker} is already in the portfolio. Cannot create thesis."
+
+    # Enforce that the strategist cites evidence. Empty/invalid refs were the
+    # root cause of audit finding THESES_NO_SIGNAL_REFS (36 of 49 theses) and
+    # the downstream attribution coverage gap.
+    valid_refs = validate_signal_refs(signal_refs) if signal_refs else []
+    if not valid_refs:
+        return (
+            "Error: create_thesis requires at least one valid signal_ref. "
+            "Cite the news_signal / macro_signal / thesis IDs that justified "
+            "this thesis (use get_news_signals / get_macro_signals / "
+            "get_active_theses to find IDs). Use tool_adopt_thesis instead "
+            "for already-held orphan positions."
+        )
 
     # Create the thesis
     thesis_id = insert_thesis(
@@ -630,7 +647,7 @@ TOOL_DEFINITIONS = [
         "description": (
             "Create trade thesis. Rejects if ticker has active thesis or is held. "
             "IMPORTANT: Thesis text is NARRATIVE only. Do NOT include current share counts, entry prices, P&L, or any numeric state in the `thesis`, `entry_trigger`, `exit_trigger`, or `invalidation` fields — those are computed from the positions table at read time. Numeric state you embed here will drift and cause incorrect decisions. "
-            "Cite the news/macro signals that justify the thesis via `signal_refs` so the executor and attribution can trace the trade back to the evidence."
+            "REQUIRED: cite at least one news/macro/thesis signal via `signal_refs`. Calls without a valid signal_ref are rejected. Use adopt_thesis for orphan-position housekeeping where you have no fresh evidence."
         ),
         "input_schema": {
             "type": "object",
@@ -644,11 +661,12 @@ TOOL_DEFINITIONS = [
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                 "signal_refs": {
                     "type": "array",
+                    "minItems": 1,
                     "description": (
-                        "Signals supporting this thesis. IDs MUST come from "
-                        "get_news_signals / get_macro_signals / get_active_theses output. "
-                        "Invalid IDs are silently dropped at write time and reported back "
-                        "in the tool result."
+                        "REQUIRED. Signals supporting this thesis. At least one entry "
+                        "must reference a valid ID from get_news_signals / "
+                        "get_macro_signals / get_active_theses. Invalid IDs are "
+                        "stripped, and if none remain valid the call is rejected."
                     ),
                     "items": {
                         "type": "object",
@@ -666,6 +684,7 @@ TOOL_DEFINITIONS = [
             "required": [
                 "ticker", "direction", "thesis",
                 "entry_trigger", "exit_trigger", "invalidation", "confidence",
+                "signal_refs",
             ],
         },
     },

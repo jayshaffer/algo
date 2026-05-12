@@ -1890,8 +1890,12 @@ class TestSignalRefValidation:
             run_trading_session(dry_run=True)
         mocks["insert_decision_signals_batch"].assert_called_once()
 
-    def test_validated_refs_empty_skips_batch(self, mock_db, mock_cursor):
-        """validated_refs is empty → insert_decision_signals_batch NOT called."""
+    def test_validated_refs_empty_emits_signal_gap_marker(self, mock_db, mock_cursor):
+        """validated_refs is empty on buy/sell → signal_gap marker row inserted.
+
+        Closes audit Rule 32 enforcement: incompletely attributed decisions
+        get a 'signal_gap' decision_signals row flagging the attribution gap.
+        """
         decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[
             {"type": "junk", "id": 1},
         ])
@@ -1900,7 +1904,11 @@ class TestSignalRefValidation:
                 "validate_signal_refs": MagicMock(return_value=[]),
             })
             run_trading_session(dry_run=True)
-        mocks["insert_decision_signals_batch"].assert_not_called()
+        # Exactly one call with the signal_gap marker row.
+        calls = mocks["insert_decision_signals_batch"].call_args_list
+        assert len(calls) == 1
+        rows = calls[0].args[0]
+        assert any(r[1] == "signal_gap" for r in rows), rows
 
     def test_signal_link_exception_is_recorded(self, mock_db, mock_cursor):
         decision = _make_decision(ticker="AAPL", action="buy", signal_refs=[
@@ -1920,7 +1928,7 @@ class TestSignalRefValidation:
             _happy_path(stack, decisions=[decision])
             with caplog.at_level("WARNING", logger="trader"):
                 run_trading_session(dry_run=True)
-        assert any("no signal_refs cited" in r.getMessage() for r in caplog.records)
+        assert any("no concrete signal_refs cited" in r.getMessage() for r in caplog.records)
 
 
 class TestTraderCliMain:
