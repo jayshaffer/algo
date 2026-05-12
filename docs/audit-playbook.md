@@ -88,7 +88,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### BACKFILL_GAP_7D
 
 - **env:** both
-- **severity:** critical
+- **severity:** warn
 - **category:** integrity
 - **worktype:** code
 - **topic_slug:** backfill-gap-7d
@@ -108,7 +108,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### BACKFILL_GAP_30D
 
 - **env:** both
-- **severity:** critical
+- **severity:** warn
 - **category:** integrity
 - **worktype:** code
 - **topic_slug:** backfill-gap-30d
@@ -206,7 +206,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### STAGE_FAILURE_RATE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** health
 - **worktype:** code
 - **topic_slug:** stage-failure-rate
@@ -489,7 +489,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### TOOL_ERROR_RATE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** health
 - **worktype:** code
 - **topic_slug:** tool-error-rate
@@ -585,7 +585,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### EXECUTOR_TRUNCATION_RATE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** quality
 - **worktype:** code
 - **topic_slug:** executor-truncation-rate
@@ -612,7 +612,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **category:** quality
 - **worktype:** code
 - **topic_slug:** executor-schema-drift
-- **title_template:** "Executor LLM emitting unknown JSON keys (top:{n_top}, decision:{n_dec})"
+- **title_template:** "Executor schema drift: {top_drift_rows} unparsed top-level keys, {dec_drift_rows} unparsed decision keys"
 - **sql:**
   ```sql
   -- Top-level drift:
@@ -634,13 +634,13 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
   HAVING COUNT(*) >= 3;
   ```
 - **finding_when:** "either query returns rows"
-- **body_template:** "Executor response contains JSON fields not in our canonical key sets. Either the prompt is requesting new fields the parser doesn't handle, or the LLM is emitting drift we should either consume or suppress. Top-level drift: {top_level_drift}. Decision-level drift: {decision_drift}. Update EXECUTOR_KNOWN_*_KEYS or the parser in v2/agent.py."
+- **body_template:** "Executor response contains JSON fields not in our canonical key sets. Either the prompt is requesting new fields the parser doesn't handle, or the LLM is emitting drift we should either consume or suppress. Where `top_drift_rows` = row count of query 1 (distinct top-level unknown keys with count >= 3), `dec_drift_rows` = row count of query 2 (distinct decision-level unknown keys with count >= 3). See `audit_llm_calls` for full per-key counts. Update EXECUTOR_KNOWN_*_KEYS or the parser in v2/agent.py."
 - **suggested_fix:** "In `v2/agent.py`, either add the new keys to `EXECUTOR_KNOWN_TOP_LEVEL_KEYS` / `EXECUTOR_KNOWN_DECISION_KEYS` (if they should be consumed), or tighten the executor prompt to stop emitting them. If the keys carry useful data, plumb them through the parser."
 
 ### EXECUTOR_PARSE_FAILURE_RATE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** quality
 - **worktype:** code
 - **topic_slug:** executor-parse-failure-rate
@@ -663,7 +663,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### CLASSIFIER_ERROR_RATE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** health
 - **worktype:** code
 - **topic_slug:** classifier-error-rate
@@ -687,7 +687,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### AGENT_CALL_ERROR_RATE_BY_PURPOSE
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** health
 - **worktype:** code
 - **topic_slug:** agent-call-error-rate-by-purpose
@@ -732,11 +732,11 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 ### LOOP_MAX_TURNS_HIT
 
 - **env:** prod
-- **severity:** critical
+- **severity:** warn
 - **category:** health
 - **worktype:** code
 - **topic_slug:** loop-max-turns-hit
-- **title_template:** "{total} agentic-loop run(s) terminated by max_turns in last 7d"
+- **title_template:** "Executor loop hit max_turns {total_n} times across stages"
 - **sql:**
   ```sql
   SELECT stage_name, COUNT(*) AS n,
@@ -748,7 +748,7 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
   GROUP BY 1;
   ```
 - **finding_when:** "total >= 1 loop_completion event with stop_reason='max_turns' in last 7d"
-- **body_template:** "`run_agentic_loop` exited because it hit max_turns, not because Claude returned end_turn. Strategist or reflection didn't finish its task - playbook may be partial, rules may not have been proposed/retired. Either the prompt is asking for too much, the tool surface is too noisy, or max_turns needs raising. Per-stage breakdown: {by_stage}. Escalates to critical when total >= 3 (warn otherwise)."
+- **body_template:** "`run_agentic_loop` exited because it hit max_turns, not because Claude returned end_turn. Strategist or reflection didn't finish its task - playbook may be partial, rules may not have been proposed/retired. Either the prompt is asking for too much, the tool surface is too noisy, or max_turns needs raising.\n\nPer-stage breakdown:\n{rows}\n\nWhere `total_n` = sum of `n` across all rows, and `{rows}` is the SQL result rows as a list of (stage_name, n, session_ids[:5]) tuples. Sessions to investigate: see session_ids column. Escalates to critical when total_n >= 3 (warn otherwise)."
 - **suggested_fix:** "In `v2/claude_client.py` (`run_agentic_loop`), either raise `max_turns` for the affected stage, trim the tool surface, or simplify the prompt so the agent can converge. Cross-check the affected sessions to see what the agent was looping on."
 
 ### CACHE_HIT_RATIO_DEGRADATION
