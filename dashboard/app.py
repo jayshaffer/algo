@@ -422,7 +422,10 @@ def audit_finding_page(finding_id):
     f = get_audit_finding(finding_id)
     if not f:
         return "Not found", 404
-    return render_template("audit_finding.html", finding=f)
+    import os
+    jira_browse_base = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+    return render_template("audit_finding.html", finding=f,
+                           jira_browse_base=jira_browse_base)
 
 
 @app.route("/audit/findings/<int:finding_id>/status", methods=["POST"])

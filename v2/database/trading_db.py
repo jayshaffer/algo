@@ -1158,6 +1158,36 @@ def finalize_audit_run(*, run_id: int, total_findings: int, auto_fixed: int,
         )
 
 
+def insert_audit_llm_call(
+    *,
+    audit_run_id: int,
+    purpose: str,
+    model: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    latency_ms: int | None = None,
+) -> int:
+    """Record one LLM call's token usage for an audit run.
+
+    Returns the new row id. Inserts into audit_llm_calls (migration 029).
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO audit_llm_calls
+                (audit_run_id, purpose, model, input_tokens, output_tokens,
+                 cache_creation_tokens, cache_read_tokens, latency_ms)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+            """,
+            (audit_run_id, purpose, model, input_tokens, output_tokens,
+             cache_creation_tokens, cache_read_tokens, latency_ms),
+        )
+        return cur.fetchone()["id"]
+
+
 def try_advisory_audit_lock() -> bool:
     """Returns True if the lock was acquired; False if already held."""
     with get_cursor() as cur:
