@@ -18,6 +18,7 @@ from queries import (
     get_decision_tweets,
     get_equity_curve,
     get_latest_snapshot,
+    get_llm_call,
     get_open_orders,
     get_performance_metrics,
     get_playbook_action,
@@ -32,6 +33,7 @@ from queries import (
     get_session,
     get_session_decisions,
     get_session_events,
+    get_session_llm_calls,
     get_session_memo,
     get_session_stage_costs,
     get_session_theses_created,
@@ -191,6 +193,15 @@ def decision_detail(decision_id):
     )
 
 
+@app.route("/llm-call/<int:id>")
+def llm_call_detail(id):
+    """Render one LLM round-trip: system prompt, messages, response."""
+    row = get_llm_call(id)
+    if row is None:
+        abort(404)
+    return render_template("llm_call_detail.html", row=row)
+
+
 @app.route("/thesis/<int:thesis_id>")
 def thesis_detail(thesis_id):
     """Single thesis with linked decisions and playbook actions."""
@@ -233,7 +244,7 @@ def ticker_overview(sym):
 
 @app.route("/session/<int:session_id>")
 def session_detail(session_id):
-    """Unified per-session view: stages, events, decisions, theses, tweets, memo."""
+    """Unified per-session view: stages, events, decisions, theses, tweets, memo, LLM calls."""
     session = get_session(session_id)
     if not session:
         abort(404)
@@ -243,6 +254,7 @@ def session_detail(session_id):
     memo = get_session_memo(session_id)
     tweets = get_session_tweets(session_id)
     events = get_session_events(session_id, limit=200)
+    llm_calls = get_session_llm_calls(session_id)
     return render_template(
         "session_detail.html",
         session=session,
@@ -252,6 +264,7 @@ def session_detail(session_id):
         memo=memo,
         tweets=tweets,
         events=events,
+        llm_calls=llm_calls,
     )
 
 

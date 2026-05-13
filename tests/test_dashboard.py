@@ -112,6 +112,8 @@ def _reset_query_mocks():
     mock_queries.get_session_memo.return_value = None
     mock_queries.get_session_tweets.return_value = []
     mock_queries.get_session_events.return_value = []
+    mock_queries.get_session_llm_calls.return_value = []
+    mock_queries.get_llm_call.return_value = None
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1273,3 +1275,167 @@ class TestSessionDetail:
         resp = client.get("/session/42")
         assert b'href="/decision/11"' in resp.data
         assert b'href="/ticker/AAPL"' in resp.data
+
+    def test_renders_llm_calls_section_when_present(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        mock_queries.get_session_llm_calls.return_value = [
+            {
+                "id": 137, "stage_name": "trading", "purpose": "executor",
+                "sequence": 0, "model": "claude-haiku-4-5-20251001",
+                "input_tokens": 120, "output_tokens": 45,
+                "cache_read_tokens": 80, "cache_creation_tokens": 10,
+                "stop_reason": "end_turn", "duration_ms": 987,
+                "created_at": datetime(2026, 5, 13, 16, 30),
+            },
+        ]
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"LLM Calls" in resp.data
+        assert b"executor" in resp.data
+        assert b'href="/llm-call/137"' in resp.data
+
+    def test_renders_empty_state_when_no_llm_calls(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        mock_queries.get_session_llm_calls.return_value = []
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"No LLM calls captured for this session." in resp.data
+
+
+# ---------------------------------------------------------------------------
+# LLM call detail
+# ---------------------------------------------------------------------------
+
+
+class TestLlmCallDetail:
+    def _make_row(self, **overrides):
+        row = {
+            "id": 137,
+            "session_id": 42,
+            "stage_name": "trading",
+            "purpose": "executor",
+            "sequence": 0,
+            "model": "claude-haiku-4-5-20251001",
+            "system_prompt": "you are a trading executor",
+            "messages": [
+                {"role": "user", "content": "executor input json"},
+            ],
+            "tool_definitions": None,
+            "response_content": [
+                {"type": "text", "text": "decision json here"},
+            ],
+            "input_tokens": 120,
+            "output_tokens": 45,
+            "cache_read_tokens": 80,
+            "cache_creation_tokens": 10,
+            "stop_reason": "end_turn",
+            "duration_ms": 987,
+            "created_at": datetime(2026, 5, 13, 16, 30),
+        }
+        row.update(overrides)
+        return row
+
+    def test_returns_200_with_header_fields(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row()
+        resp = client.get("/llm-call/137")
+        assert resp.status_code == 200
+        assert b"executor" in resp.data
+        assert b"claude-haiku-4-5-20251001" in resp.data
+        assert b"end_turn" in resp.data
+        assert b"120" in resp.data
+        assert b"45" in resp.data
+        assert b'href="/session/42"' in resp.data
+
+    def test_renders_system_prompt(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row()
+        resp = client.get("/llm-call/137")
+        assert b"you are a trading executor" in resp.data
+
+    def test_skips_system_prompt_section_when_null(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row(system_prompt=None)
+        resp = client.get("/llm-call/137")
+        assert b"System prompt" not in resp.data
+
+    def test_renders_tool_definitions_when_present(self, client):
+        tools = [{"name": "get_positions", "input_schema": {"type": "object"}}]
+        mock_queries.get_llm_call.return_value = self._make_row(tool_definitions=tools)
+        resp = client.get("/llm-call/137")
+        assert b"Tool definitions" in resp.data
+        assert b"get_positions" in resp.data
+
+    def test_skips_tool_definitions_when_null(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row(tool_definitions=None)
+        resp = client.get("/llm-call/137")
+        assert b"Tool definitions" not in resp.data
+
+    def test_renders_text_message_in_transcript(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row(
+            messages=[{"role": "user", "content": "hello executor"}],
+        )
+        resp = client.get("/llm-call/137")
+        assert b"hello executor" in resp.data
+
+    def test_renders_tool_use_and_tool_result_and_unknown_blocks(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "get_positions", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [{"type": "text", "text": "positions json"}],
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "future_block_type", "foo": "bar"},
+                    ],
+                },
+            ],
+        )
+        resp = client.get("/llm-call/137")
+        assert b"get_positions" in resp.data
+        assert b"t1" in resp.data
+        assert b"positions json" in resp.data
+        assert b"Unknown block type" in resp.data
+        assert b"future_block_type" in resp.data
+
+    def test_renders_response_content(self, client):
+        mock_queries.get_llm_call.return_value = self._make_row(
+            response_content=[{"type": "text", "text": "executor decision json"}],
+        )
+        resp = client.get("/llm-call/137")
+        assert b"executor decision json" in resp.data
+
+    def test_404_when_not_found(self, client):
+        mock_queries.get_llm_call.return_value = None
+        resp = client.get("/llm-call/99999")
+        assert resp.status_code == 404
+
+    def test_handles_null_response_content(self, client):
+        """A row where response_content is NULL (call failed) must not 500."""
+        mock_queries.get_llm_call.return_value = self._make_row(response_content=None)
+        resp = client.get("/llm-call/137")
+        assert resp.status_code == 200
+        assert b"No response content captured" in resp.data

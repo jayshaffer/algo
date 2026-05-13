@@ -616,6 +616,54 @@ def get_session_events(session_id: int, limit: int = 200):
     return get_recent_agent_events(limit=limit, session_id=session_id)
 
 
+def get_session_llm_calls(session_id: int):
+    """Return summary rows from llm_call_contexts for one session.
+
+    Excludes the JSONB columns (messages, tool_definitions,
+    response_content) because they are large and the list view does not
+    need them. Ordering puts the executor row first, then strategist
+    loop turns in sequence, then reflection loop turns in sequence.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, stage_name, purpose, sequence, model,
+                   input_tokens, output_tokens,
+                   cache_read_tokens, cache_creation_tokens,
+                   stop_reason, duration_ms, created_at
+            FROM llm_call_contexts
+            WHERE session_id = %s
+            ORDER BY
+              CASE purpose
+                WHEN 'executor' THEN 0
+                WHEN 'strategist_loop' THEN 1
+                WHEN 'reflection_loop' THEN 2
+                ELSE 3
+              END,
+              sequence
+        """, (session_id,))
+        return cur.fetchall()
+
+
+def get_llm_call(call_id: int):
+    """Return a single llm_call_contexts row by id, or None.
+
+    Returns all columns including the JSONB payloads (messages,
+    tool_definitions, response_content) — the detail view needs them.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_id, stage_name, purpose, sequence, model,
+                   system_prompt, messages, tool_definitions,
+                   response_content,
+                   input_tokens, output_tokens,
+                   cache_read_tokens, cache_creation_tokens,
+                   stop_reason, duration_ms, created_at
+            FROM llm_call_contexts
+            WHERE id = %s
+        """, (call_id,))
+        return cur.fetchone()
+
+
 def lookup_session_id_by_date(d, session_type: str = 'daily'):
     """Return the most recent sessions.id for a given date + type, or None.
 
