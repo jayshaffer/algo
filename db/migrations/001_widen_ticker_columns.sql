@@ -5,4 +5,9 @@ ALTER TABLE positions ALTER COLUMN ticker TYPE VARCHAR(128);
 ALTER TABLE open_orders ALTER COLUMN ticker TYPE VARCHAR(128);
 ALTER TABLE decisions ALTER COLUMN ticker TYPE VARCHAR(128);
 ALTER TABLE theses ALTER COLUMN ticker TYPE VARCHAR(128);
-ALTER TABLE documents ALTER COLUMN ticker TYPE VARCHAR(128);
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'documents') THEN
+    ALTER TABLE documents ALTER COLUMN ticker TYPE VARCHAR(128);
+  END IF;
+END $$;

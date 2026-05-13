@@ -169,3 +169,74 @@ tasks:
     cmds:
       - git config core.hooksPath .githooks
       - echo "Git hooks installed. Bypass with 'git commit --no-verify'."
+
+  # ---------------------------------------------------------------------------
+  # Database
+  # ---------------------------------------------------------------------------
+  db:migrate:
+    desc: Apply pending db/migrations/*.sql files to prod db (tracked via schema_migrations)
+    deps: [docker:up]
+    cmds:
+      - |
+        psql_exec() { docker compose exec -T db psql -U algo -d trading "$@"; }
+        psql_exec -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());" >/dev/null
+        for f in $(ls db/migrations/*.sql | sort); do
+          name=$(basename "$f")
+          applied=$(psql_exec -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$name'")
+          if [ "$applied" = "1" ]; then
+            echo "==> skipping $name (already applied)"
+            continue
+          fi
+          echo "==> applying $name"
+          { cat "$f"; printf "\nINSERT INTO schema_migrations (filename) VALUES ('%s');\n" "$name"; } \
+            | psql_exec -v ON_ERROR_STOP=1 --single-transaction -f -
+        done
+
+  # ---------------------------------------------------------------------------
+  # Audit (driven by docs/audit-playbook.md + Claude Code /loop)
+  # ---------------------------------------------------------------------------
+  audit:rehearse:
+    desc: Run one Phase A discovery tick with no Jira writes; prints would-be payloads
+    cmds:
+      - claude "/audit-rehearse"
+
+  audit:loop:start:
+    desc: Start the long-lived audit /loop in a detached tmux session named 'audit-loop'
+    cmds:
+      - |
+        if tmux has-session -t audit-loop 2>/dev/null; then
+          echo "Session 'audit-loop' already exists. Attach with: task audit:loop:attach"
+          exit 1
+        fi
+        tmux new-session -d -s audit-loop -c "$(pwd)" "claude '/loop 24h /audit-tick'"
+        echo "Started. Attach with: task audit:loop:attach"
+
+  audit:loop:attach:
+    desc: Attach to the running audit /loop tmux session (detach with Ctrl-b d)
+    interactive: true
+    cmds:
+      - tmux attach -t audit-loop
+
+  audit:loop:stop:
+    desc: Kill the audit /loop tmux session
+    cmds:
+      - tmux kill-session -t audit-loop && echo "Stopped." || echo "No session 'audit-loop' running."
+
+  paper:db:migrate:
+    desc: Apply pending db/migrations/*.sql files to paper db (tracked via schema_migrations)
+    deps: [paper:up]
+    cmds:
+      - |
+        psql_exec() { docker compose -f docker-compose.yml -f docker-compose.paper.yml exec -T db-paper psql -U algo -d trading "$@"; }
+        psql_exec -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());" >/dev/null
+        for f in $(ls db/migrations/*.sql | sort); do
+          name=$(basename "$f")
+          applied=$(psql_exec -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$name'")
+          if [ "$applied" = "1" ]; then
+            echo "==> skipping $name (already applied)"
+            continue
+          fi
+          echo "==> applying $name"
+          { cat "$f"; printf "\nINSERT INTO schema_migrations (filename) VALUES ('%s');\n" "$name"; } \
+            | psql_exec -v ON_ERROR_STOP=1 --single-transaction -f -
+        done
