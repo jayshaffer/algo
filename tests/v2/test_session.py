@@ -845,6 +845,33 @@ class TestStrategistMemoPersistence:
         assert result.strategist_error is not None
         assert "without writing a playbook" in result.strategist_error
 
+    def test_strategist_memo_skipped_when_summary_too_short(self):
+        """ALGO-15: strategist agentic loops occasionally end with a stub
+        final assistant text ("all good", "done"). Persisting those as
+        strategist_notes pollutes the journal — recent prod data showed
+        103/112 memos collapsed to the literal string "all good".
+        Skip the insert when the summary is below the min-length guard."""
+        mock_ideation_result = MagicMock()
+        mock_ideation_result.final_summary = "all good"
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
+             patch("v2.session.insert_strategy_memo") as mock_memo:
+
+            run_session(dry_run=False)
+
+        mock_memo.assert_not_called()
+
 
 class TestReflectionMemoGuard:
     """P1.15: Stage 4 reflection must produce a memo or fail the stage —

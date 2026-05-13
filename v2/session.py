@@ -249,17 +249,33 @@ def _run_pipeline_stage(
             logger.error("Pipeline failed: %s — continuing with existing signals", e)
 
 
+STRATEGIST_MEMO_MIN_LENGTH = 40
+
+
 def _persist_strategist_memo(result: SessionResult, session_date) -> None:
     try:
-        if result.strategist_result and result.strategist_result.final_summary:
-            state = get_current_strategy_state()
-            insert_strategy_memo(
-                session_date=session_date,
-                memo_type='strategist_notes',
-                content=result.strategist_result.final_summary,
-                strategy_state_id=state['id'] if state else None,
+        if not (result.strategist_result and result.strategist_result.final_summary):
+            return
+        summary = result.strategist_result.final_summary.strip()
+        # Reject trivially-short summaries ("all good", "done", "ok") so the
+        # journal isn't polluted with placeholder rows. ALGO-15: 92% of recent
+        # strategist_notes had collapsed to the literal "all good" (8 chars),
+        # erasing run-to-run continuity. If the model didn't produce a real
+        # summary, recording that is more honest than recording the stub.
+        if len(summary) < STRATEGIST_MEMO_MIN_LENGTH:
+            logger.warning(
+                "Strategist memo skipped: final_summary too short (%d chars): %r",
+                len(summary), summary,
             )
-            logger.info("Strategist summary saved as memo")
+            return
+        state = get_current_strategy_state()
+        insert_strategy_memo(
+            session_date=session_date,
+            memo_type='strategist_notes',
+            content=summary,
+            strategy_state_id=state['id'] if state else None,
+        )
+        logger.info("Strategist summary saved as memo")
     except Exception as e:
         logger.warning("Could not save strategist memo: %s", e)
 
