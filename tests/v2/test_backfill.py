@@ -1,13 +1,17 @@
 """Tests for v2 outcome backfill with trading-day offsets."""
 
+import sys
 from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from v2.backfill import (
     backfill_outcomes,
     calculate_outcome,
     get_decisions_needing_backfill,
+    main,
     trading_day_cutoff,
     trading_day_offset,
 )
@@ -405,3 +409,38 @@ class TestBackfillNoPrice:
         stats = backfill_outcomes(days=7, dry_run=True)
 
         mock_update.assert_not_called()
+
+
+class TestMainDecisionIdFlag:
+    """ALGO-9: CLI exposes --decision-id for the audit auto-fix path."""
+
+    @patch("v2.backfill.backfill_decision_outcomes")
+    def test_decision_id_invokes_single_backfill(self, mock_backfill, monkeypatch, capsys):
+        mock_backfill.return_value = {"decision_id": 42, "windows_filled": [7, 30]}
+        monkeypatch.setattr(sys, "argv", ["v2.backfill", "--decision-id", "42"])
+        main()
+        mock_backfill.assert_called_once_with(42)
+        out = capsys.readouterr().out
+        assert "[42]" in out and "Filled windows" in out
+
+    @patch("v2.backfill.backfill_decision_outcomes")
+    def test_decision_id_no_windows_filled_prints_skip_reason(self, mock_backfill, monkeypatch, capsys):
+        mock_backfill.return_value = {"decision_id": 99, "windows_filled": []}
+        monkeypatch.setattr(sys, "argv", ["v2.backfill", "--decision-id", "99"])
+        main()
+        out = capsys.readouterr().out
+        assert "No windows filled" in out
+
+    @patch("v2.backfill.backfill_decision_outcomes")
+    def test_decision_id_rejects_dry_run(self, mock_backfill, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["v2.backfill", "--decision-id", "1", "--dry-run"])
+        with pytest.raises(SystemExit):
+            main()
+        mock_backfill.assert_not_called()
+
+    @patch("v2.backfill.backfill_decision_outcomes")
+    def test_decision_id_rejects_days_filter(self, mock_backfill, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["v2.backfill", "--decision-id", "1", "--days", "7"])
+        with pytest.raises(SystemExit):
+            main()
+        mock_backfill.assert_not_called()

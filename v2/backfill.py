@@ -305,8 +305,26 @@ def main():
     parser = argparse.ArgumentParser(description="Backfill decision outcomes")
     parser.add_argument("--dry-run", action="store_true", help="Don't update database")
     parser.add_argument("--days", type=int, choices=[7, 30], help="Only backfill specific timeframe")
+    parser.add_argument(
+        "--decision-id",
+        type=int,
+        help="Re-run 7d+30d backfill for a single decision (audit auto-fix path).",
+    )
 
     args = parser.parse_args()
+
+    if args.decision_id is not None:
+        if args.dry_run:
+            parser.error("--decision-id does not support --dry-run")
+        if args.days is not None:
+            parser.error("--decision-id always backfills both 7d and 30d; drop --days")
+        stats = backfill_decision_outcomes(args.decision_id)
+        filled = stats.get("windows_filled") or []
+        if not filled:
+            print(f"[{args.decision_id}] No windows filled (decision missing, not buy/sell, or no exit price).")
+        else:
+            print(f"[{args.decision_id}] Filled windows: {filled}")
+        return
 
     if args.days:
         backfill_outcomes(days=args.days, dry_run=args.dry_run)
