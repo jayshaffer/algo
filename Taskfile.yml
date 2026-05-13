@@ -88,6 +88,12 @@ tasks:
     cmds:
       - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
 
+  backfill:decision:
+    desc: Re-run 7d+30d backfill for a single decision (pass --decision-id <ID> via CLI_ARGS). Audit auto-fix path for MISSING_OUTCOMES findings.
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
+
   entertainment:
     desc: Generate and post entertainment tweets
     deps: [docker:up]
@@ -143,6 +149,12 @@ tasks:
     deps: [paper:up]
     cmds:
       - docker compose -f docker-compose.yml -f docker-compose.paper.yml logs -f dashboard-paper
+
+  paper:backfill:decision:
+    desc: Re-run 7d+30d backfill for a single paper decision (pass --decision-id <ID> via CLI_ARGS).
+    deps: [paper:up]
+    cmds:
+      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.backfill {{.CLI_ARGS}}
 
   # ---------------------------------------------------------------------------
   # Dev
