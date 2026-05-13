@@ -861,23 +861,24 @@ def insert_tweet(
     error: str | None = None,
     platform: str = "twitter",
     decision_id: int | None = None,
+    session_id: int | None = None,
 ) -> int:
     """Log a tweet/post to the audit table.
 
-    decision_id (new) ties a per-trade post back to its source decision,
-    enabling the (decision_id, platform) rerun guard used by the live-
-    trade pipeline. Recap and entertainment posts leave it NULL.
+    decision_id ties a per-trade post back to its source decision.
+    session_id ties the row to the sessions.id of the run that produced it
+    (per-run; nullable for legacy rows).
     """
     with get_cursor() as cur:
         cur.execute("""
             INSERT INTO tweets (
                 session_date, tweet_type, tweet_text, tweet_id,
-                posted, error, platform, decision_id
+                posted, error, platform, decision_id, session_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (session_date, tweet_type, tweet_text, tweet_id,
-              posted, error, platform, decision_id))
+              posted, error, platform, decision_id, session_id))
         return cur.fetchone()["id"]
 
 
