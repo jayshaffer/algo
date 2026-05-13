@@ -112,9 +112,12 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
    - SELLS: exit_full (null magnitude) · exit_partial_pct (0-100) · exit_dollar (dollars) · trim_to_portfolio_pct (target % of portfolio)
    - BUYS: invest_dollar (dollars) · invest_portfolio_pct (0-100) · invest_buying_power_pct (0-100) · add_to_target_pct (target % of portfolio, for adding to existing positions)
 
+   **To hold a position, OMIT it from `priority_actions`** — the default for any unlisted position is hold. Do not emit `exit_partial_pct=0` or any zero-magnitude intent as a hold proxy; `write_playbook` rejects them at the tool boundary. For a full exit use `exit_full` (null magnitude); for any other intent the magnitude must be > 0.
+
    Example: "exit AMZN fully" → {{"action":"sell","intent_type":"exit_full","intent_magnitude":null}}
    Example: "put $500 into AMD" → {{"action":"buy","intent_type":"invest_dollar","intent_magnitude":500}}
    Example: "take half off SPY" → {{"action":"sell","intent_type":"exit_partial_pct","intent_magnitude":50}}
+   Example: "hold MSFT through earnings" → do not emit any action for MSFT.
 8. **Reversal Justification.** Before adding a buy/sell action to today's playbook, check `get_recent_playbooks` for the same ticker. If today's action is the opposite of what you wrote in the past 7 days, your action's `reasoning` must explicitly cite (a) the prior playbook date and action, and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. Re-narrating the same fundamentals from a different angle is not new evidence; if you cannot articulate (b), do not propose the action."""
 
 CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(

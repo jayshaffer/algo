@@ -238,6 +238,93 @@ class TestWritePlaybook:
         mock_write.assert_called_once()
 
 
+class TestWritePlaybookZeroMagnitude:
+    """ALGO-13: reject zero/missing-magnitude intents that need a positive value.
+    The strategist was using `exit_partial_pct=0` as a hold proxy; the correct
+    shape is to omit the action entirely."""
+
+    def test_exit_partial_pct_zero_rejected(self):
+        result = tool_write_playbook(
+            market_outlook="neutral",
+            priority_actions=[
+                {"ticker": "AMZN", "action": "sell", "thesis_id": 7,
+                 "intent_type": "exit_partial_pct", "intent_magnitude": 0,
+                 "reasoning": "hold via 0%", "confidence": "medium"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result
+        assert "exit_partial_pct" in result
+        assert "intent_magnitude=0" in result or "magnitude=0" in result
+        assert "omit" in result.lower()
+
+    def test_invest_dollar_zero_rejected(self):
+        result = tool_write_playbook(
+            market_outlook="neutral",
+            priority_actions=[
+                {"ticker": "MSFT", "action": "buy", "thesis_id": 8,
+                 "intent_type": "invest_dollar", "intent_magnitude": 0,
+                 "reasoning": "no-op buy", "confidence": "low"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result
+        assert "invest_dollar" in result
+
+    def test_invest_portfolio_pct_missing_magnitude_rejected(self):
+        result = tool_write_playbook(
+            market_outlook="neutral",
+            priority_actions=[
+                {"ticker": "MSFT", "action": "buy", "thesis_id": 8,
+                 "intent_type": "invest_portfolio_pct",
+                 "reasoning": "forgot magnitude", "confidence": "low"},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result
+        assert "invest_portfolio_pct" in result
+
+    def test_exit_full_with_null_magnitude_accepted(self, mock_db, mock_cursor):
+        """exit_full is the documented null-magnitude intent; should pass."""
+        from unittest.mock import patch
+
+        with patch("v2.tools.replace_playbook_actions_atomic",
+                   return_value=(101, 1)) as mock_write:
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "AMZN", "action": "sell", "thesis_id": 7,
+                     "intent_type": "exit_full", "intent_magnitude": None,
+                     "reasoning": "thesis invalidated", "confidence": "high"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" not in result
+        mock_write.assert_called_once()
+
+    def test_exit_partial_pct_positive_accepted(self, mock_db, mock_cursor):
+        from unittest.mock import patch
+
+        with patch("v2.tools.replace_playbook_actions_atomic",
+                   return_value=(102, 1)) as mock_write:
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "SPY", "action": "sell", "thesis_id": 9,
+                     "intent_type": "exit_partial_pct", "intent_magnitude": 50,
+                     "reasoning": "trim", "confidence": "medium"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" not in result
+        mock_write.assert_called_once()
+
+
 # --- Market snapshot tests ---
 
 

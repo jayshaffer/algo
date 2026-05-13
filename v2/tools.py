@@ -539,6 +539,31 @@ def tool_write_playbook(
                 f"Create or adopt a thesis first, then reference its id."
             )
 
+    # ALGO-13: reject zero-magnitude / missing-magnitude intents that require
+    # a positive number. The strategist was using `exit_partial_pct=0` as a
+    # "hold" proxy, which the executor correctly translated to action='hold'
+    # but at the cost of (a) polluting the playbook with no-op rows, (b)
+    # misrepresenting strategist intent in decisions.reasoning, and (c)
+    # burning tool-call budget on actions that don't change behavior. The
+    # correct shape for "hold this position" is to omit it from
+    # priority_actions; the correct shape for "fully exit" is exit_full.
+    _MAG_REQUIRED_INTENTS = {
+        "exit_partial_pct", "exit_dollar", "trim_to_portfolio_pct",
+        "invest_dollar", "invest_portfolio_pct", "invest_buying_power_pct",
+        "add_to_target_pct",
+    }
+    for action in priority_actions:
+        intent = action.get("intent_type")
+        mag = action.get("intent_magnitude")
+        if intent in _MAG_REQUIRED_INTENTS and (mag is None or float(mag) <= 0):
+            return (
+                f"Error: Playbook {action.get('action')} for {action.get('ticker')} "
+                f"has intent_type={intent} with intent_magnitude={mag}. This intent "
+                f"requires a positive magnitude. To hold/no-op a position, omit it "
+                f"from priority_actions (the default for any unlisted position is "
+                f"hold). For a full exit, use intent_type=exit_full instead."
+            )
+
     try:
         playbook_date = date.today()
         # P2.22: single transaction for upsert + delete + N inserts. The
