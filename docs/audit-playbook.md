@@ -137,8 +137,8 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
   ```sql
   SELECT DISTINCT category FROM signal_attribution;
   ```
-- **finding_when:** "any returned category has unknown prefix OR a `news_signal:`/`macro_signal:` suffix not in the classifier's enums"
-- **body_template:** "`signal_attribution` contains categories outside the classifier's valid enums. Returned categories: {categories}. Compare against the classifier's VALID_TICKER_CATEGORIES / VALID_MACRO_CATEGORIES enums (in `v2/classifier.py`) and file a ticket for any unexpected entries. Allowed shapes: literal `thesis`, `news_signal:<VALID_TICKER_CATEGORIES>`, `macro_signal:<VALID_MACRO_CATEGORIES>`. Anything else implies a classifier regression or a direct DB write."
+- **finding_when:** "any returned category is NOT one of the meta-marker literals (`signal_gap`, `rule_gate`, `thesis`) AND does not have a `news_signal:<VALID_TICKER_CATEGORIES>` / `macro_signal:<VALID_MACRO_CATEGORIES>` shape"
+- **body_template:** "`signal_attribution` contains categories outside the classifier's valid enums. Returned categories: {categories}. Compare against the classifier's VALID_TICKER_CATEGORIES / VALID_MACRO_CATEGORIES enums (in `v2/classifier.py`) and file a ticket for any unexpected entries. Allowed shapes: literal `thesis`, `signal_gap`, or `rule_gate` (the latter two are deliberate observability markers emitted by `v2/trader.py`); `news_signal:<VALID_TICKER_CATEGORIES>`; `macro_signal:<VALID_MACRO_CATEGORIES>`. Anything else implies a classifier regression or a direct DB write."
 - **suggested_fix:** "Inspect `v2/classifier.py` for recent changes to VALID_TICKER_CATEGORIES / VALID_MACRO_CATEGORIES. If a category was renamed/removed, write a migration to remap the offending `signal_attribution` rows; if a regression introduced a new category that was never registered, restore the enum entry and re-classify."
 
 ### SNAPSHOT_GAP
