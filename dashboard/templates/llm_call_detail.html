@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}LLM Call #{{ row.id }}{% endblock %}
+
+{% macro render_blocks(blocks) %}
+  {% if blocks is string %}
+    <pre class="text-xs whitespace-pre-wrap">{{ blocks }}</pre>
+  {% else %}
+    {% for block in blocks %}
+      {% if block.type == 'text' %}
+        <pre class="text-xs whitespace-pre-wrap">{{ block.text }}</pre>
+      {% elif block.type == 'tool_use' %}
+        <div class="border-l-4 border-blue-300 pl-2 my-2">
+          <div><strong>Tool call:</strong> <code class="font-mono">{{ block.name }}</code> <span class="text-gray-500 text-xs">(id={{ block.id }})</span></div>
+          <details><summary class="text-sm text-gray-500 cursor-pointer">input</summary>
+            <pre class="text-xs whitespace-pre-wrap">{{ block.input | tojson(indent=2) }}</pre>
+          </details>
+        </div>
+      {% elif block.type == 'tool_result' %}
+        <div class="border-l-4 border-green-300 pl-2 my-2">
+          <div><strong>Tool result</strong> <span class="text-gray-500 text-xs">(tool_use_id={{ block.tool_use_id }})</span></div>
+          <details><summary class="text-sm text-gray-500 cursor-pointer">content</summary>
+            {{ render_blocks(block.content) }}
+          </details>
+        </div>
+      {% else %}
+        <div class="border-l-4 border-yellow-300 pl-2 my-2">
+          <div><strong>Unknown block type:</strong> <code class="font-mono">{{ block.type }}</code></div>
+          <details><summary class="text-sm text-gray-500 cursor-pointer">raw</summary>
+            <pre class="text-xs whitespace-pre-wrap">{{ block | tojson(indent=2) }}</pre>
+          </details>
+        </div>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="mb-4">
+  <a class="text-blue-600 hover:underline" href="{{ url_for('session_detail', session_id=row.session_id) }}">&larr; back to session #{{ row.session_id }}</a>
+</div>
+
+<h1 class="text-2xl font-bold mb-4">LLM Call #{{ row.id }}</h1>
+
+<div class="bg-white rounded-lg shadow mb-6">
+  <div class="p-4 border-b"><h2 class="text-lg font-semibold">Summary</h2></div>
+  <div class="p-4">
+    <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+      <dt class="text-gray-500">Session</dt>
+      <dd><a class="text-blue-600 hover:underline" href="{{ url_for('session_detail', session_id=row.session_id) }}">#{{ row.session_id }}</a></dd>
+      <dt class="text-gray-500">Stage</dt><dd>{{ row.stage_name }}</dd>
+      <dt class="text-gray-500">Purpose</dt><dd>{{ row.purpose }}</dd>
+      <dt class="text-gray-500">Sequence</dt><dd>{{ row.sequence }}</dd>
+      <dt class="text-gray-500">Model</dt><dd class="font-mono text-xs">{{ row.model }}</dd>
+      <dt class="text-gray-500">Stop reason</dt><dd>{{ row.stop_reason or '-' }}</dd>
+      <dt class="text-gray-500">Duration</dt><dd class="font-mono text-xs">{{ row.duration_ms }} ms</dd>
+      <dt class="text-gray-500">Tokens in / out</dt><dd class="font-mono text-xs">{{ row.input_tokens }} / {{ row.output_tokens }}</dd>
+      <dt class="text-gray-500">Cache read / creation</dt><dd class="font-mono text-xs">{{ row.cache_read_tokens or 0 }} / {{ row.cache_creation_tokens or 0 }}</dd>
+      <dt class="text-gray-500">Captured at</dt><dd>{{ row.created_at }}</dd>
+    </dl>
+  </div>
+</div>
+
+{% if row.system_prompt %}
+<div class="bg-white rounded-lg shadow mb-6">
+  <div class="p-4 border-b"><h2 class="text-lg font-semibold">System prompt</h2></div>
+  <div class="p-4">
+    <details open>
+      <summary class="text-sm text-gray-500 cursor-pointer">show</summary>
+      <pre class="text-xs whitespace-pre-wrap mt-2">{{ row.system_prompt }}</pre>
+    </details>
+  </div>
+</div>
+{% endif %}
+
+{% if row.tool_definitions %}
+<div class="bg-white rounded-lg shadow mb-6">
+  <div class="p-4 border-b"><h2 class="text-lg font-semibold">Tool definitions</h2></div>
+  <div class="p-4">
+    <details>
+      <summary class="text-sm text-gray-500 cursor-pointer">show</summary>
+      <pre class="text-xs whitespace-pre-wrap mt-2">{{ row.tool_definitions | tojson(indent=2) }}</pre>
+    </details>
+  </div>
+</div>
+{% endif %}
+
+<div class="bg-white rounded-lg shadow mb-6">
+  <div class="p-4 border-b"><h2 class="text-lg font-semibold">Conversation transcript ({{ row.messages|length }} message{{ 's' if row.messages|length != 1 else '' }})</h2></div>
+  <div class="p-4 space-y-4">
+  {% for msg in row.messages %}
+    <div>
+      <h3 class="text-sm font-semibold uppercase text-gray-500">{{ msg.role }}</h3>
+      {{ render_blocks(msg.content) }}
+    </div>
+  {% endfor %}
+  </div>
+</div>
+
+<div class="bg-white rounded-lg shadow mb-6">
+  <div class="p-4 border-b"><h2 class="text-lg font-semibold">Assistant response</h2></div>
+  <div class="p-4">
+    {{ render_blocks(row.response_content) }}
+  </div>
+</div>
+{% endblock %}

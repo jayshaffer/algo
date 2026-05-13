@@ -193,6 +193,15 @@ def decision_detail(decision_id):
     )
 
 
+@app.route("/llm-call/<int:id>")
+def llm_call_detail(id):
+    """Render one LLM round-trip: system prompt, messages, response."""
+    row = get_llm_call(id)
+    if row is None:
+        abort(404)
+    return render_template("llm_call_detail.html", row=row)
+
+
 @app.route("/thesis/<int:thesis_id>")
 def thesis_detail(thesis_id):
     """Single thesis with linked decisions and playbook actions."""
