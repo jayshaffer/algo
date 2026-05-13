@@ -509,6 +509,51 @@ class TestSessionDateConsistency:
         assert len(called_dates) == 1
 
 
+class TestSessionIdThreading:
+    """Task 7: run_trading_session must thread its session_id parameter
+    through _log_decisions and _insert_decision_with_retry down to the
+    insert_decision DB call, so every decision row is owned by the
+    current session.
+    """
+
+    def test_session_id_threaded_to_insert_decision(self, mock_db, mock_cursor):
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action="buy",
+            intent_type="invest_dollar", intent_magnitude=1500.0,
+            quantity=Decimal("10"),
+            reasoning="t", confidence="high", is_off_playbook=False,
+            signal_refs=[],
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=True, session_id=42)
+        # Every insert_decision call must carry the session_id kwarg.
+        called_session_ids = [
+            c.kwargs.get("session_id")
+            for c in mocks["insert_decision"].call_args_list
+        ]
+        assert called_session_ids, "insert_decision was not called"
+        assert all(sid == 42 for sid in called_session_ids)
+
+    def test_session_id_defaults_to_none(self, mock_db, mock_cursor):
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action="buy",
+            intent_type="invest_dollar", intent_magnitude=1500.0,
+            quantity=Decimal("10"),
+            reasoning="t", confidence="high", is_off_playbook=False,
+            signal_refs=[],
+        )
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            run_trading_session(dry_run=True)
+        called_session_ids = [
+            c.kwargs.get("session_id")
+            for c in mocks["insert_decision"].call_args_list
+        ]
+        assert called_session_ids, "insert_decision was not called"
+        assert all(sid is None for sid in called_session_ids)
+
+
 class TestMarketHoursGate:
     def test_skips_trading_when_market_closed(self, mock_db, mock_cursor):
         """When market is closed and not dry_run, should return early after sync."""
