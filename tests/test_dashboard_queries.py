@@ -355,3 +355,40 @@ class TestGetSessionLlmCalls:
         get_session_llm_calls(99)
         params = cur.execute.call_args[0][1]
         assert params == (99,)
+
+
+class TestGetLlmCall:
+    def test_returns_full_row_including_jsonb(self, cur):
+        from dashboard.queries import get_llm_call
+        cur.fetchone.return_value = {
+            "id": 137, "session_id": 42, "stage_name": "trading",
+            "purpose": "executor", "sequence": 0,
+            "model": "claude-haiku-4-5-20251001",
+            "system_prompt": "you are a trading executor",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_definitions": None,
+            "response_content": [{"type": "text", "text": "ok"}],
+            "input_tokens": 120, "output_tokens": 45,
+            "cache_read_tokens": 80, "cache_creation_tokens": 10,
+            "stop_reason": "end_turn", "duration_ms": 987,
+            "created_at": datetime(2026, 5, 13, 16, 30),
+        }
+        result = get_llm_call(137)
+        assert result["id"] == 137
+        assert result["messages"] == [{"role": "user", "content": "hi"}]
+        assert result["response_content"] == [{"type": "text", "text": "ok"}]
+        sql = cur.execute.call_args[0][0]
+        assert "FROM llm_call_contexts" in sql
+        assert "id = %s" in sql
+
+    def test_returns_none_when_missing(self, cur):
+        from dashboard.queries import get_llm_call
+        cur.fetchone.return_value = None
+        result = get_llm_call(99999)
+        assert result is None
+
+    def test_passes_id_as_param(self, cur):
+        from dashboard.queries import get_llm_call
+        cur.fetchone.return_value = None
+        get_llm_call(137)
+        assert cur.execute.call_args[0][1] == (137,)

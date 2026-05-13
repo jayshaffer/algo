@@ -644,6 +644,26 @@ def get_session_llm_calls(session_id: int):
         return cur.fetchall()
 
 
+def get_llm_call(call_id: int):
+    """Return a single llm_call_contexts row by id, or None.
+
+    Returns all columns including the JSONB payloads (messages,
+    tool_definitions, response_content) — the detail view needs them.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, session_id, stage_name, purpose, sequence, model,
+                   system_prompt, messages, tool_definitions,
+                   response_content,
+                   input_tokens, output_tokens,
+                   cache_read_tokens, cache_creation_tokens,
+                   stop_reason, duration_ms, created_at
+            FROM llm_call_contexts
+            WHERE id = %s
+        """, (call_id,))
+        return cur.fetchone()
+
+
 def lookup_session_id_by_date(d, session_type: str = 'daily'):
     """Return the most recent sessions.id for a given date + type, or None.
 
