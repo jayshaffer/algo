@@ -151,41 +151,34 @@
     </div>
 </div>
 
-<section class="llm-calls">
-  <h2>LLM Calls ({{ llm_calls|length }})</h2>
-  {% if llm_calls %}
-    <table>
-      <thead>
-        <tr>
-          <th>Purpose</th>
-          <th>Seq</th>
-          <th>Stage</th>
-          <th>Model</th>
-          <th>In/Out</th>
-          <th>Cache R/W</th>
-          <th>Stop</th>
-          <th>Dur (ms)</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for c in llm_calls %}
-        <tr>
-          <td>{{ c.purpose }}</td>
-          <td>{{ c.sequence }}</td>
-          <td>{{ c.stage_name }}</td>
-          <td>{{ c.model }}</td>
-          <td>{{ c.input_tokens }} / {{ c.output_tokens }}</td>
-          <td>{{ c.cache_read_tokens or 0 }} / {{ c.cache_creation_tokens or 0 }}</td>
-          <td>{{ c.stop_reason or '-' }}</td>
-          <td>{{ c.duration_ms }}</td>
-          <td><a href="/llm-call/{{ c.id }}">view</a></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No LLM calls captured for this session.</p>
-  {% endif %}
-</section>
+<!-- LLM Calls -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="p-4 border-b"><h2 class="text-lg font-semibold">LLM Calls ({{ llm_calls|length }})</h2></div>
+    <div class="p-4 overflow-x-auto">
+        {% if llm_calls %}
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500">
+                <th class="pb-2">Purpose</th><th class="pb-2">Seq</th><th class="pb-2">Stage</th><th class="pb-2">Model</th><th class="pb-2">In/Out</th><th class="pb-2">Cache R/W</th><th class="pb-2">Stop</th><th class="pb-2 text-right">Dur (ms)</th><th class="pb-2"></th>
+            </tr></thead>
+            <tbody>
+            {% for c in llm_calls %}
+            <tr class="border-t">
+                <td class="py-2">{{ c.purpose }}</td>
+                <td class="py-2">{{ c.sequence }}</td>
+                <td class="py-2">{{ c.stage_name }}</td>
+                <td class="py-2 text-xs">{{ c.model }}</td>
+                <td class="py-2 font-mono text-xs">{{ c.input_tokens }} / {{ c.output_tokens }}</td>
+                <td class="py-2 font-mono text-xs">{{ c.cache_read_tokens or 0 }} / {{ c.cache_creation_tokens or 0 }}</td>
+                <td class="py-2 text-xs">{{ c.stop_reason or '-' }}</td>
+                <td class="py-2 text-right font-mono text-xs">{{ c.duration_ms }}</td>
+                <td class="py-2"><a href="/llm-call/{{ c.id }}" class="text-blue-600 hover:underline">view →</a></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-gray-500">No LLM calls captured for this session.</p>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}
