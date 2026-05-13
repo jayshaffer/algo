@@ -5,7 +5,7 @@
 {% macro render_blocks(blocks) %}
   {% if blocks is string %}
     <pre class="text-xs whitespace-pre-wrap">{{ blocks }}</pre>
-  {% else %}
+  {% elif blocks is not none %}
     {% for block in blocks %}
       {% if block.type == 'text' %}
         <pre class="text-xs whitespace-pre-wrap">{{ block.text }}</pre>
@@ -100,7 +100,11 @@
 <div class="bg-white rounded-lg shadow mb-6">
   <div class="p-4 border-b"><h2 class="text-lg font-semibold">Assistant response</h2></div>
   <div class="p-4">
-    {{ render_blocks(row.response_content) }}
+    {% if row.response_content %}
+      {{ render_blocks(row.response_content) }}
+    {% else %}
+      <p class="text-gray-500">No response content captured (the call likely failed or was never completed).</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

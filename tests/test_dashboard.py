@@ -1432,3 +1432,10 @@ class TestLlmCallDetail:
         mock_queries.get_llm_call.return_value = None
         resp = client.get("/llm-call/99999")
         assert resp.status_code == 404
+
+    def test_handles_null_response_content(self, client):
+        """A row where response_content is NULL (call failed) must not 500."""
+        mock_queries.get_llm_call.return_value = self._make_row(response_content=None)
+        resp = client.get("/llm-call/137")
+        assert resp.status_code == 200
+        assert b"No response content captured" in resp.data
