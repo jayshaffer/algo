@@ -838,6 +838,108 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Per-purpose p95 latency in last 7d is significantly elevated vs prior 7d. Drifts: {drifts}. Common causes: upstream API regressions (Anthropic), prompt growth that bloats inference, or tool-call expansion."
 - **suggested_fix:** "Inspect the flagged purpose's recent commits for prompt growth or tool-surface changes. If the regression is Anthropic-side, monitor and consider raising stage timeouts. If it's local, trim the prompt or cache more aggressively."
 
+### LLM_CONTEXT_MESSAGE_OR_BLOCK_MALFORMED
+
+- **env:** both
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** llm-context-message-or-block-malformed
+- **title_template:** "{n} llm_call_contexts row(s) with malformed message or content block (last 7d)"
+- **sql:**
+  ```sql
+  SELECT lcc.id, lcc.session_id, lcc.purpose, lcc.sequence
+  FROM llm_call_contexts lcc,
+       LATERAL jsonb_array_elements(lcc.messages) AS msg
+  WHERE lcc.created_at > now() - interval '7 days'
+    AND (
+      NOT (msg ? 'role')
+      OR NOT (msg ? 'content')
+      OR (
+        jsonb_typeof(msg->'content') = 'array'
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(msg->'content') AS block
+          WHERE NOT (block ? 'type')
+        )
+      )
+    )
+  GROUP BY lcc.id, lcc.session_id, lcc.purpose, lcc.sequence;
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "`llm_call_contexts` rows contain `messages` entries missing `role`/`content` or content blocks missing `type`. Either `_serialize_content_blocks` in `v2/claude_client.py` regressed, or the writer is being fed a non-standard message shape. Affected (id, session, purpose, seq): {rows}."
+- **suggested_fix:** "Inspect `v2/claude_client.py::_serialize_content_blocks` for a regression in how content blocks are serialized (e.g., pydantic shape change or a new block type). Also check the call sites passing `messages` into `_call_with_retry` — they must use the anthropic-standard `[{role, content}]` shape, with `content` either a string or an array of `{type, ...}` blocks."
+
+### LLM_CONTEXT_RESPONSE_BLOCK_MALFORMED
+
+- **env:** both
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** llm-context-response-block-malformed
+- **title_template:** "{n} llm_call_contexts row(s) with response_content block missing `type` (last 7d)"
+- **sql:**
+  ```sql
+  SELECT DISTINCT lcc.id, lcc.session_id, lcc.purpose
+  FROM llm_call_contexts lcc,
+       LATERAL jsonb_array_elements(lcc.response_content) AS block
+  WHERE lcc.response_content IS NOT NULL
+    AND lcc.created_at > now() - interval '7 days'
+    AND NOT (block ? 'type');
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "Response content blocks captured without a `type` field. The dashboard's `render_blocks` macro falls back to an Unknown-block path when this happens, but the root cause is that `_serialize_content_blocks` produced a shape that lost the type. Affected (id, session, purpose): {rows}."
+- **suggested_fix:** "Inspect `v2/claude_client.py::_serialize_content_blocks` — confirm that anthropic SDK content blocks expose `.model_dump()` and that the dict it returns includes `type`. If the test-fixture fallback path (`vars(block)`) is leaking into production, the test-fixture and production block shapes have diverged."
+
+### LLM_CONTEXT_MISSING_SYSTEM_PROMPT
+
+- **env:** both
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** llm-context-missing-system-prompt
+- **title_template:** "{n} captured llm_call_contexts row(s) with NULL system_prompt (last 7d)"
+- **sql:**
+  ```sql
+  SELECT id, session_id, purpose, sequence
+  FROM llm_call_contexts
+  WHERE created_at > now() - interval '7 days'
+    AND system_prompt IS NULL;
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "Every captured purpose (executor, strategist_loop, reflection_loop) is expected to have a non-null `system_prompt`. NULL here usually means the writer hit a `system` value shape it didn't know how to extract text from. Past regression: strategist/reflection passed `system` as a cache-control list-of-blocks and the `isinstance(str)` guard stored NULL — fixed by extracting text from the list. Affected (id, session, purpose, seq): {rows}."
+- **suggested_fix:** "Inspect `v2/claude_client.py::_record_call_context` — confirm both the `isinstance(str)` and `isinstance(list)` branches still work. If a new shape is being passed (e.g., a future cache-control wrapper or anthropic SDK variant), extend the extraction logic to handle it. Re-run a strategist loop and confirm the resulting rows have non-null `system_prompt`."
+
+### LLM_CONTEXT_EXECUTOR_RESPONSE_NOT_JSON
+
+- **env:** both
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** llm-context-executor-response-not-json
+- **title_template:** "{n} executor row(s) whose response text doesn't start with `{{` (last 14d, non-truncated)"
+- **sql:**
+  ```sql
+  WITH executor_text AS (
+    SELECT lcc.id, lcc.session_id, lcc.stop_reason,
+      string_agg(block->>'text', '' ORDER BY ord) AS response_text
+    FROM llm_call_contexts lcc,
+         LATERAL jsonb_array_elements(lcc.response_content) WITH ORDINALITY AS t(block, ord)
+    WHERE lcc.purpose = 'executor'
+      AND lcc.created_at > now() - interval '14 days'
+      AND lcc.response_content IS NOT NULL
+      AND block->>'type' = 'text'
+    GROUP BY lcc.id, lcc.session_id, lcc.stop_reason
+  )
+  SELECT id, session_id, stop_reason
+  FROM executor_text
+  WHERE response_text IS NOT NULL
+    AND COALESCE(stop_reason, '') != 'max_tokens'
+    AND ltrim(response_text) NOT LIKE '{%';
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "The executor's response text (assembled from response_content text blocks) does not start with `{{`, indicating the model went off-format — refused, replied in prose, or returned something the parser cannot consume. `max_tokens`-truncated rows are excluded (those are tracked by `EXECUTOR_TRUNCATION_RATE`). Affected (id, session, stop_reason): {rows}. Look at the `/llm-call/<id>` page on the local dashboard to see what the model actually said."
+- **suggested_fix:** "Inspect each affected row's full response via `/llm-call/<id>` on the local dashboard. If the executor is replying in prose, tighten the prompt in `v2/agent.py::TRADING_SYSTEM_PROMPT` to insist on JSON-only output. If it's a refusal pattern (e.g., the executor balking at sector-cap signals), either teach the executor to emit a structured `hold` decision instead, or revisit the upstream input shape so the refusal is no longer prompted. This check complements `EXECUTOR_PARSE_FAILURE_RATE` (which looks at the post-parse telemetry); this one looks at the raw assistant text."
+
 ### RULE_CHURN_SHORT_LIVED
 
 - **env:** prod
