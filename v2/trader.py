@@ -919,7 +919,6 @@ def _insert_decision_with_retry(
     order_id: str | None,
     order_result,
     payload: dict,
-    session_id: int | None = None,
 ) -> int | None:
     """T1.5: bounded retry around insert_decision with JSONL fallback.
 
@@ -928,11 +927,15 @@ def _insert_decision_with_retry(
     appends to logs/orphan_decisions.jsonl ONLY when the order actually filled
     (Alpaca confirmed shares moved). No-op decisions and pre-fill failures
     don't produce orphans.
+
+    session_id rides inside `payload` so it flows through the JSONL orphan
+    fallback automatically — operators reconciling an orphan record need the
+    owning session to correlate against `sessions` rows.
     """
     last_exc: Exception | None = None
     for attempt in range(_INSERT_RETRY_ATTEMPTS):
         try:
-            return insert_decision(**payload, session_id=session_id)
+            return insert_decision(**payload)
         except Exception as e:
             last_exc = e
             if attempt < _INSERT_RETRY_ATTEMPTS - 1:
@@ -1034,13 +1037,15 @@ def _log_decisions(
                 playbook_action_id=decision.playbook_action_id,
                 is_off_playbook=decision.is_off_playbook,
                 order_id=order_ids.get(i),
+                # session_id rides inside the payload so the JSONL orphan
+                # fallback in _persist_orphan_decision captures it too.
+                session_id=session_id,
             )
             decision_id = _insert_decision_with_retry(
                 decision=decision,
                 order_id=order_ids.get(i),
                 order_result=result,
                 payload=payload,
-                session_id=session_id,
             )
             if decision_id is None:
                 errors.append(

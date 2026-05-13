@@ -553,6 +553,52 @@ class TestSessionIdThreading:
         assert called_session_ids, "insert_decision was not called"
         assert all(sid is None for sid in called_session_ids)
 
+    def test_session_id_included_in_orphan_payload(self, mock_db, mock_cursor):
+        """JSONL orphan fallback must capture session_id from the payload.
+
+        Regression for: session_id used to ride as a separate kwarg through
+        _insert_decision_with_retry, so when the retry exhausted and the
+        orphan-JSONL path serialized `payload` alone, the owning session was
+        lost from the operator-recovery record. Folding session_id into
+        `payload` itself fixes this end-to-end.
+        """
+        decision = ExecutorDecision(
+            playbook_action_id=1, ticker="AAPL", action="buy",
+            intent_type="invest_dollar", intent_magnitude=1500.0,
+            quantity=Decimal("10"),
+            reasoning="t", confidence="high", is_off_playbook=False,
+            signal_refs=[],
+        )
+        captured_payloads: list[dict] = []
+
+        def capture_orphan(**kwargs):
+            captured_payloads.append(kwargs["payload"])
+
+        with ExitStack() as stack:
+            _happy_path(
+                stack,
+                decisions=[decision],
+                overrides={
+                    # Force retries to exhaust so the orphan path runs.
+                    "insert_decision": MagicMock(side_effect=RuntimeError("db down")),
+                },
+            )
+            stack.enter_context(patch("v2.trader.time.sleep", lambda s: None))
+            stack.enter_context(
+                patch("v2.trader._persist_orphan_decision", side_effect=capture_orphan)
+            )
+            run_trading_session(dry_run=True, session_id=42)
+
+        assert captured_payloads, (
+            "_persist_orphan_decision was not called — orphan path didn't trigger"
+        )
+        # Every orphan payload must carry the owning session_id so an operator
+        # reconciling the JSONL record can correlate it back to `sessions`.
+        for payload in captured_payloads:
+            assert payload.get("session_id") == 42, (
+                f"orphan payload missing session_id: {payload!r}"
+            )
+
 
 class TestMarketHoursGate:
     def test_skips_trading_when_market_closed(self, mock_db, mock_cursor):
