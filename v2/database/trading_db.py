@@ -825,13 +825,18 @@ def retire_strategy_rule(rule_id, reason=None) -> bool:
 
 # --- Strategy Memos ---
 
-def insert_strategy_memo(session_date, memo_type, content, strategy_state_id=None) -> int:
+def insert_strategy_memo(session_date, memo_type, content, strategy_state_id=None, session_id=None) -> int:
+    """
+    Insert a strategy memo.
+
+    - session_id: FK to sessions.id (per-run; nullable for legacy rows)
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO strategy_memos (session_date, memo_type, content, strategy_state_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO strategy_memos (session_date, memo_type, content, strategy_state_id, session_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
-        """, (session_date, memo_type, content, strategy_state_id))
+        """, (session_date, memo_type, content, strategy_state_id, session_id))
         return cur.fetchone()["id"]
 
 

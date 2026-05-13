@@ -1103,6 +1103,18 @@ class TestStrategyMemos:
         assert "LIMIT" in sql
         assert "ORDER BY" in sql
 
+    def test_insert_strategy_memo_passes_session_id(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_strategy_memo
+        insert_strategy_memo(
+            session_date=date(2026, 5, 13), memo_type="notes",
+            content="x", session_id=42,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
+
 
 class TestDecisionDedup:
     def test_check_decision_exists(self, mock_db, mock_cursor):
