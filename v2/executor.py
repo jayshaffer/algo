@@ -509,22 +509,31 @@ def wait_for_fill(
         )
 
 
-def get_latest_price(
+def get_latest_price_with_reason(
     ticker: str,
     max_age_seconds: int = 60,
     max_spread_pct: Decimal = Decimal("0.05"),
     client: StockHistoricalDataClient = None,
-) -> Decimal | None:
-    """Get latest quote price for a ticker with staleness and spread validation.
-
-    Args:
-        ticker: Stock ticker symbol
-        max_age_seconds: Reject quotes older than this (seconds). 0 to disable.
-        max_spread_pct: Reject quotes with bid-ask spread wider than this fraction. 0 to disable.
-        client: Optional pre-created StockHistoricalDataClient to reuse.
+) -> tuple[Decimal | None, str | None]:
+    """Quote-based price lookup with a structured rejection reason.
 
     Returns:
-        Ask price as Decimal, or None if quote is stale, wide-spread, zero, or unavailable.
+        (ask_price, None) on success.
+        (None, reason) on rejection, where reason is one of:
+          - "quote API error: <msg>"     — Alpaca call raised
+          - "quote ask is zero"          — degenerate quote (delisted? halted?)
+          - "quote stale: Ns (max Ms)"   — quote older than max_age_seconds
+          - "quote spread X% > max Y%"   — bid-ask spread exceeds max_spread_pct
+
+    The reason is meant to land in the executor's [REJECTED: ...] decision
+    string so postmortems don't have to replay Alpaca state. Callers that
+    only need the price can call `get_latest_price`, which wraps this and
+    discards the reason.
+
+    `get_latest_trade_price` is the right choice when you want *a* current
+    price but don't need quote-tightness discipline (logging, valuation,
+    etc.) — the free IEX feed widens spreads near close even when last-print
+    is fine, so the two functions can disagree, and that's by design.
     """
     if client is None:
         api_key = os.environ.get("ALPACA_API_KEY")
@@ -535,29 +544,53 @@ def get_latest_price(
     try:
         quotes = client.get_stock_latest_quote(request)
         quote = quotes[ticker]
+    except Exception as e:
+        return None, f"quote API error: {e}"
 
-        ask = Decimal(str(quote.ask_price))
-        if ask == 0:
-            return None
+    ask = Decimal(str(quote.ask_price))
+    if ask == 0:
+        return None, "quote ask is zero"
 
-        # Staleness check
-        if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
-            age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
-            if age > max_age_seconds:
-                logger.warning("%s: quote is %.0fs old (max %ds) — rejecting", ticker, age, max_age_seconds)
-                return None
+    if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
+        age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
+        if age > max_age_seconds:
+            reason = f"quote stale: {age:.0f}s (max {max_age_seconds}s)"
+            logger.warning("%s: %s — rejecting", ticker, reason)
+            return None, reason
 
-        # Spread check
-        bid = Decimal(str(quote.bid_price)) if hasattr(quote, "bid_price") else Decimal(0)
-        if max_spread_pct > 0 and bid > 0:
-            spread_pct = (ask - bid) / bid
-            if spread_pct > max_spread_pct:
-                logger.warning("%s: spread %.2f%% exceeds max %.2f%% — rejecting", ticker, float(spread_pct) * 100, float(max_spread_pct) * 100)
-                return None
+    bid = Decimal(str(quote.bid_price)) if hasattr(quote, "bid_price") else Decimal(0)
+    if max_spread_pct > 0 and bid > 0:
+        spread_pct = (ask - bid) / bid
+        if spread_pct > max_spread_pct:
+            reason = (
+                f"quote spread {float(spread_pct) * 100:.2f}% > max "
+                f"{float(max_spread_pct) * 100:.2f}% (bid={bid}, ask={ask})"
+            )
+            logger.warning("%s: %s — rejecting", ticker, reason)
+            return None, reason
 
-        return ask
-    except Exception:
-        return None
+    return ask, None
+
+
+def get_latest_price(
+    ticker: str,
+    max_age_seconds: int = 60,
+    max_spread_pct: Decimal = Decimal("0.05"),
+    client: StockHistoricalDataClient = None,
+) -> Decimal | None:
+    """Get latest quote price for a ticker with staleness and spread validation.
+
+    Returns ask price as Decimal, or None if quote is stale, wide-spread,
+    zero, or unavailable. For the structured rejection reason, use
+    `get_latest_price_with_reason` instead.
+    """
+    price, _ = get_latest_price_with_reason(
+        ticker=ticker,
+        max_age_seconds=max_age_seconds,
+        max_spread_pct=max_spread_pct,
+        client=client,
+    )
+    return price
 
 
 def get_latest_trade_price(

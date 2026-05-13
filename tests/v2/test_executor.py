@@ -121,6 +121,114 @@ class TestGetLatestPrice:
         assert price == Decimal("150.25")
 
 
+class TestGetLatestPriceWithReason:
+    """ALGO-14: rejection paths return a structured reason string so the
+    executor can surface it (instead of the misleading "no price available")
+    and postmortems don't have to replay Alpaca state."""
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_success_returns_price_and_none_reason(self, mock_data_client_cls):
+        from v2.executor import get_latest_price_with_reason
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 150.0
+        mock_quote.bid_price = 149.5
+        mock_quote.timestamp = datetime.now(UTC)
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price, reason = get_latest_price_with_reason("AAPL")
+        assert price == Decimal("150.0")
+        assert reason is None
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_stale_quote_reason_names_age_and_max(self, mock_data_client_cls):
+        from v2.executor import get_latest_price_with_reason
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 150.0
+        mock_quote.bid_price = 149.5
+        mock_quote.timestamp = datetime.now(UTC) - timedelta(seconds=120)
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price, reason = get_latest_price_with_reason("AAPL", max_age_seconds=60)
+        assert price is None
+        assert reason is not None
+        assert "stale" in reason
+        assert "60s" in reason  # max
+        assert "120s" in reason or "119s" in reason or "121s" in reason  # observed age
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_wide_spread_reason_names_spread_and_max(self, mock_data_client_cls):
+        from v2.executor import get_latest_price_with_reason
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 160.0  # ~10.3% above bid
+        mock_quote.bid_price = 145.0
+        mock_quote.timestamp = datetime.now(UTC)
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price, reason = get_latest_price_with_reason("AAPL", max_spread_pct=Decimal("0.05"))
+        assert price is None
+        assert reason is not None
+        assert "spread" in reason
+        assert "5.00%" in reason  # max
+        assert "10.34%" in reason  # observed (15/145)
+        assert "bid=145" in reason and "ask=160" in reason
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_zero_ask_reason(self, mock_data_client_cls):
+        from v2.executor import get_latest_price_with_reason
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 0
+        mock_quote.bid_price = 0
+        mock_quote.timestamp = datetime.now(UTC)
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price, reason = get_latest_price_with_reason("AAPL")
+        assert price is None
+        assert reason == "quote ask is zero"
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_api_error_reason_includes_exception_msg(self, mock_data_client_cls):
+        from v2.executor import get_latest_price_with_reason
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.side_effect = Exception("alpaca 500")
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price, reason = get_latest_price_with_reason("AAPL")
+        assert price is None
+        assert reason is not None
+        assert "API error" in reason
+        assert "alpaca 500" in reason
+
+    @patch("v2.executor.StockHistoricalDataClient")
+    def test_get_latest_price_still_returns_price_only(self, mock_data_client_cls):
+        """Backward compat: the legacy get_latest_price() signature is preserved
+        for callers that don't care about the reason (e.g. v2/context.py)."""
+        from v2.executor import get_latest_price
+        mock_quote = MagicMock()
+        mock_quote.ask_price = 150.0
+        mock_quote.bid_price = 149.5
+        mock_quote.timestamp = datetime.now(UTC)
+        mock_client = MagicMock()
+        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_data_client_cls.return_value = mock_client
+
+        with patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}):
+            price = get_latest_price("AAPL")
+        assert price == Decimal("150.0")
+
+
 class TestGetLatestPriceClientReuse:
     @patch("v2.executor.StockHistoricalDataClient")
     def test_uses_provided_client(self, mock_client_cls):

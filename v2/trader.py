@@ -34,7 +34,7 @@ from .database.trading_db import (
 from .executor import (
     execute_market_order,
     get_account_info,
-    get_latest_price,
+    get_latest_price_with_reason,
     get_latest_trade_price,
     get_live_available_qty,
     is_market_open,
@@ -543,12 +543,18 @@ def _prepare_decision(
     rejected / skipped. Mutates the decision (reasoning, action, quantity)
     and totals.trades_failed in the rejection/skip paths.
     """
-    price = get_latest_price(decision.ticker, client=data_client)
+    price, reject_reason = get_latest_price_with_reason(decision.ticker, client=data_client)
     if price is None:
-        errors.append(f"Could not get price for {decision.ticker}")
-        logger.error("%s: Could not get price", decision.ticker)
+        # ALGO-14: surface the structured reason from get_latest_price_with_reason
+        # instead of the legacy "no price available" string. The price is
+        # frequently *available* (last-trade fallback works fine for logging);
+        # what failed was the quote-tightness check. Misleading error strings
+        # sent prior audit passes down the wrong path — capture the actual
+        # cause so future postmortems are tractable.
+        errors.append(f"Could not price {decision.ticker}: {reject_reason}")
+        logger.error("%s: pricing rejected — %s", decision.ticker, reject_reason)
         totals.trades_failed += 1
-        decision.reasoning = f"[REJECTED: no price available] {decision.reasoning}"
+        decision.reasoning = f"[REJECTED: {reject_reason}] {decision.reasoning}"
         decision.action = "invalid"
         return None
 
