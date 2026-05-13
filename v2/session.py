@@ -34,7 +34,6 @@ from .database.trading_db import (
     complete_session_stage,
     fail_session,
     fail_session_stage,
-    get_completed_stages,
     get_current_strategy_state,
     get_playbook,
     get_session_for_date,
@@ -166,29 +165,28 @@ def _log_session_costs(session_id: int | None) -> None:
 def _check_and_record_session(force: bool, session_date) -> tuple[int | None, set, str | None]:
     """Returns (session_id, completed_stages, early_error).
 
-    early_error is non-None when the caller should return immediately
-    (e.g., session already completed and force=False).
+    Per-run sessions: every invocation creates a new sessions row.
+    completed_stages is always the empty set — no resume across runs.
+
+    Idempotency: if force=False and a session of session_type='daily'
+    is already 'completed' for this date, we skip with early_error set.
+    --force bypasses that gate.
     """
-    session_id: int | None = None
-    completed_stages: set = set()
     if not force:
         try:
             existing = get_session_for_date(session_date)
             if existing and existing["status"] == "completed":
                 logger.warning("Session already completed for %s. Use --force to override.", session_date)
                 return None, set(), f"Session already completed for {session_date}"
-            if existing:
-                completed_stages = get_completed_stages(existing["id"])
-                if completed_stages:
-                    logger.info("Resuming session — already completed: %s", completed_stages)
         except Exception as e:
             logger.warning("Could not check session status: %s — proceeding", e)
     try:
         session_id = insert_session_record(session_date)
         logger.info("Session ID: %d", session_id)
+        return session_id, set(), None
     except Exception as e:
         logger.warning("Could not create session record: %s — proceeding without tracking", e)
-    return session_id, completed_stages, None
+        return None, set(), None
 
 
 def _run_learning_refresh(
