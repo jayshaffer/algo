@@ -1282,3 +1282,56 @@ class TestGetRecentPlaybooksWithActions:
         assert "DESC" in sql.upper()
         assert 5 in params
 
+
+class TestLlmCallContexts:
+    def test_insert_llm_call_context_executes_insert_with_jsonb_payload(self, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_llm_call_context
+
+        insert_llm_call_context(
+            session_id=42,
+            stage_name="trading",
+            purpose="executor",
+            model="claude-haiku-4-5-20251001",
+            system_prompt="you are a trading executor",
+            messages=[{"role": "user", "content": "hi"}],
+            tool_definitions=None,
+            response_content=[{"type": "text", "text": "ok"}],
+            input_tokens=120,
+            output_tokens=45,
+            cache_read_tokens=80,
+            cache_creation_tokens=10,
+            stop_reason="end_turn",
+            duration_ms=987,
+        )
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "INSERT INTO llm_call_contexts" in sql
+        assert "MAX(sequence)" in sql
+        from psycopg2.extras import Json
+        assert any(isinstance(p, Json) for p in params)
+
+    def test_insert_llm_call_context_serializes_tool_definitions_when_present(self, mock_db, mock_cursor):
+        from v2.database.trading_db import insert_llm_call_context
+
+        tools = [{"name": "get_positions", "input_schema": {"type": "object"}}]
+        insert_llm_call_context(
+            session_id=42,
+            stage_name="ideation",
+            purpose="strategist_loop",
+            model="claude-opus-4-7",
+            system_prompt="strategist system",
+            messages=[{"role": "user", "content": "go"}],
+            tool_definitions=tools,
+            response_content=[{"type": "tool_use", "id": "t1", "name": "get_positions", "input": {}}],
+            input_tokens=200,
+            output_tokens=80,
+            cache_read_tokens=0,
+            cache_creation_tokens=0,
+            stop_reason="tool_use",
+            duration_ms=4200,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO llm_call_contexts" in sql
+        assert "tool_definitions" in sql
+

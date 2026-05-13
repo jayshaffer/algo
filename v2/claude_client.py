@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import anthropic
 
+from .database.trading_db import insert_llm_call_context
 from .telemetry import record_event
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,13 @@ class AgentPurpose:
     CLASSIFIER_RELEVANCE = "classifier_relevance"
     STRATEGIST_LOOP = "strategist_loop"
     REFLECTION_LOOP = "reflection_loop"
+
+
+_CONTEXT_LOGGED_PURPOSES = frozenset({
+    AgentPurpose.EXECUTOR,
+    AgentPurpose.STRATEGIST_LOOP,
+    AgentPurpose.REFLECTION_LOOP,
+})
 
 
 @dataclass
@@ -134,6 +142,81 @@ def get_claude_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key, max_retries=5)
 
 
+def _serialize_content_blocks(content) -> list:
+    """Convert anthropic content blocks to JSON-serializable dicts.
+
+    Real anthropic SDK blocks are pydantic models exposing `.model_dump()`.
+    Test fixtures use SimpleNamespace. Fall back to `vars()` for the
+    latter so tests don't have to add a model_dump shim everywhere.
+    """
+    result = []
+    for block in content or []:
+        if hasattr(block, "model_dump"):
+            result.append(block.model_dump())
+        else:
+            result.append({k: v for k, v in vars(block).items()})
+    return result
+
+
+def _record_call_context(
+    *,
+    session_id,
+    stage_name,
+    purpose,
+    create_kwargs: dict,
+    message,
+    duration_ms: int,
+) -> None:
+    """Persist the LLM round-trip for forensic replay.
+
+    Gated on (a) a real session_id and (b) a captured purpose. Errors
+    are logged and swallowed — context logging must never break a
+    session.
+    """
+    if session_id is None:
+        return
+    if purpose not in _CONTEXT_LOGGED_PURPOSES:
+        return
+    try:
+        usage = getattr(message, "usage", None) if message is not None else None
+        response_content = (
+            _serialize_content_blocks(message.content)
+            if message is not None and getattr(message, "content", None) is not None
+            else None
+        )
+        raw_system = create_kwargs.get("system")
+        if isinstance(raw_system, str):
+            system_prompt = raw_system
+        elif isinstance(raw_system, list):
+            # run_agentic_loop wraps system in a cache-control list-of-blocks
+            system_prompt = "\n".join(
+                b.get("text", "") for b in raw_system if isinstance(b, dict) and b.get("type") == "text"
+            ) or None
+        else:
+            system_prompt = None
+        insert_llm_call_context(
+            session_id=session_id,
+            stage_name=stage_name or "unknown",
+            purpose=purpose,
+            model=create_kwargs.get("model"),
+            system_prompt=system_prompt,
+            messages=create_kwargs.get("messages") or [],
+            tool_definitions=create_kwargs.get("tools"),
+            response_content=response_content,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+            cache_read_tokens=getattr(usage, "cache_read_input_tokens", None) if usage else None,
+            cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", None) if usage else None,
+            stop_reason=getattr(message, "stop_reason", None) if message else None,
+            duration_ms=duration_ms,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to record llm_call_context (session=%s stage=%s purpose=%s): %s",
+            session_id, stage_name, purpose, e,
+        )
+
+
 def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
     """Call client.messages.stream() with retry and exponential backoff.
 
@@ -214,6 +297,14 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
             stage_name=stage_name or "unknown",
             event_type="agent_call",
             payload=payload,
+        )
+        _record_call_context(
+            session_id=session_id,
+            stage_name=stage_name,
+            purpose=purpose,
+            create_kwargs=create_kwargs,
+            message=message,
+            duration_ms=duration_ms,
         )
 
 

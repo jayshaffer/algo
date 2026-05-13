@@ -553,6 +553,7 @@ class TestRunAgenticLoopTelemetry:
     `session_id=None` is a no-op (handled inside `record_event`)."""
 
     def test_emits_tool_invocation_event_on_success(self, monkeypatch):
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
         recorded = []
         monkeypatch.setattr(
             "v2.claude_client.record_event",
@@ -591,6 +592,7 @@ class TestRunAgenticLoopTelemetry:
         assert "duration_ms" in ev["payload"]
 
     def test_emits_tool_invocation_event_on_handler_error(self, monkeypatch):
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
         recorded = []
         monkeypatch.setattr(
             "v2.claude_client.record_event",
@@ -671,6 +673,7 @@ class TestCallWithRetryTelemetry:
     def test_emits_agent_call_event_on_success(self, monkeypatch):
         from v2.claude_client import _call_with_retry
 
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
         recorded = []
         monkeypatch.setattr(
             "v2.claude_client.record_event",
@@ -772,6 +775,10 @@ class TestLoopRecoveryTelemetry:
     errors by pruning + retrying. Each recovery branch fires at most once
     per loop, so we expect 1 event per recovery."""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_context_logging(self, monkeypatch):
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
+
     def test_emits_loop_recovery_on_max_tokens(self, monkeypatch):
         recorded = []
         monkeypatch.setattr(
@@ -849,6 +856,10 @@ class TestLoopRecoveryTelemetry:
 class TestLoopCompletionTelemetry:
     """`run_agentic_loop` emits exactly one `loop_completion` event per call,
     on every terminal path (clean exit, max_turns, unexpected stop_reason)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_context_logging(self, monkeypatch):
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
 
     def test_emits_loop_completion_on_clean_exit(self, monkeypatch):
         recorded = []
@@ -941,6 +952,7 @@ class TestToolInvocationOutputChars:
         """The tool_invocation payload should record len(result.content)."""
         from v2 import claude_client
 
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
         captured: list[dict] = []
 
         def fake_record_event(session_id, stage_name, event_type, payload):
@@ -989,6 +1001,10 @@ class TestAgenticLoopPerTurnTelemetry:
     """`run_agentic_loop` must forward stage_name/session_id to the per-turn
     `_call_with_retry` so emitted `agent_call` events carry the loop's stage
     instead of defaulting to 'unknown'."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_context_logging(self, monkeypatch):
+        monkeypatch.setattr("v2.claude_client.insert_llm_call_context", lambda **kw: None)
 
     def test_per_turn_agent_call_event_carries_loop_stage_name(self, monkeypatch):
         from unittest.mock import MagicMock
