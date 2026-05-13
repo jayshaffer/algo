@@ -288,6 +288,14 @@ def _call_with_retry(client, max_retries=API_MAX_RETRIES, **create_kwargs):
             event_type="agent_call",
             payload=payload,
         )
+        _record_call_context(
+            session_id=session_id,
+            stage_name=stage_name,
+            purpose=purpose,
+            create_kwargs=create_kwargs,
+            message=message,
+            duration_ms=duration_ms,
+        )
 
 
 def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
