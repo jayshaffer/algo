@@ -69,7 +69,7 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
             thesis_invalidations=invalidations or [],
             market_summary="", risk_assessment="",
         )),
-        "get_latest_price": MagicMock(return_value=Decimal("150")),
+        "get_latest_price_with_reason": MagicMock(return_value=(Decimal("150"), None)),
         "get_latest_trade_price": MagicMock(return_value=Decimal("150")),
         "get_live_available_qty": MagicMock(return_value=Decimal("1000")),
         "execute_market_order": MagicMock(return_value=MagicMock(
@@ -138,7 +138,7 @@ class TestRunTradingSession:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("150")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150"), None)), \
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
              patch("v2.trader.insert_decision_signals_batch") as mock_signals, \
@@ -221,7 +221,7 @@ class TestRunTradingSession:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=None), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(None, "quote stale: 90s (max 60s)")), \
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
              patch("v2.trader.insert_decision_signals_batch"), \
@@ -247,7 +247,10 @@ class TestRunTradingSession:
         assert kwargs.get("price") is None
         assert kwargs.get("order_id") is None
         reasoning = kwargs.get("reasoning") or ""
-        assert "price" in reasoning.lower()
+        # ALGO-14: rejection string carries the structured reason from
+        # get_latest_price_with_reason (not the legacy "no price available").
+        assert "[REJECTED:" in reasoning
+        assert "quote stale" in reasoning  # matches the mock return value above
         assert result.trades_failed == 1
 
     def test_zero_available_sell_logged_as_invalid(self, mock_db, mock_cursor):
@@ -268,7 +271,7 @@ class TestRunTradingSession:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("100")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("100"), None)), \
              patch("v2.trader.get_live_available_qty", return_value=Decimal("0")), \
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
@@ -320,7 +323,7 @@ class TestRunTradingSession:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("248.66")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("248.66"), None)), \
              patch("v2.trader.get_live_available_qty", return_value=Decimal("1.0")), \
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.wait_for_fill") as mock_wait, \
@@ -431,7 +434,7 @@ class TestRunTradingSession:
         def fake_close_thesis(*, thesis_id, status, reason):
             closed_thesis_ids.append(thesis_id)
 
-        with patch("v2.trader.get_latest_price", return_value=Decimal("150")), \
+        with patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150"), None)), \
              patch("v2.trader._precheck_sell_against_alpaca", return_value=True), \
              patch("v2.trader.execute_market_order") as mock_order, \
              patch("v2.trader.wait_for_fill") as mock_wait, \
@@ -591,7 +594,7 @@ class TestFillConfirmation:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("150.00")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150.00"), None)), \
              patch("v2.trader.execute_market_order", return_value=submit_result), \
              patch("v2.trader.wait_for_fill", return_value=fill_result), \
              patch("v2.trader.insert_decision", return_value=1) as mock_insert, \
@@ -633,7 +636,7 @@ class TestFillConfirmation:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("150.00")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150.00"), None)), \
              patch("v2.trader.execute_market_order") as mock_exec, \
              patch("v2.trader.wait_for_fill") as mock_wait, \
              patch("v2.trader.insert_decision", return_value=1), \
@@ -675,7 +678,7 @@ class TestFillConfirmation:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("150.00")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150.00"), None)), \
              patch("v2.trader.execute_market_order", return_value=submit_result), \
              patch("v2.trader.wait_for_fill", return_value=fill_result), \
              patch("v2.trader.insert_decision", return_value=1), \
@@ -729,7 +732,7 @@ class TestBuyingPowerRefresh:
              patch("v2.trader.take_account_snapshot", return_value=1), \
              patch("v2.trader.build_executor_input") as mock_build, \
              patch("v2.trader.get_trading_decisions") as mock_decisions, \
-             patch("v2.trader.get_latest_price", return_value=Decimal("150.00")), \
+             patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150.00"), None)), \
              patch("v2.trader.execute_market_order", return_value=submit_result), \
              patch("v2.trader.wait_for_fill", return_value=fill_result), \
              patch("v2.trader.validate_signal_refs", return_value=[]), \
@@ -1109,7 +1112,7 @@ class TestSectorCapHardGate:
                 "get_positions": MagicMock(return_value=[
                     {"ticker": "NVDA", "shares": Decimal("100")},
                 ]),
-                "get_latest_price": MagicMock(return_value=Decimal("200")),
+                "get_latest_price_with_reason": MagicMock(return_value=(Decimal("200"), None)),
                 "get_latest_trade_price": MagicMock(return_value=Decimal("200")),
                 "execute_market_order": MagicMock(return_value=MagicMock(
                     success=True, order_id="ord-1", error=None,
