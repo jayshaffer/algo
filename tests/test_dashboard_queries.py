@@ -309,3 +309,49 @@ class TestRecentTweetsExtended:
         result = get_recent_tweets()
         assert result[0]["decision_id"] == 11
         assert result[0]["session_id"] == 42
+
+
+class TestGetSessionLlmCalls:
+    def test_returns_summary_projection_excluding_jsonb(self, cur):
+        from dashboard.queries import get_session_llm_calls
+        cur.fetchall.return_value = [
+            {
+                "id": 1, "stage_name": "trading", "purpose": "executor",
+                "sequence": 0, "model": "claude-haiku-4-5-20251001",
+                "input_tokens": 120, "output_tokens": 45,
+                "cache_read_tokens": 80, "cache_creation_tokens": 10,
+                "stop_reason": "end_turn", "duration_ms": 987,
+                "created_at": datetime(2026, 5, 13, 16, 30),
+            }
+        ]
+        result = get_session_llm_calls(42)
+        assert len(result) == 1
+        assert result[0]["model"] == "claude-haiku-4-5-20251001"
+        sql = cur.execute.call_args[0][0]
+        # The SELECT must list only summary columns; JSONB columns absent.
+        assert "messages" not in sql
+        assert "tool_definitions" not in sql
+        assert "response_content" not in sql
+        # And the predicate is on session_id.
+        assert "session_id = %s" in sql
+
+    def test_orders_executor_then_strategist_then_reflection(self, cur):
+        from dashboard.queries import get_session_llm_calls
+        cur.fetchall.return_value = []
+        get_session_llm_calls(42)
+        sql = cur.execute.call_args[0][0]
+        # The CASE expression must put executor=0, strategist_loop=1, reflection_loop=2
+        # and then order by sequence.
+        assert "executor" in sql
+        assert "strategist_loop" in sql
+        assert "reflection_loop" in sql
+        assert "ORDER BY" in sql
+        # Sequence is the tie-breaker.
+        assert "sequence" in sql
+
+    def test_passes_session_id_as_param(self, cur):
+        from dashboard.queries import get_session_llm_calls
+        cur.fetchall.return_value = []
+        get_session_llm_calls(99)
+        params = cur.execute.call_args[0][1]
+        assert params == (99,)
