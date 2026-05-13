@@ -8,7 +8,24 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # Some tests call code that connects to Postgres rather than mocking
+      # at the get_cursor boundary; spin up a real DB so they pass.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: algo
+          POSTGRES_PASSWORD: algo
+          POSTGRES_DB: trading
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U algo -d trading"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
+      DATABASE_URL: postgresql://algo:algo@localhost:5432/trading
       # Tests mock external services, but some code paths construct real
       # Alpaca/Anthropic clients before patches are applied — the SDKs need
       # *something* in these vars to pass their own credential validation.
@@ -33,6 +50,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r v2/requirements.txt -r trading/requirements.txt
           pip install ruff
+
+      - name: Apply db migrations
+        env:
+          PGPASSWORD: algo
+        run: |
+          for f in db/init/*.sql; do
+            echo "applying $f"
+            psql -h localhost -U algo -d trading -v ON_ERROR_STOP=1 -f "$f"
+          done
 
       - name: Ruff
         run: ruff check .
