@@ -343,6 +343,37 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Strategist created theses without citing signals via `signal_refs`/`add_signal_refs`, so executor decisions derived from them have nothing to attribute. Summary: total={total}, has_refs={has_refs}, excluded_off_playbook={excluded_off_playbook}, excluded_no_thesis={excluded_no_thesis}, excluded_adoption={excluded_adoption}, genuinely_missing={genuinely_missing}. Affected decision_ids: {decision_ids}. Escalates to critical when genuinely_missing/total > 0.10 (warn otherwise). Fix in v2/ideation_claude.py prompt or the create_thesis / update_thesis tool-call validation."
 - **suggested_fix:** "In `v2/ideation_claude.py`, strengthen the strategist's prompt to require `signal_refs` on every new thesis. Alternatively, add validation in `v2/tools.py` create_thesis/update_thesis handlers to reject calls without signal_refs (when the thesis is not adoption-sourced)."
 
+### DECISIONS_OFF_PLAYBOOK_NO_SIGNAL_REFS
+
+- **env:** prod
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** decisions-off-playbook-no-signal-refs
+- **title_template:** "{missing} of {total} off-playbook buy/sell decisions in last 30d have no signal_refs"
+- **sql:**
+  ```sql
+  WITH off_playbook AS (
+    SELECT
+      d.id,
+      ds.decision_id IS NULL AS missing
+    FROM decisions d
+    LEFT JOIN (SELECT DISTINCT decision_id FROM decision_signals) ds
+      ON ds.decision_id = d.id
+    WHERE d.action IN ('buy','sell')
+      AND d.date > now()::date - 30
+      AND COALESCE(d.is_off_playbook, false) = true
+  )
+  SELECT
+    COUNT(*)                        AS total,
+    COUNT(*) FILTER (WHERE missing) AS missing,
+    array_agg(id ORDER BY id) FILTER (WHERE missing) AS missing_ids
+  FROM off_playbook;
+  ```
+- **finding_when:** "total >= 3 AND missing >= 1"
+- **body_template:** "Off-playbook decisions are pure executor judgment calls — the strategist did not approve them, so the executor must justify with `signal_refs`. The existing `DECISIONS_NO_SIGNAL_REFS` check explicitly *excludes* the off-playbook bucket, so a gap here is invisible to that check. Decisions with no `decision_signals` rows mean attribution has nothing to score against and the executor's reasoning is unverifiable post-hoc. total={total}, missing={missing}, missing_ids={missing_ids}. Escalates to critical when missing/total >= 0.50."
+- **suggested_fix:** "Inspect each missing_id's `reasoning` in `decisions`. If the executor cited signals informally in prose but didn't structure them via the `signal_refs` JSON field on its response, harden the executor's prompt in `v2/agent.py` to require `signal_refs` whenever `is_off_playbook=true`. If the `signal_refs` field was populated by the LLM but got stripped (e.g., by `validate_signal_refs` in `v2/agent.py`), check the warn-level log for the stripping reason — orphaned IDs or unknown types — and either repair the source data or relax the validation. Going off-playbook without a signal trail makes attribution impossible and forfeits the learning loop."
+
 ### THESES_NO_SIGNAL_REFS
 
 - **env:** prod
