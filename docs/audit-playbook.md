@@ -807,6 +807,28 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Per-purpose p95 latency in last 7d is significantly elevated vs prior 7d. Drifts: {drifts}. Common causes: upstream API regressions (Anthropic), prompt growth that bloats inference, or tool-call expansion."
 - **suggested_fix:** "Inspect the flagged purpose's recent commits for prompt growth or tool-surface changes. If the regression is Anthropic-side, monitor and consider raising stage timeouts. If it's local, trim the prompt or cache more aggressively."
 
+### RULE_CHURN_SHORT_LIVED
+
+- **env:** prod
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** rule-churn-short-lived
+- **title_template:** "{short_lived} of {retired} retired rule(s) in last 30d had lifetime < 7d"
+- **sql:**
+  ```sql
+  SELECT
+    COUNT(*) AS retired_30d,
+    COUNT(*) FILTER (WHERE retired_at - created_at < interval '7 days') AS short_lived_7d,
+    array_agg(id ORDER BY id) FILTER (WHERE retired_at - created_at < interval '7 days') AS short_lived_ids
+  FROM strategy_rules
+  WHERE retired_at IS NOT NULL
+    AND retired_at > now() - interval '30 days';
+  ```
+- **finding_when:** "retired_30d >= 5 AND short_lived_7d / retired_30d >= 0.25"
+- **body_template:** "Reflection is retiring rules within a week of proposing them at an elevated rate. Either the strategist proposes rules too eagerly, reflection retires them too eagerly, or the same rule_text keeps getting re-proposed after retirement (degenerate learning loop). retired_30d={retired_30d}, short_lived_7d={short_lived_7d}, short_lived_ids={short_lived_ids}. Escalates to critical when short_lived_7d / retired_30d >= 0.50 (warn otherwise)."
+- **suggested_fix:** "Inspect the offending rule_ids — read `rule_text` and `retirement_reason` for each in `strategy_rules`. If many are `Bulk pruning: rule accumulation...`, the proposing side in `v2/ideation_claude.py` is too liberal; tighten the propose_rule prompt to require attribution evidence. If many are `Built on broken signal-citation pipeline...` or similar root-cause retirements, the reflection prompt in `v2/strategy.py` is correctly retiring — but the system is wasting strategist effort. Consider gating `propose_rule` behind a minimum sample_size_30d threshold."
+
 ## Ideation pass
 
 After running every deterministic check, perform one ideation pass. The goal is to surface findings the deterministic checks won't catch — concept-level gaps, cost trends, prompt-engineering hunches, missed audit coverage.
