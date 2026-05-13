@@ -150,4 +150,42 @@
         {% endif %}
     </div>
 </div>
+
+<section class="llm-calls">
+  <h2>LLM Calls ({{ llm_calls|length }})</h2>
+  {% if llm_calls %}
+    <table>
+      <thead>
+        <tr>
+          <th>Purpose</th>
+          <th>Seq</th>
+          <th>Stage</th>
+          <th>Model</th>
+          <th>In/Out</th>
+          <th>Cache R/W</th>
+          <th>Stop</th>
+          <th>Dur (ms)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in llm_calls %}
+        <tr>
+          <td>{{ c.purpose }}</td>
+          <td>{{ c.sequence }}</td>
+          <td>{{ c.stage_name }}</td>
+          <td>{{ c.model }}</td>
+          <td>{{ c.input_tokens }} / {{ c.output_tokens }}</td>
+          <td>{{ c.cache_read_tokens or 0 }} / {{ c.cache_creation_tokens or 0 }}</td>
+          <td>{{ c.stop_reason or '-' }}</td>
+          <td>{{ c.duration_ms }}</td>
+          <td><a href="/llm-call/{{ c.id }}">view</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No LLM calls captured for this session.</p>
+  {% endif %}
+</section>
 {% endblock %}

@@ -112,6 +112,7 @@ def _reset_query_mocks():
     mock_queries.get_session_memo.return_value = None
     mock_queries.get_session_tweets.return_value = []
     mock_queries.get_session_events.return_value = []
+    mock_queries.get_session_llm_calls.return_value = []
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1273,3 +1274,40 @@ class TestSessionDetail:
         resp = client.get("/session/42")
         assert b'href="/decision/11"' in resp.data
         assert b'href="/ticker/AAPL"' in resp.data
+
+    def test_renders_llm_calls_section_when_present(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        mock_queries.get_session_llm_calls.return_value = [
+            {
+                "id": 137, "stage_name": "trading", "purpose": "executor",
+                "sequence": 0, "model": "claude-haiku-4-5-20251001",
+                "input_tokens": 120, "output_tokens": 45,
+                "cache_read_tokens": 80, "cache_creation_tokens": 10,
+                "stop_reason": "end_turn", "duration_ms": 987,
+                "created_at": datetime(2026, 5, 13, 16, 30),
+            },
+        ]
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"LLM Calls" in resp.data
+        assert b"executor" in resp.data
+        assert b'href="/llm-call/137"' in resp.data
+
+    def test_renders_empty_state_when_no_llm_calls(self, client):
+        mock_queries.get_session.return_value = make_session_row(id=42)
+        mock_queries.get_session_stage_costs.return_value = []
+        mock_queries.get_session_decisions.return_value = []
+        mock_queries.get_session_theses_created.return_value = []
+        mock_queries.get_session_memo.return_value = None
+        mock_queries.get_session_tweets.return_value = []
+        mock_queries.get_session_events.return_value = []
+        mock_queries.get_session_llm_calls.return_value = []
+        resp = client.get("/session/42")
+        assert resp.status_code == 200
+        assert b"No LLM calls captured for this session." in resp.data
