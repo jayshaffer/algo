@@ -270,6 +270,72 @@ class TestCallWithRetryWritesContext:
 
         assert recorded_inserts == []
 
+    def test_strategist_list_form_system_is_captured_as_text(self, monkeypatch):
+        """run_agentic_loop wraps the system prompt in a cache-control list:
+            [{"type": "text", "text": "...", "cache_control": {...}}]
+        The captured system_prompt must extract the text, not store NULL."""
+        from v2.claude_client import _call_with_retry
+
+        recorded_inserts = []
+        monkeypatch.setattr(
+            "v2.claude_client.insert_llm_call_context",
+            lambda **kw: recorded_inserts.append(kw),
+        )
+        monkeypatch.setattr("v2.claude_client.record_event", lambda **kw: None)
+
+        cached_system = [
+            {"type": "text", "text": "strategist instructions",
+             "cache_control": {"type": "ephemeral"}}
+        ]
+        response = self._make_response(content=[self._text_block("ok")])
+        client = self._make_stream_mock(response)
+
+        _call_with_retry(
+            client,
+            model="claude-opus-4-7",
+            max_tokens=32000,
+            system=cached_system,
+            messages=[{"role": "user", "content": "go"}],
+            session_id=99,
+            stage_name="ideation",
+            purpose="strategist_loop",
+        )
+
+        assert len(recorded_inserts) == 1
+        assert recorded_inserts[0]["system_prompt"] == "strategist instructions"
+
+    def test_multi_block_list_form_system_is_joined(self, monkeypatch):
+        """List-form with two text blocks: joined with \\n separator."""
+        from v2.claude_client import _call_with_retry
+
+        recorded_inserts = []
+        monkeypatch.setattr(
+            "v2.claude_client.insert_llm_call_context",
+            lambda **kw: recorded_inserts.append(kw),
+        )
+        monkeypatch.setattr("v2.claude_client.record_event", lambda **kw: None)
+
+        cached_system = [
+            {"type": "text", "text": "base prompt"},
+            {"type": "text", "text": "appended context", "cache_control": {"type": "ephemeral"}},
+        ]
+        response = self._make_response(content=[self._text_block("ok")])
+        client = self._make_stream_mock(response)
+
+        _call_with_retry(
+            client,
+            model="claude-opus-4-7",
+            max_tokens=32000,
+            system=cached_system,
+            messages=[{"role": "user", "content": "go"}],
+            session_id=99,
+            stage_name="ideation",
+            purpose="strategist_loop",
+        )
+
+        assert len(recorded_inserts) == 1
+        assert recorded_inserts[0]["system_prompt"] == "base prompt\nappended context"
+
     def test_context_logging_failure_does_not_break_caller(self, monkeypatch):
         from v2.claude_client import _call_with_retry
 

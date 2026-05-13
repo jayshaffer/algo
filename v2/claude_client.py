@@ -184,12 +184,22 @@ def _record_call_context(
             if message is not None and getattr(message, "content", None) is not None
             else None
         )
+        raw_system = create_kwargs.get("system")
+        if isinstance(raw_system, str):
+            system_prompt = raw_system
+        elif isinstance(raw_system, list):
+            # run_agentic_loop wraps system in a cache-control list-of-blocks
+            system_prompt = "\n".join(
+                b.get("text", "") for b in raw_system if isinstance(b, dict) and b.get("type") == "text"
+            ) or None
+        else:
+            system_prompt = None
         insert_llm_call_context(
             session_id=session_id,
             stage_name=stage_name or "unknown",
             purpose=purpose,
             model=create_kwargs.get("model"),
-            system_prompt=create_kwargs.get("system") if isinstance(create_kwargs.get("system"), str) else None,
+            system_prompt=system_prompt,
             messages=create_kwargs.get("messages") or [],
             tool_definitions=create_kwargs.get("tools"),
             response_content=response_content,
