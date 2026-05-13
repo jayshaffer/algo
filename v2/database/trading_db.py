@@ -1064,3 +1064,63 @@ def get_retired_rules(reference_date, limit: int = 10) -> list[dict]:
         return cur.fetchall()
 
 
+# --- LLM Call Contexts ---
+
+def insert_llm_call_context(
+    session_id: int,
+    stage_name: str,
+    purpose: str,
+    model: str,
+    system_prompt: str | None,
+    messages: list,
+    tool_definitions: list | None,
+    response_content: list | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read_tokens: int | None,
+    cache_creation_tokens: int | None,
+    stop_reason: str | None,
+    duration_ms: int | None,
+) -> None:
+    """Persist one LLM request/response round-trip for forensic replay.
+
+    `sequence` is computed in-statement as MAX(sequence)+1 within the
+    (session_id, stage_name, purpose) group. The UNIQUE constraint is a
+    backstop against the read-then-insert race; in practice there is one
+    writer per session so the race does not occur.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO llm_call_contexts (
+                session_id, stage_name, purpose, sequence,
+                model, system_prompt, messages, tool_definitions,
+                response_content, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens,
+                stop_reason, duration_ms
+            )
+            VALUES (
+                %s, %s, %s,
+                COALESCE(
+                    (SELECT MAX(sequence) + 1 FROM llm_call_contexts
+                     WHERE session_id = %s AND stage_name = %s AND purpose = %s),
+                    0
+                ),
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s,
+                %s, %s
+            )
+            """,
+            (
+                session_id, stage_name, purpose,
+                session_id, stage_name, purpose,
+                model, system_prompt, Json(messages),
+                Json(tool_definitions) if tool_definitions is not None else None,
+                Json(response_content) if response_content is not None else None,
+                input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens,
+                stop_reason, duration_ms,
+            ),
+        )
+
