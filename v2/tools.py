@@ -136,6 +136,7 @@ def tool_create_thesis(
     invalidation: str,
     confidence: str,
     signal_refs: list[dict] | None = None,
+    session_id: int | None = None,
 ) -> str:
     """Create a new thesis.
 
@@ -186,6 +187,7 @@ def tool_create_thesis(
         invalidation=invalidation,
         confidence=confidence,
         source="claude_ideation",
+        session_id=session_id,
     )
 
     note = _persist_signal_refs(thesis_id, signal_refs)
@@ -204,6 +206,7 @@ def tool_adopt_thesis(
     invalidation: str,
     confidence: str,
     signal_refs: list[dict] | None = None,
+    session_id: int | None = None,
 ) -> str:
     """Adopt an existing portfolio position by creating a thesis for it.
 
@@ -233,6 +236,7 @@ def tool_adopt_thesis(
         invalidation=invalidation,
         confidence=confidence,
         source="adoption",
+        session_id=session_id,
     )
 
     note = _persist_signal_refs(thesis_id, signal_refs)
