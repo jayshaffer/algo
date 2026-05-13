@@ -264,6 +264,20 @@ class TestDecisions:
         params = mock_cursor.execute.call_args[0][1]
         assert "abc-123-def" in params
 
+    def test_insert_decision_passes_session_id(self, mock_db, mock_cursor):
+        from datetime import date
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_decision
+        insert_decision(
+            decision_date=date(2026, 5, 13), ticker="AAPL", action="buy",
+            quantity=10, price=200.0, reasoning="t", signals_used=[],
+            account_equity=10000, buying_power=5000, session_id=42,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
+
     def test_get_recent_decisions(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = []
         from v2.database.trading_db import get_recent_decisions
