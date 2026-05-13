@@ -3,9 +3,7 @@
 Spec: docs/superpowers/specs/2026-05-13-llm-context-logging-design.md
 """
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 class TestCapturedPurposes:

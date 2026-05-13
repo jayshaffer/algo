@@ -11,8 +11,8 @@ from dataclasses import dataclass
 
 import anthropic
 
-from .telemetry import record_event
 from .database.trading_db import insert_llm_call_context
+from .telemetry import record_event
 
 logger = logging.getLogger(__name__)
 
