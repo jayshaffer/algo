@@ -7,8 +7,7 @@ import tempfile
 
 import pytest
 
-from v2 import log_config
-from v2.log_config import FILE_LOGGERS, _ALGO_HANDLER_TAG, setup_logging
+from v2.log_config import _ALGO_HANDLER_TAG, FILE_LOGGERS, setup_logging
 
 
 @pytest.fixture

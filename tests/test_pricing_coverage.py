@@ -8,7 +8,6 @@ migration) and re-run."""
 import re
 from pathlib import Path
 
-
 CLAUDE_MODEL_RE = re.compile(r'"(claude-[a-z0-9\-]+)"')
 V2_DIR = Path(__file__).resolve().parent.parent / "v2"
 MIGRATION = (

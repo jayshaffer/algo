@@ -194,9 +194,11 @@ class TestRenderMistakesOg:
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_correct_dimensions(self):
-        from v2.dashboard_og import render_mistakes_og
         from io import BytesIO
+
         from PIL import Image
+
+        from v2.dashboard_og import render_mistakes_og
 
         png = render_mistakes_og(
             top_loser={"ticker": "TSLA", "outcome_30d": Decimal("-12.5")},
@@ -235,8 +237,10 @@ class TestRenderAttributionOg:
         """Smoke check: pixels at known bar-center positions are not the
         background color (i.e. a bar was actually drawn)."""
         from io import BytesIO
+
         from PIL import Image
-        from v2.dashboard_og import OG_HEIGHT, render_attribution_og
+
+        from v2.dashboard_og import render_attribution_og
 
         png = render_attribution_og(self._attr())
         img = Image.open(BytesIO(png)).convert("RGB")

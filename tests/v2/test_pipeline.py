@@ -1,6 +1,6 @@
 """Tests for v2/pipeline.py — news pipeline orchestrator."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from v2.classifier import ClassificationResult, MacroSignal, TickerSignal
@@ -225,9 +225,8 @@ class TestPipelineSummaryPersistence:
     def test_pipeline_passes_summary_to_db_layer(
         self, mock_fetch, mock_classify, mock_macro_insert, mock_ticker_insert
     ):
-        from datetime import timezone
-        from v2.news import NewsItem
         from v2.classifier import ClassificationResult, TickerSignal
+        from v2.news import NewsItem
 
         # Alpaca returned one news item with a real summary.
         mock_fetch.return_value = [
@@ -238,7 +237,7 @@ class TestPipelineSummaryPersistence:
                 author="x",
                 source="Reuters",
                 symbols=["AAPL"],
-                published_at=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+                published_at=datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
                 url="https://example.com",
             ),
         ]
@@ -255,7 +254,7 @@ class TestPipelineSummaryPersistence:
                         category="momentum",
                         sentiment="bullish",
                         confidence="high",
-                        published_at=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+                        published_at=datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
                         alpaca_id="alp-123",
                     )
                 ],

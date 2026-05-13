@@ -7,7 +7,6 @@ import pytest
 from v2.market_data import (
     MarketSnapshot,
     SectorPerformance,
-    StockMover,
     format_market_snapshot,
     get_bar_change,
     get_sector_performance,

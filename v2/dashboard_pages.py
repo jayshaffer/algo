@@ -918,9 +918,9 @@ def render_learning_hub(*, attribution_top3: list[dict],
 
     if losers_top3:
         rows = "".join(
-            f'<li><span class="ticker">{_esc(l.get("ticker") or "")}</span> '
-            f'<span class="loss">{_fmt_signed_pct(l.get("outcome_30d_pct"))}</span></li>'
-            for l in losers_top3[:3]
+            f'<li><span class="ticker">{_esc(loser.get("ticker") or "")}</span> '
+            f'<span class="loss">{_fmt_signed_pct(loser.get("outcome_30d_pct"))}</span></li>'
+            for loser in losers_top3[:3]
         )
         didnt_body = (
             f'<ul>{rows}</ul>'

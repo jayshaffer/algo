@@ -6,7 +6,7 @@ and bound parameters where it matters, and the shaped return value always.
 """
 
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -15,13 +15,11 @@ import pytest
 from tests.conftest import (
     make_agent_event_row,
     make_decision_row,
-    make_macro_signal_row,
     make_news_signal_row,
     make_open_order_row,
     make_playbook_action_row,
     make_position_row,
     make_session_row,
-    make_session_stage_cost_row,
     make_strategy_memo_row,
     make_thesis_row,
     make_tweet_row,

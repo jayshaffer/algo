@@ -45,6 +45,7 @@ services:
       - ./logs:/app/logs
       - ./tests:/app/tests:ro
       - ./pytest.ini:/app/pytest.ini:ro
+      - ./db/init:/app/db/init:ro
     command: ["sleep", "infinity"]
 
   dashboard:

@@ -470,6 +470,7 @@ class TestAnalyzeRoundTrips:
 
     def test_returns_round_trip_objects(self, mock_db):
         from datetime import date
+
         from v2.patterns import RoundTrip, analyze_round_trips
         mock_db.fetchall.return_value = [
             {"ticker": "GOOGL", "pair_count": 11,

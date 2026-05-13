@@ -399,11 +399,12 @@ class TestRunTradingSession:
         test depends on `held_before - decision.quantity == 0` after a full
         sell across multiple decisions.
         """
-        from decimal import Decimal
-        from unittest.mock import patch, MagicMock
         from datetime import date
-        from v2.trader import _execute_decisions, ExecutorDecision
+        from decimal import Decimal
+        from unittest.mock import MagicMock, patch
+
         from v2.agent import AgentResponse
+        from v2.trader import ExecutorDecision, _execute_decisions
 
         decisions = [
             ExecutorDecision(
@@ -1649,8 +1650,8 @@ class TestDecisionLoggingBranches:
         buy/sell/hold; running it on 'invalid' suppresses distinct
         rejection audit rows on the same ticker.
         """
-        from v2.trader import _log_decisions
         from v2.agent import AgentResponse, ExecutorDecision
+        from v2.trader import _log_decisions
 
         decisions = [
             ExecutorDecision(

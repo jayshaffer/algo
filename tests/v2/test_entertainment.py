@@ -331,8 +331,9 @@ class TestEntertainmentBluesky:
         self, mock_gen, mock_post, mock_bs_client, mock_check
     ):
         """Same guard for the Bluesky branch of the entertainment stage."""
-        from v2.entertainment import _post_entertainment_bluesky, EntertainmentResult
         from datetime import date
+
+        from v2.entertainment import EntertainmentResult, _post_entertainment_bluesky
 
         mock_bs_client.return_value = object()
         # First call: twitter check (not used in this code path); second:

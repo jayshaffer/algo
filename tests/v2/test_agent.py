@@ -1,15 +1,16 @@
 """Tests for executor LLM integration."""
+import sys
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from v2.agent import (
+    TRADING_SYSTEM_PROMPT,
     AgentResponse,
     ExecutorDecision,
     ExecutorInput,
     PlaybookAction,
-    TRADING_SYSTEM_PROMPT,
     get_trading_decisions,
 )
 
@@ -543,9 +544,8 @@ class TestExecutorResponseTelemetry:
 
         with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
              patch("v2.agent._call_with_retry", return_value=mock_response), \
-             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
-            with pytest.raises(ValueError):
-                get_trading_decisions(self._empty_executor_input(), session_id=42)
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)), pytest.raises(ValueError):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
 
         ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
         assert ev["payload"]["parse_succeeded"] is False
@@ -560,9 +560,8 @@ class TestExecutorResponseTelemetry:
 
         with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
              patch("v2.agent._call_with_retry", return_value=mock_response), \
-             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
-            with pytest.raises(ValueError):
-                get_trading_decisions(self._empty_executor_input(), session_id=42)
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)), pytest.raises(ValueError):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
 
         ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
         assert ev["payload"]["parse_succeeded"] is False
@@ -578,9 +577,8 @@ class TestExecutorResponseTelemetry:
 
         with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
              patch("v2.agent._call_with_retry", return_value=mock_response), \
-             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)):
-            with pytest.raises(ValueError):
-                get_trading_decisions(self._empty_executor_input(), session_id=42)
+             patch("v2.agent.record_event", side_effect=lambda **kw: recorded.append(kw)), pytest.raises(ValueError):
+            get_trading_decisions(self._empty_executor_input(), session_id=42)
 
         ev = [r for r in recorded if r["event_type"] == "executor_response"][0]
         assert len(ev["payload"]["raw_response_text_truncated"]) <= 4096
@@ -617,12 +615,32 @@ class TestExecutorTelemetryWiring:
         assert captured.get("purpose") == "executor"
 
 
+@pytest.fixture
+def reload_agent_dependents():
+    """Reloading v2.agent mints fresh ExecutorInput/PlaybookAction classes.
+    Modules that bound those names at import time keep stale references,
+    which breaks isinstance() checks in unrelated tests. Yield, then reload
+    v2.agent with env unset and refresh v2.context so its ExecutorInput
+    binding matches the live class. (Only v2.context is reloaded because
+    other dependents' test files hold their own stale references that
+    cascading reloads would themselves invalidate.)"""
+    import importlib
+
+    yield
+    import v2.agent as agent_module
+    importlib.reload(agent_module)
+    ctx = sys.modules.get("v2.context")
+    if ctx is not None:
+        importlib.reload(ctx)
+
+
 class TestDefaultExecutorModelEnvOverride:
     """ALGO_EXECUTOR_MODEL env var should override the hardcoded default
     so paper/prod can flip via .env without code changes."""
 
-    def test_env_var_overrides_default(self, monkeypatch):
+    def test_env_var_overrides_default(self, monkeypatch, reload_agent_dependents):
         import importlib
+
         import v2.agent as agent_module
 
         monkeypatch.setenv("ALGO_EXECUTOR_MODEL", "claude-sonnet-4-6")
@@ -630,20 +648,15 @@ class TestDefaultExecutorModelEnvOverride:
         importlib.reload(agent_module)
         assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-sonnet-4-6"
 
-        # Clean up: reload with env unset to restore original state
-        monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
-        importlib.reload(agent_module)
-
-    def test_falls_back_to_haiku_when_env_unset(self, monkeypatch):
+    def test_falls_back_to_haiku_when_env_unset(self, monkeypatch, reload_agent_dependents):
         import importlib
+
         import v2.agent as agent_module
 
         monkeypatch.delenv("ALGO_EXECUTOR_MODEL", raising=False)
         # Force re-evaluation of the module-level default
         importlib.reload(agent_module)
         assert agent_module.DEFAULT_EXECUTOR_MODEL == "claude-haiku-4-5-20251001"
-
-        # Already in the correct state, no need to clean up
 
 
 class TestExecutorMaxTokensEnvOverride:
@@ -652,27 +665,30 @@ class TestExecutorMaxTokensEnvOverride:
     playbooks; the audit module's check_executor_max_tokens_hit was
     catching real truncations at 4096."""
 
-    def test_default_is_8192_when_env_unset(self, monkeypatch):
+    def test_default_is_8192_when_env_unset(self, monkeypatch, reload_agent_dependents):
         monkeypatch.delenv("ALGO_EXECUTOR_MAX_TOKENS", raising=False)
         import importlib
+
         import v2.agent as agent_module
         importlib.reload(agent_module)
         assert agent_module.EXECUTOR_MAX_TOKENS == 8192
 
-    def test_env_var_overrides_default(self, monkeypatch):
+    def test_env_var_overrides_default(self, monkeypatch, reload_agent_dependents):
         monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "12000")
         import importlib
+
         import v2.agent as agent_module
         importlib.reload(agent_module)
         assert agent_module.EXECUTOR_MAX_TOKENS == 12000
 
-    def test_max_tokens_passed_to_api_call(self, monkeypatch):
+    def test_max_tokens_passed_to_api_call(self, monkeypatch, reload_agent_dependents):
         """The configured value must reach _call_with_retry, not a stale
         constant captured at function-def time."""
         from unittest.mock import MagicMock, patch
 
         monkeypatch.setenv("ALGO_EXECUTOR_MAX_TOKENS", "9999")
         import importlib
+
         import v2.agent as agent_module
         importlib.reload(agent_module)
 

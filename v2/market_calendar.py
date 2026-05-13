@@ -8,7 +8,6 @@ produce a daily bar.
 
 from datetime import date
 
-
 NYSE_HOLIDAYS: frozenset[date] = frozenset({
     # 2024
     date(2024, 1, 1), date(2024, 1, 15), date(2024, 2, 19),

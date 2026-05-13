@@ -121,8 +121,8 @@ def generate_premarket_post(
 # Stage runner
 # ---------------------------------------------------------------------------
 
-from .twitter import get_twitter_client, post_tweet           # noqa: E402
-from .bluesky import get_bluesky_client, post_to_bluesky      # noqa: E402
+from .bluesky import get_bluesky_client, post_to_bluesky  # noqa: E402
+from .twitter import get_twitter_client, post_tweet  # noqa: E402
 
 
 @dataclass

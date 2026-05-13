@@ -1049,9 +1049,8 @@ class TestDeployToCloudflare:
         session log says what actually happened."""
         import subprocess as sp
         mock_run.side_effect = sp.TimeoutExpired(cmd="wrangler", timeout=300)
-        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}):
-            with pytest.raises(RuntimeError, match="time"):
-                deploy_to_cloudflare("/tmp/deploy")
+        with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dashboard"}), pytest.raises(RuntimeError, match="time"):
+            deploy_to_cloudflare("/tmp/deploy")
 
 
 class TestAssembleDeployDir:
@@ -1133,6 +1132,7 @@ class TestAssembleDeployDirEndToEnd:
 
     def test_emits_static_assets_json_pages_and_og(self, mock_db, tmp_path):
         from unittest.mock import patch as _patch
+
         from v2.dashboard_publish import assemble_deploy_dir
 
         # Set up a fake assets dir with the static files assemble_deploy_dir copies.
@@ -1355,8 +1355,6 @@ class TestFetchSpyBenchmark:
         assert result == []
 
 
-import os
-import tempfile
 
 
 class TestGatherAllPagesData:
@@ -1391,6 +1389,7 @@ class TestGatherAllPagesData:
 class TestEmitOgImages:
     def test_writes_png_files(self, mock_db, tmp_path):
         from unittest.mock import patch as _patch
+
         from v2.dashboard_publish import emit_og_images
 
         def _stub_trade(cur, did):
@@ -1425,6 +1424,7 @@ class TestEmitOgImages:
 
     def test_isolates_per_image_failures(self, mock_db, tmp_path):
         from unittest.mock import patch as _patch
+
         from v2.dashboard_publish import emit_og_images
 
         def trade_side(cur, did):
@@ -1488,6 +1488,7 @@ class TestEmitDetailPages:
 
     def test_emits_one_html_per_trade_and_thesis(self, mock_db, tmp_path):
         from unittest.mock import patch as _patch
+
         from v2.dashboard_publish import emit_detail_pages
 
         with _patch("v2.dashboard_publish.gather_trade_detail",
@@ -1511,6 +1512,7 @@ class TestEmitDetailPages:
 
     def test_isolates_per_page_failures(self, mock_db, tmp_path):
         from unittest.mock import patch as _patch
+
         from v2.dashboard_publish import emit_detail_pages
 
         def trade_side_effect(cur, did):
@@ -1543,12 +1545,13 @@ class TestEmitDetailPages:
 class TestGatherDashboardDataMistakesAttribution:
     def test_includes_mistakes_and_attribution_keys(self, mock_db, mock_cursor):
         from datetime import date
-        from v2.dashboard_publish import gather_dashboard_data
 
         # gather_dashboard_data executes many cursor calls in sequence.
         # We stub the new helpers via patch since they live in trading_db
         # and are imported into dashboard_publish.
         from unittest.mock import patch
+
+        from v2.dashboard_publish import gather_dashboard_data
         with patch("v2.dashboard_publish.get_closed_losers", return_value=[
                     {"id": 1, "ticker": "TSLA", "outcome_30d": -12.0}]), \
              patch("v2.dashboard_publish.get_retired_rules", return_value=[
@@ -1634,6 +1637,7 @@ class TestAssembleDeployDirNewPages:
 class TestEmitStaticPages:
     def test_writes_mistakes_and_attribution_files(self, tmp_path):
         from decimal import Decimal
+
         from v2.dashboard_publish import emit_static_pages
 
         data = {

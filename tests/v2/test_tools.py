@@ -1,6 +1,6 @@
 """Tests for v2.tools — tool definitions and handlers."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 from tests.v2.conftest import make_strategy_memo_row, make_strategy_rule_row, make_strategy_state_row
@@ -220,6 +220,7 @@ class TestWritePlaybook:
     def test_buy_action_with_thesis_id_accepted(self, mock_db, mock_cursor):
         """Sanity: when thesis_id is provided, the write proceeds."""
         from unittest.mock import patch
+
         from v2.tools import tool_write_playbook
 
         with patch("v2.tools.replace_playbook_actions_atomic",
@@ -984,7 +985,7 @@ class TestToolGetCuratedNews:
     session; reset by reset_session()."""
 
     def _row(self, id_, ticker="AAPL", summary="full summary"):
-        from datetime import datetime, timezone
+        from datetime import datetime
         return {
             "id": id_,
             "ticker": ticker,
@@ -992,7 +993,7 @@ class TestToolGetCuratedNews:
             "category": "momentum",
             "sentiment": "bullish",
             "confidence": "high",
-            "published_at": datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+            "published_at": datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
             "summary": summary,
             "alpaca_id": f"alp-{id_}",
         }

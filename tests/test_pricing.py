@@ -72,6 +72,5 @@ def test_zero_tokens_returns_zero():
 
 
 def test_unknown_model_raises():
-    with _mock_cursor([None]):
-        with pytest.raises(UnknownModelError):
-            stage_cost_usd("claude-future-99", 1000, 1000, 0, 0)
+    with _mock_cursor([None]), pytest.raises(UnknownModelError):
+        stage_cost_usd("claude-future-99", 1000, 1000, 0, 0)

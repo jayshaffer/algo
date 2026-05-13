@@ -70,9 +70,8 @@ class TestGetBlueskyClient:
         fake_module = MagicMock()
         fake_module.Client = MagicMock(return_value=fake_client)
 
-        with patch.dict("sys.modules", {"atproto": fake_module}):
-            with pytest.raises(Exception, match="Invalid credentials"):
-                get_bluesky_client()
+        with patch.dict("sys.modules", {"atproto": fake_module}), pytest.raises(Exception, match="Invalid credentials"):
+            get_bluesky_client()
 
 
 class TestPostToBluesky:

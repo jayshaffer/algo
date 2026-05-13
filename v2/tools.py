@@ -2,11 +2,10 @@
 
 import logging
 from datetime import date, datetime
-from decimal import Decimal
 
+from .agent import validate_signal_refs
 from .attribution import get_attribution_summary
 from .context import get_macro_context, get_portfolio_context
-from .agent import validate_signal_refs
 from .database.trading_db import (
     close_thesis,
     get_active_strategy_rules,

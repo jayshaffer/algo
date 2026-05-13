@@ -45,10 +45,10 @@ from .database.trading_db import (
 from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
+from .social_trades import TradePostsStageResult, run_trade_posts_stage
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
 from .telemetry import session_summary_line
 from .trader import TradingSessionResult, run_trading_session
-from .social_trades import TradePostsStageResult, run_trade_posts_stage
 from .twitter import TwitterStageResult, run_twitter_stage
 
 logger = logging.getLogger("session")

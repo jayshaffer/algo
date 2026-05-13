@@ -1,6 +1,6 @@
 """Regression test: get_news_signals must return the summary column."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 
@@ -20,7 +20,7 @@ class TestGetNewsSignalsReturnsSummary:
                 "category": "momentum",
                 "sentiment": "bullish",
                 "confidence": "high",
-                "published_at": datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+                "published_at": datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
                 "alpaca_id": "alp-123",
                 "summary": "Apple closed at $300 after the Foxconn deal.",
                 "processed_at": datetime(2026, 5, 9, 12, 5),

@@ -3,8 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def _make_claude_response(json_data: dict):
     """Helper: shape a MagicMock the way `_call_with_retry` returns one."""
@@ -208,6 +206,7 @@ class TestRunTradePostsStage:
         mock_dedup, mock_insert,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         mock_tw_client.return_value = object()
@@ -246,6 +245,7 @@ class TestRunTradePostsStage:
         """If decision 2 was already posted to Twitter, skip the post for it
         but still attempt decision 1."""
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         mock_tw_client.return_value = object()
@@ -276,6 +276,7 @@ class TestRunTradePostsStage:
         mock_dedup, mock_insert,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         mock_tw_client.return_value = object()
@@ -297,6 +298,7 @@ class TestRunTradePostsStage:
         self, mock_tw_client, mock_bs_client, mock_select,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         mock_tw_client.return_value = object()
@@ -312,6 +314,7 @@ class TestRunTradePostsStage:
         self, mock_bs, mock_tw,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         result = run_trade_posts_stage(date(2026, 5, 4))
@@ -349,6 +352,7 @@ class TestBlueskyExternalCardWiring:
         monkeypatch,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
@@ -396,6 +400,7 @@ class TestBlueskyExternalCardWiring:
         """If the OG image fetch fails, still attach the card (text-only) —
         a card without an image is better than a bare URL with no preview."""
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
@@ -428,6 +433,7 @@ class TestBlueskyExternalCardWiring:
         mock_gen, mock_post_bs, mock_dedup, mock_insert, monkeypatch,
     ):
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         monkeypatch.delenv("DASHBOARD_URL", raising=False)
@@ -459,6 +465,7 @@ class TestBlueskyExternalCardWiring:
         """Don't waste an HTTP call fetching the OG PNG when there's no
         Bluesky client to consume it."""
         from datetime import date
+
         from v2.social_trades import run_trade_posts_stage
 
         monkeypatch.setenv("DASHBOARD_URL", "https://bbottomcap.com")
@@ -479,7 +486,8 @@ class TestQuietDayFallback:
     def test_skips_quiet_day_recap_on_non_trading_day(self, mock_is_td):
         """Weekends/holidays produce no post — even the quiet-day recap is muted."""
         from datetime import date
-        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        from v2.social_trades import TradePostsStageResult, _post_quiet_day_recap
 
         result = TradePostsStageResult()
         _post_quiet_day_recap(date(2026, 5, 9), object(), object(), result)  # Saturday
@@ -498,7 +506,8 @@ class TestQuietDayFallback:
         mock_post_tw, mock_post_bs, mock_dedup, mock_insert,
     ):
         from datetime import date
-        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        from v2.social_trades import TradePostsStageResult, _post_quiet_day_recap
 
         mock_gen_tw.return_value = {"text": "Quiet day.", "type": "recap"}
         mock_gen_bs.return_value = {"text": "Quiet day.", "type": "recap"}
@@ -523,7 +532,8 @@ class TestQuietDayFallback:
         """Existing rerun guard: if a recap was already posted today on
         either platform, don't repost on that platform."""
         from datetime import date
-        from v2.social_trades import _post_quiet_day_recap, TradePostsStageResult
+
+        from v2.social_trades import TradePostsStageResult, _post_quiet_day_recap
 
         result = TradePostsStageResult()
         with patch("v2.social_trades.post_tweet") as mock_post_tw, \

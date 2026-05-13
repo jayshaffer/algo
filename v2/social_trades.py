@@ -162,10 +162,9 @@ def generate_trade_post(
 # importable in tests without dragging in the whole post stack).
 # ---------------------------------------------------------------------------
 
-from .market_calendar import is_trading_day                        # noqa: E402
-from .twitter import get_twitter_client, post_tweet, gather_tweet_context, generate_tweet  # noqa: E402
-from .bluesky import get_bluesky_client, post_to_bluesky, generate_bluesky_post  # noqa: E402
-
+from .bluesky import generate_bluesky_post, get_bluesky_client, post_to_bluesky  # noqa: E402
+from .market_calendar import is_trading_day  # noqa: E402
+from .twitter import gather_tweet_context, generate_tweet, get_twitter_client, post_tweet  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Stage result

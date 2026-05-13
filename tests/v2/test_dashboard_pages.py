@@ -3,7 +3,7 @@
 from datetime import date
 from decimal import Decimal
 
-from v2.dashboard_pages import render_homepage_meta, render_trade_page, render_thesis_page
+from v2.dashboard_pages import render_homepage_meta, render_thesis_page, render_trade_page
 
 
 class TestRenderHomepageMeta:

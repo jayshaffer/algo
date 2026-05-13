@@ -3,17 +3,8 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import ROUND_DOWN, Decimal
-
-# Alpaca documents fractional-share precision at 9 decimals. Quantize ROUND_DOWN
-# before submit so a precheck-trimmed sell can never overshoot qty_available
-# from sub-9-decimal noise produced by intent division.
-_QTY_PRECISION = Decimal("0.000000001")
-
-
-def _quantize_qty(qty: Decimal) -> Decimal:
-    return qty.quantize(_QTY_PRECISION, rounding=ROUND_DOWN)
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
@@ -36,6 +27,15 @@ from .database.trading_db import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Alpaca documents fractional-share precision at 9 decimals. Quantize ROUND_DOWN
+# before submit so a precheck-trimmed sell can never overshoot qty_available
+# from sub-9-decimal noise produced by intent division.
+_QTY_PRECISION = Decimal("0.000000001")
+
+
+def _quantize_qty(qty: Decimal) -> Decimal:
+    return qty.quantize(_QTY_PRECISION, rounding=ROUND_DOWN)
 
 
 @dataclass
@@ -114,7 +114,6 @@ def get_trading_client() -> TradingClient:
     """Create Alpaca trading client from environment variables."""
     api_key = os.environ.get("ALPACA_API_KEY")
     secret_key = os.environ.get("ALPACA_SECRET_KEY")
-    base_url = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
     if not api_key or not secret_key:
         raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set")
@@ -552,7 +551,7 @@ def get_latest_price_with_reason(
         return None, "quote ask is zero"
 
     if max_age_seconds > 0 and hasattr(quote, "timestamp") and quote.timestamp:
-        age = (datetime.now(timezone.utc) - quote.timestamp).total_seconds()
+        age = (datetime.now(UTC) - quote.timestamp).total_seconds()
         if age > max_age_seconds:
             reason = f"quote stale: {age:.0f}s (max {max_age_seconds}s)"
             logger.warning("%s: %s — rejecting", ticker, reason)

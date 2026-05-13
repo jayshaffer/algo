@@ -3,8 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def _signal(id_: int, ticker: str = "AAPL", summary: str = "summary text") -> dict:
     """Build a minimal signal dict matching the news_signals row shape."""

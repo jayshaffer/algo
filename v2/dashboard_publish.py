@@ -29,7 +29,6 @@ from .dashboard_pages import (
     render_activity_page,
     render_attribution_page,
     render_homepage,
-    render_homepage_meta,
     render_how_it_works_hub,
     render_learning_hub,
     render_mistakes_page,
@@ -302,7 +301,7 @@ def compute_performance_stats(*, snapshots: list[dict],
                 max_dd = dd
 
     best, worst = 0.0, 0.0
-    for prev, curr in zip(values, values[1:]):
+    for prev, curr in zip(values, values[1:], strict=False):
         if prev <= 0:
             continue
         pct = (curr - prev) / prev * 100.0

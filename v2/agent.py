@@ -343,7 +343,7 @@ def get_trading_decisions(
     unknown_top = sorted(set(data.keys()) - EXECUTOR_KNOWN_TOP_KEYS)
     unknown_dec = sorted({
         k for d in data.get("decisions", []) if isinstance(d, dict)
-        for k in d.keys()
+        for k in d
     } - EXECUTOR_KNOWN_DECISION_KEYS)
     record_event(
         session_id=session_id,

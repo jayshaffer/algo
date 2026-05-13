@@ -70,7 +70,7 @@ def _make_stream_mock(responses):
         try:
             nxt = next(iterator)
         except StopIteration:
-            raise AssertionError("stream_factory called more times than mocked responses")
+            raise AssertionError("stream_factory called more times than mocked responses") from None
         if isinstance(nxt, BaseException):
             raise nxt
         ctx = MagicMock()
@@ -992,6 +992,7 @@ class TestAgenticLoopPerTurnTelemetry:
 
     def test_per_turn_agent_call_event_carries_loop_stage_name(self, monkeypatch):
         from unittest.mock import MagicMock
+
         import v2.claude_client as cc
 
         events = []
@@ -1042,6 +1043,7 @@ class TestAgenticLoopPerTurnTelemetry:
 
     def test_loop_completion_event_includes_cache_tokens(self, monkeypatch):
         from unittest.mock import MagicMock
+
         import v2.claude_client as cc
 
         events = []

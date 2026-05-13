@@ -26,7 +26,8 @@ class TestUtcDateHelper:
 
     def test_aware_datetime_converted_to_utc(self):
         from datetime import datetime as dt_cls
-        from datetime import timedelta, timezone as tz
+        from datetime import timedelta
+        from datetime import timezone as tz
 
         from v2.strategy import _utc_date
         # 23:30 ET = 03:30 UTC the next day. Old code's `.date()` on the
@@ -222,8 +223,10 @@ class TestToolProposeRule:
 
         t1 = threading.Thread(target=worker, args=("t1",))
         t2 = threading.Thread(target=worker, args=("t2",))
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
 
         created = [r for r in results if "Created rule" in r]
         capped = [r for r in results if "limit reached" in r]
@@ -305,8 +308,10 @@ class TestToolRetireRule:
 
         t1 = threading.Thread(target=worker, args=("t1",))
         t2 = threading.Thread(target=worker, args=("t2",))
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
 
         # Each thread did 3 calls; first two succeeded, third hit the cap.
         retired = [r for r in results if "Retired" in r]
@@ -432,8 +437,9 @@ class TestToolGetSessionSummary:
         self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
     ):
         from datetime import date
-        from v2.strategy import tool_get_session_summary
+
         from v2.patterns import RoundTrip
+        from v2.strategy import tool_get_session_summary
         mock_decisions.return_value = [make_decision_row()]
         mock_attr.return_value = "Attribution data here"
         mock_cursor.fetchall.return_value = []
@@ -490,8 +496,9 @@ class TestToolGetSessionSummary:
         self, mock_decisions, mock_attr, mock_round_trips, mock_db, mock_cursor,
     ):
         from datetime import date
-        from v2.strategy import tool_get_session_summary
+
         from v2.patterns import RoundTrip
+        from v2.strategy import tool_get_session_summary
         mock_decisions.return_value = []
         mock_attr.return_value = ""
         mock_cursor.fetchall.return_value = []
@@ -725,6 +732,7 @@ class TestEvidenceShownEvent:
 
     def test_emits_evidence_shown_with_round_trips(self, mock_db):
         from datetime import date
+
         from v2.patterns import RoundTrip
         from v2.strategy import tool_get_session_summary_with_telemetry
 

@@ -224,8 +224,8 @@ def generate_attribution_post(
 
 # Imported late so the pure helpers above stay testable without dragging in
 # the full social-platform stack.
-from .twitter import get_twitter_client, post_tweet           # noqa: E402
-from .bluesky import get_bluesky_client, post_to_bluesky      # noqa: E402
+from .bluesky import get_bluesky_client, post_to_bluesky  # noqa: E402
+from .twitter import get_twitter_client, post_tweet  # noqa: E402
 
 
 @dataclass
@@ -396,8 +396,8 @@ def _main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import sys
     import logging as _logging
+    import sys
     _logging.basicConfig(level=_logging.INFO,
                          format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                          datefmt="%Y-%m-%d %H:%M:%S")

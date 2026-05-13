@@ -6,6 +6,7 @@ extend-exclude = [
     "logs_paper",
     "public_dashboard",
     "db",
+    ".claude/worktrees",
 ]
 
 [lint]
@@ -26,10 +27,10 @@ ignore = [
 ]
 
 [lint.pylint]
-max-statements = 50
+max-statements = 90
 
 [lint.per-file-ignores]
-"tests/**" = ["B011", "F841"]   # allow assert False and unused locals in tests
+"tests/**" = ["B011", "F841", "E402"]   # allow assert False, unused locals, and mid-file imports in tests
 "trading/**" = ["PLR0915"]      # legacy v1 module (sunset); not worth refactoring
 
 [lint.isort]

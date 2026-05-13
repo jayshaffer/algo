@@ -104,6 +104,7 @@ class TestNewsSignals:
         into the trading container.
         """
         import psycopg2
+
         from v2.database.connection import get_cursor
         try:
             with get_cursor() as cur:
@@ -1125,6 +1126,7 @@ class TestSelectPostableDecisionsForDate:
         """Sanity-check the SQL: WHERE filters action and notional, ORDER BY
         is abs(quantity*price) DESC, LIMIT applied."""
         from datetime import date
+
         from v2.database.trading_db import select_postable_decisions_for_date
 
         mock_cursor.fetchall.return_value = [
@@ -1163,6 +1165,7 @@ class TestSelectPostableDecisionsForDate:
 
     def test_returns_empty_when_no_decisions(self, mock_db, mock_cursor):
         from datetime import date
+
         from v2.database.trading_db import select_postable_decisions_for_date
 
         mock_cursor.fetchall.return_value = []
@@ -1175,6 +1178,7 @@ class TestSelectPostableDecisionsForDate:
     def test_off_playbook_decision_returns_with_null_thesis(self, mock_db, mock_cursor):
         """Off-playbook decisions are postable but carry no thesis link."""
         from datetime import date
+
         from v2.database.trading_db import select_postable_decisions_for_date
 
         mock_cursor.fetchall.return_value = [

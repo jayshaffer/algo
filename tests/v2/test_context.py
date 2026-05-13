@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestBuildExecutorInput:
@@ -621,6 +621,7 @@ class TestRecentTickerDecisions:
         mock_db, mock_cursor,
     ):
         from datetime import date, timedelta
+
         from v2.context import build_executor_input
         today = date.today()
         mock_pb.return_value = {"id": 1, "market_outlook": "", "risk_notes": ""}
@@ -669,6 +670,7 @@ class TestRecentTickerDecisions:
         mock_db, mock_cursor,
     ):
         from datetime import date, timedelta
+
         from v2.context import build_executor_input
         long_reasoning = "X" * 500
         today = date.today()

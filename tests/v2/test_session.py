@@ -1505,6 +1505,7 @@ class TestStageCaptureUsage:
         """When the pipeline stage runs, the captured token usage should be
         forwarded to complete_session_stage."""
         from types import SimpleNamespace
+
         from v2 import session
         from v2.claude_client import _record_usage
 

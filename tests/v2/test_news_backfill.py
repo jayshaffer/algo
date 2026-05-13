@@ -1,6 +1,6 @@
 """Tests for v2/news_backfill.py — one-shot summary backfill from Alpaca."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 
@@ -14,7 +14,7 @@ class TestNewsBackfill:
             author="x",
             source="Reuters",
             symbols=["AAPL"],
-            published_at=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+            published_at=datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
             url="https://example.com",
         )
 
