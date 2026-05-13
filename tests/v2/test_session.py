@@ -853,6 +853,35 @@ class TestStrategistMemoPersistence:
         assert result.strategist_error is not None
         assert "without writing a playbook" in result.strategist_error
 
+    def test_strategist_summary_memo_save_passes_session_id(self):
+        """The strategist-stage path saves the strategist's final summary as a
+        memo. Verify that the direct insert_strategy_memo call in session.py
+        receives session_id from the caller."""
+        mock_ideation_result = MagicMock()
+        mock_ideation_result.final_summary = (
+            "A sufficiently long strategist summary that passes the min-length guard."
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
+             patch("v2.session._check_and_record_session", return_value=(7777, set(), None)), \
+             patch("v2.session.insert_strategy_memo") as mock_memo:
+
+            run_session(dry_run=False)
+
+        mock_memo.assert_called_once()
+        assert mock_memo.call_args.kwargs.get("session_id") == 7777
+
     def test_strategist_memo_skipped_when_summary_too_short(self):
         """ALGO-15: strategist agentic loops occasionally end with a stub
         final assistant text ("all good", "done"). Persisting those as

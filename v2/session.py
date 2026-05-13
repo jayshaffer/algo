@@ -250,7 +250,7 @@ def _run_pipeline_stage(
 STRATEGIST_MEMO_MIN_LENGTH = 40
 
 
-def _persist_strategist_memo(result: SessionResult, session_date) -> None:
+def _persist_strategist_memo(result: SessionResult, session_date, session_id: int | None = None) -> None:
     try:
         if not (result.strategist_result and result.strategist_result.final_summary):
             return
@@ -272,6 +272,7 @@ def _persist_strategist_memo(result: SessionResult, session_date) -> None:
             memo_type='strategist_notes',
             content=summary,
             strategy_state_id=state['id'] if state else None,
+            session_id=session_id,
         )
         logger.info("Strategist summary saved as memo")
     except Exception as e:
@@ -312,7 +313,7 @@ def _run_strategist_stage(
                     f"Strategist finished without writing a playbook for {session_date} "
                     "(likely hit max_tokens or max_turns before calling write_playbook)"
                 )
-            _persist_strategist_memo(result, session_date)
+            _persist_strategist_memo(result, session_date, session_id=session_id)
             _complete_stage(session_id, "strategist", usage=usage)
         except Exception as e:
             result.strategist_error = str(e)

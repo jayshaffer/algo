@@ -260,7 +260,7 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
     return f"Error: Failed to retire rule ID {rule_id}"
 
 
-def tool_write_strategy_memo(memo_type: str, content: str) -> str:
+def tool_write_strategy_memo(memo_type: str, content: str, session_id: int | None = None) -> str:
     """Write a strategy reflection memo."""
     logger.info(f"Writing strategy memo ({memo_type})")
     current = get_current_strategy_state()
@@ -270,6 +270,7 @@ def tool_write_strategy_memo(memo_type: str, content: str) -> str:
         memo_type=memo_type,
         content=content,
         strategy_state_id=state_id,
+        session_id=session_id,
     )
     return f"Memo written (ID: {memo_id})"
 
@@ -590,6 +591,9 @@ def run_strategy_reflection(
         **STRATEGY_TOOL_HANDLERS,
         "get_session_summary": partial(
             tool_get_session_summary_with_telemetry, session_id=session_id
+        ),
+        "write_strategy_memo": partial(
+            tool_write_strategy_memo, session_id=session_id
         ),
     }
 
