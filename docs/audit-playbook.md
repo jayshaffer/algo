@@ -829,6 +829,32 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Reflection is retiring rules within a week of proposing them at an elevated rate. Either the strategist proposes rules too eagerly, reflection retires them too eagerly, or the same rule_text keeps getting re-proposed after retirement (degenerate learning loop). retired_30d={retired_30d}, short_lived_7d={short_lived_7d}, short_lived_ids={short_lived_ids}. Escalates to critical when short_lived_7d / retired_30d >= 0.50 (warn otherwise)."
 - **suggested_fix:** "Inspect the offending rule_ids — read `rule_text` and `retirement_reason` for each in `strategy_rules`. If many are `Bulk pruning: rule accumulation...`, the proposing side in `v2/ideation_claude.py` is too liberal; tighten the propose_rule prompt to require attribution evidence. If many are `Built on broken signal-citation pipeline...` or similar root-cause retirements, the reflection prompt in `v2/strategy.py` is correctly retiring — but the system is wasting strategist effort. Consider gating `propose_rule` behind a minimum sample_size_30d threshold."
 
+### RULE_ACTIVE_DORMANT_LONG_LIVED
+
+- **env:** prod
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** rule-active-dormant-long-lived
+- **title_template:** "{n} active rule(s) older than 30d with zero executor citations in last 14d"
+- **sql:**
+  ```sql
+  SELECT
+    COUNT(*) AS n,
+    array_agg(id ORDER BY id) AS dormant_ids
+  FROM strategy_rules r
+  WHERE r.status = 'active'
+    AND r.created_at < now() - interval '30 days'
+    AND NOT EXISTS (
+      SELECT 1 FROM decisions d
+      WHERE d.date > (now() - interval '14 days')::date
+        AND d.reasoning ~* ('\mrule\s*#?\s*' || r.id || '\M')
+    );
+  ```
+- **finding_when:** "n >= 5"
+- **body_template:** "Active rules that have been alive >30d but went uncited by the executor for the last 14d. Reflection runs daily yet hasn't retired them — the most common shape of an unresolved rule contradiction is a pair where one rule is dormant (effectively dead) but stays active because reflection's retirement cap or tenure floor blocked action. n={n}, dormant_ids={dormant_ids}. Persistent dormants pollute strategist context and prolong contradictions flagged by past RULE_CONTRADICTION findings. Escalates to critical when n >= 15."
+- **suggested_fix:** "For each dormant_id, read `rule_text` and `retirement_reason` (the latter will be null on actives) in `strategy_rules`. If the rule is clearly stale (superseded by attribution, contradicted by a newer rule, or about a feature that no longer exists), retire it via `tool_retire_rule` in the next strategy session. If retirement is being blocked by the per-session cap (`MAX_RETIREMENTS_PER_SESSION` in `v2/strategy.py`), consider raising the cap when n is high. If the executor citation regex (`_RULE_CITATION_RE` in `v2/trader.py`) has drifted from how reflection actually writes rule references, fix the regex first — false dormants will fire here."
+
 ## Ideation pass
 
 After running every deterministic check, perform one ideation pass. The goal is to surface findings the deterministic checks won't catch — concept-level gaps, cost trends, prompt-engineering hunches, missed audit coverage.
