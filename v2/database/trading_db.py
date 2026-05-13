@@ -327,13 +327,18 @@ def delete_all_positions():
 
 # --- Theses ---
 
-def insert_thesis(ticker, direction, thesis, entry_trigger=None, exit_trigger=None, invalidation=None, confidence="medium", source="ideation") -> int:
+def insert_thesis(ticker, direction, thesis, entry_trigger=None, exit_trigger=None, invalidation=None, confidence="medium", source="ideation", session_id=None) -> int:
+    """
+    Insert a trading thesis.
+
+    - session_id: FK to sessions.id (per-run; nullable for legacy rows)
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO theses (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO theses (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source, session_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source))
+        """, (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source, session_id))
         return cur.fetchone()["id"]
 
 

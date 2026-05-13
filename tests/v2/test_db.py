@@ -366,6 +366,15 @@ class TestTheses:
         )
         assert result == 1
 
+    def test_insert_thesis_passes_session_id(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_thesis
+        insert_thesis(ticker="AAPL", direction="long", thesis="t", session_id=42)
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
+
     def test_get_active_theses(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"id": 1, "ticker": "AAPL", "status": "active"}]
         from v2.database.trading_db import get_active_theses
