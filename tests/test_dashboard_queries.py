@@ -75,6 +75,13 @@ class TestGetThesis:
         cur.fetchone.return_value = None
         assert get_thesis(999) is None
 
+    def test_select_includes_session_id(self, cur):
+        from dashboard.queries import get_thesis
+        cur.fetchone.return_value = make_thesis_row(id=5)
+        get_thesis(5)
+        called_sql = cur.execute.call_args[0][0]
+        assert "session_id" in called_sql
+
 
 class TestGetThesisDecisions:
     def test_returns_decisions_joined_through_decision_signals(self, cur):
@@ -113,6 +120,28 @@ class TestGetDecision:
         from dashboard.queries import get_decision
         cur.fetchone.return_value = None
         assert get_decision(999) is None
+
+    def test_select_includes_session_id(self, cur):
+        from dashboard.queries import get_decision
+        cur.fetchone.return_value = make_decision_row(id=7)
+        get_decision(7)
+        called_sql = cur.execute.call_args[0][0]
+        assert "session_id" in called_sql
+
+
+class TestGetStrategyMemos:
+    def test_returns_memo_rows(self, cur):
+        from dashboard.queries import get_strategy_memos
+        cur.fetchall.return_value = [make_strategy_memo_row(id=1), make_strategy_memo_row(id=2)]
+        result = get_strategy_memos(days=30)
+        assert len(result) == 2
+
+    def test_select_includes_session_id(self, cur):
+        from dashboard.queries import get_strategy_memos
+        cur.fetchall.return_value = []
+        get_strategy_memos(days=30)
+        called_sql = cur.execute.call_args[0][0]
+        assert "session_id" in called_sql
 
 
 class TestGetDecisionSignalsFull:

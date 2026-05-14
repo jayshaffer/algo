@@ -409,7 +409,7 @@ def get_strategy_memos(days=30):
     """Fetch recent strategy memos."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT id, session_date, memo_type, content, created_at
+            SELECT id, session_date, memo_type, content, created_at, session_id
             FROM strategy_memos
             WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
             ORDER BY session_date DESC, created_at DESC
@@ -662,9 +662,15 @@ def get_llm_call(call_id: int):
 def lookup_session_id_by_date(d, session_type: str = 'daily'):
     """Return the most recent sessions.id for a given date + type, or None.
 
-    Multiple sessions can share a (date, type) only if the UNIQUE constraint
-    is bypassed — in practice the ON CONFLICT path keeps one row per pair —
-    but we ORDER BY started_at DESC for safety.
+    Legacy/fallback lookup. Per-run session IDs are now the norm: decisions,
+    theses, strategy_memos, and tweets all carry a `session_id` FK directly
+    (see migration 029), and the dashboard prefers that field. This helper
+    is retained as a fallback for historical rows where `session_id` is
+    NULL (pre-migration data, or rows written before per-run threading
+    landed in every code path). The UNIQUE (session_date, session_type)
+    constraint was dropped in migration 029, so multiple sessions per
+    (date, type) are now possible — we ORDER BY started_at DESC and return
+    the most recent.
     """
     with get_cursor() as cur:
         cur.execute("""
@@ -684,7 +690,7 @@ def get_thesis(thesis_id: int):
         cur.execute("""
             SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
                    invalidation, confidence, source, status,
-                   created_at, updated_at, closed_at, close_reason
+                   created_at, updated_at, closed_at, close_reason, session_id
             FROM theses
             WHERE id = %s
         """, (thesis_id,))
@@ -728,7 +734,8 @@ def get_decision(decision_id: int):
         cur.execute("""
             SELECT id, date, ticker, action, quantity, price, reasoning,
                    signals_used, account_equity, buying_power,
-                   outcome_7d, outcome_30d, is_off_playbook, playbook_action_id
+                   outcome_7d, outcome_30d, is_off_playbook, playbook_action_id,
+                   session_id
             FROM decisions
             WHERE id = %s
         """, (decision_id,))

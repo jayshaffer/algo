@@ -182,7 +182,7 @@ def decision_detail(decision_id):
         if decision.get("playbook_action_id")
         else None
     )
-    session_id = lookup_session_id_by_date(decision["date"])
+    session_id = decision.get("session_id") or lookup_session_id_by_date(decision["date"])
     return render_template(
         "decision_detail.html",
         decision=decision,
@@ -210,7 +210,9 @@ def thesis_detail(thesis_id):
         abort(404)
     decisions = get_thesis_decisions(thesis_id)
     actions = get_thesis_playbook_actions(thesis_id)
-    origin_session_id = lookup_session_id_by_date(thesis["created_at"].date()) if thesis.get("created_at") else None
+    origin_session_id = thesis.get("session_id")
+    if origin_session_id is None and thesis.get("created_at"):
+        origin_session_id = lookup_session_id_by_date(thesis["created_at"].date())
     return render_template(
         "thesis_detail.html",
         thesis=thesis,
@@ -313,7 +315,8 @@ def strategy():
     memos = []
     for m in memos_raw:
         m = dict(m)
-        m["session_id"] = lookup_session_id_by_date(m["session_date"])
+        if m.get("session_id") is None:
+            m["session_id"] = lookup_session_id_by_date(m["session_date"])
         memos.append(m)
     return render_template("strategy.html", state=state, rules=rules, memos=memos)
 

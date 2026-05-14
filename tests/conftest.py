@@ -277,6 +277,7 @@ def make_thesis_row(**kwargs):
         "updated_at": datetime.now(),
         "closed_at": None,
         "close_reason": None,
+        "session_id": None,
     }
     defaults.update(kwargs)
     return defaults
@@ -299,6 +300,7 @@ def make_decision_row(**kwargs):
         "outcome_30d": Decimal("5.0"),
         "is_off_playbook": False,
         "playbook_action_id": None,
+        "session_id": None,
     }
     defaults.update(kwargs)
     return defaults
@@ -467,6 +469,7 @@ def make_strategy_memo_row(**kwargs):
         "memo_type": "reflection",
         "content": "Market was volatile today, held positions steady",
         "created_at": datetime.now(),
+        "session_id": None,
     }
     defaults.update(kwargs)
     return defaults
