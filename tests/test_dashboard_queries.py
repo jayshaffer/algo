@@ -236,15 +236,38 @@ class TestSessionQueries:
         cur.fetchall.return_value = [make_decision_row(id=1)]
         result = get_session_decisions(1)
         assert len(result) == 1
-        # Should filter by joining session_date
+        # Should filter by session_id directly (no date-based JOIN)
         called_sql = cur.execute.call_args[0][0]
-        assert "sessions" in called_sql or "session_date" in called_sql
+        assert "d.session_id = %s" in called_sql
+
+    def test_get_session_decisions_is_id_scoped(self, cur):
+        """Predicate must be on decisions.session_id, not a date join via sessions."""
+        from dashboard.queries import get_session_decisions
+        cur.fetchall.return_value = []
+        get_session_decisions(42)
+        called_sql = cur.execute.call_args[0][0]
+        called_params = cur.execute.call_args[0][1]
+        assert "d.session_id = %s" in called_sql
+        assert "JOIN sessions" not in called_sql
+        assert "s.session_date" not in called_sql
+        assert called_params == (42,)
 
     def test_get_session_theses_created(self, cur):
         from dashboard.queries import get_session_theses_created
         cur.fetchall.return_value = [make_thesis_row(id=1)]
         result = get_session_theses_created(1)
         assert len(result) == 1
+
+    def test_get_session_theses_created_is_id_scoped(self, cur):
+        from dashboard.queries import get_session_theses_created
+        cur.fetchall.return_value = []
+        get_session_theses_created(42)
+        called_sql = cur.execute.call_args[0][0]
+        called_params = cur.execute.call_args[0][1]
+        assert "t.session_id = %s" in called_sql
+        assert "JOIN sessions" not in called_sql
+        assert "s.session_date" not in called_sql
+        assert called_params == (42,)
 
     def test_get_session_memo_returns_row(self, cur):
         from dashboard.queries import get_session_memo
@@ -256,10 +279,32 @@ class TestSessionQueries:
         cur.fetchone.return_value = None
         assert get_session_memo(999) is None
 
+    def test_get_session_memo_is_id_scoped(self, cur):
+        from dashboard.queries import get_session_memo
+        cur.fetchone.return_value = None
+        get_session_memo(42)
+        called_sql = cur.execute.call_args[0][0]
+        called_params = cur.execute.call_args[0][1]
+        assert "m.session_id = %s" in called_sql
+        assert "JOIN sessions" not in called_sql
+        assert "s.session_date" not in called_sql
+        assert called_params == (42,)
+
     def test_get_session_tweets(self, cur):
         from dashboard.queries import get_session_tweets
         cur.fetchall.return_value = [make_tweet_row(id=1)]
         assert len(get_session_tweets(1)) == 1
+
+    def test_get_session_tweets_is_id_scoped(self, cur):
+        from dashboard.queries import get_session_tweets
+        cur.fetchall.return_value = []
+        get_session_tweets(42)
+        called_sql = cur.execute.call_args[0][0]
+        called_params = cur.execute.call_args[0][1]
+        assert "tw.session_id = %s" in called_sql
+        assert "JOIN sessions" not in called_sql
+        assert "s.session_date" not in called_sql
+        assert called_params == (42,)
 
     def test_get_session_events_uses_existing_filter(self, cur):
         from dashboard.queries import get_session_events
@@ -309,6 +354,19 @@ class TestRecentTweetsExtended:
         result = get_recent_tweets()
         assert result[0]["decision_id"] == 11
         assert result[0]["session_id"] == 42
+
+    def test_joins_sessions_by_session_id_not_session_date(self, cur):
+        """The session join must use tw.session_id, not tw.session_date.
+
+        Per-run session rows allow multiple sessions on the same date; joining
+        by date would fan out tweets across every same-date session row.
+        """
+        from dashboard.queries import get_recent_tweets
+        cur.fetchall.return_value = []
+        get_recent_tweets()
+        sql = cur.execute.call_args[0][0]
+        assert "s.id = tw.session_id" in sql
+        assert "s.session_date = tw.session_date" not in sql
 
 
 class TestGetSessionLlmCalls:

@@ -428,8 +428,7 @@ def get_recent_tweets(days=30, limit=50):
                    tw.decision_id,
                    s.id AS session_id
             FROM tweets tw
-            LEFT JOIN sessions s ON s.session_date = tw.session_date
-                                 AND s.session_type = 'daily'
+            LEFT JOIN sessions s ON s.id = tw.session_id
             WHERE tw.session_date > CURRENT_DATE - INTERVAL '%s days'
             ORDER BY tw.session_date DESC, tw.created_at DESC
             LIMIT %s
@@ -553,43 +552,40 @@ def get_session(session_id: int):
 
 
 def get_session_decisions(session_id: int):
-    """Return decisions made during this session (by date match)."""
+    """Return decisions made during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
                    d.reasoning, d.account_equity, d.outcome_7d, d.outcome_30d,
                    d.is_off_playbook, d.playbook_action_id
             FROM decisions d
-            JOIN sessions s ON s.session_date = d.date
-            WHERE s.id = %s
+            WHERE d.session_id = %s
             ORDER BY d.id ASC
         """, (session_id,))
         return cur.fetchall()
 
 
 def get_session_theses_created(session_id: int):
-    """Return theses created on this session's date."""
+    """Return theses created during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT t.id, t.ticker, t.direction, t.thesis, t.entry_trigger,
                    t.exit_trigger, t.invalidation, t.confidence, t.source,
                    t.status, t.created_at, t.updated_at
             FROM theses t
-            JOIN sessions s ON s.session_date = t.created_at::date
-            WHERE s.id = %s
+            WHERE t.session_id = %s
             ORDER BY t.created_at ASC
         """, (session_id,))
         return cur.fetchall()
 
 
 def get_session_memo(session_id: int):
-    """Return the strategy_memos row for this session's date, or None."""
+    """Return the strategy_memos row for this session, or None."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT m.id, m.session_date, m.memo_type, m.content, m.created_at
             FROM strategy_memos m
-            JOIN sessions s ON s.session_date = m.session_date
-            WHERE s.id = %s
+            WHERE m.session_id = %s
             ORDER BY m.created_at DESC
             LIMIT 1
         """, (session_id,))
@@ -597,15 +593,14 @@ def get_session_memo(session_id: int):
 
 
 def get_session_tweets(session_id: int):
-    """Return tweets posted on this session's date."""
+    """Return tweets posted during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT tw.id, tw.session_date, tw.tweet_type, tw.tweet_text,
                    tw.platform, tw.posted, tw.error, tw.created_at,
                    tw.decision_id
             FROM tweets tw
-            JOIN sessions s ON s.session_date = tw.session_date
-            WHERE s.id = %s
+            WHERE tw.session_id = %s
             ORDER BY tw.created_at DESC
         """, (session_id,))
         return cur.fetchall()
