@@ -293,7 +293,9 @@ class TestWritePlaybookZeroMagnitude:
         from unittest.mock import patch
 
         with patch("v2.tools.replace_playbook_actions_atomic",
-                   return_value=(101, 1)) as mock_write:
+                   return_value=(101, 1)) as mock_write, \
+             patch("v2.tools.get_positions",
+                   return_value=[{"ticker": "AMZN", "shares": 2.5}]):
             result = tool_write_playbook(
                 market_outlook="neutral",
                 priority_actions=[
@@ -311,13 +313,94 @@ class TestWritePlaybookZeroMagnitude:
         from unittest.mock import patch
 
         with patch("v2.tools.replace_playbook_actions_atomic",
-                   return_value=(102, 1)) as mock_write:
+                   return_value=(102, 1)) as mock_write, \
+             patch("v2.tools.get_positions",
+                   return_value=[{"ticker": "SPY", "shares": 10}]):
             result = tool_write_playbook(
                 market_outlook="neutral",
                 priority_actions=[
                     {"ticker": "SPY", "action": "sell", "thesis_id": 9,
                      "intent_type": "exit_partial_pct", "intent_magnitude": 50,
                      "reasoning": "trim", "confidence": "medium"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" not in result
+        mock_write.assert_called_once()
+
+
+class TestWritePlaybookExitAgainstZeroHeld:
+    """ALGO-18: reject exit-style intents whose ticker has 0 live shares.
+    Catches the AMD stub-cleanup loop where the strategist re-wrote the same
+    exit_full intent for 6 consecutive sessions against a zeroed position."""
+
+    def test_exit_full_against_zero_held_rejected(self, mock_db, mock_cursor):
+        from unittest.mock import patch
+        with patch("v2.tools.get_positions", return_value=[]):
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "AMD", "action": "sell", "thesis_id": 37,
+                     "intent_type": "exit_full", "intent_magnitude": None,
+                     "reasoning": "stub cleanup", "confidence": "high"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" in result
+        assert "AMD" in result
+        assert "exit_full" in result
+        assert "empty" in result.lower() or "held=" in result
+
+    def test_exit_partial_pct_against_zero_held_rejected(self, mock_db, mock_cursor):
+        from unittest.mock import patch
+        with patch("v2.tools.get_positions",
+                   return_value=[{"ticker": "OTHER", "shares": 5}]):
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "AMD", "action": "sell", "thesis_id": 37,
+                     "intent_type": "exit_partial_pct", "intent_magnitude": 25,
+                     "reasoning": "trim", "confidence": "medium"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" in result
+        assert "AMD" in result
+
+    def test_exit_full_against_held_accepted(self, mock_db, mock_cursor):
+        from unittest.mock import patch
+        with patch("v2.tools.replace_playbook_actions_atomic",
+                   return_value=(201, 1)) as mock_write, \
+             patch("v2.tools.get_positions",
+                   return_value=[{"ticker": "AMD", "shares": 0.5}]):
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "AMD", "action": "sell", "thesis_id": 37,
+                     "intent_type": "exit_full", "intent_magnitude": None,
+                     "reasoning": "thesis invalidated", "confidence": "high"},
+                ],
+                watch_list=[],
+                risk_notes="",
+            )
+        assert "Error" not in result
+        mock_write.assert_called_once()
+
+    def test_buy_intent_unaffected_when_held_zero(self, mock_db, mock_cursor):
+        """ALGO-18 only gates exit intents; open/add intents pass even at held=0."""
+        from unittest.mock import patch
+        with patch("v2.tools.replace_playbook_actions_atomic",
+                   return_value=(202, 1)) as mock_write, \
+             patch("v2.tools.get_positions", return_value=[]):
+            result = tool_write_playbook(
+                market_outlook="neutral",
+                priority_actions=[
+                    {"ticker": "NVDA", "action": "buy", "thesis_id": 42,
+                     "intent_type": "invest_dollar", "intent_magnitude": 500,
+                     "reasoning": "fresh entry", "confidence": "high"},
                 ],
                 watch_list=[],
                 risk_notes="",
