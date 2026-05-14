@@ -148,12 +148,15 @@ class TestEntertainmentResult:
 class TestRunEntertainmentPipeline:
     """Verify end-to-end orchestration."""
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_tweet")
     @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_happy_path(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+    def test_happy_path(self, mock_client, mock_context, mock_generate, mock_post,
+                        mock_insert, mock_complete, mock_sess):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "NEWS: NVDA up 5%"
         mock_generate.return_value = {"text": "Arg! $NVDA making me money!", "type": "entertainment"}
@@ -167,19 +170,24 @@ class TestRunEntertainmentPipeline:
         assert result.error is None
         mock_insert.assert_called_once()
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.get_twitter_client")
-    def test_skips_without_credentials(self, mock_client):
+    def test_skips_without_credentials(self, mock_client, mock_complete, mock_sess):
         mock_client.return_value = None
         result = run_entertainment_pipeline()
         assert result.skipped is True
         assert result.posted is False
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_tweet")
     @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_post_failure(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+    def test_post_failure(self, mock_client, mock_context, mock_generate, mock_post,
+                          mock_insert, mock_complete, mock_sess):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
         mock_generate.return_value = {"text": "Tweet", "type": "entertainment"}
@@ -191,10 +199,13 @@ class TestRunEntertainmentPipeline:
         assert result.posted is False
         assert result.error == "Rate limit"
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_no_tweet_generated(self, mock_client, mock_context, mock_generate):
+    def test_no_tweet_generated(self, mock_client, mock_context, mock_generate,
+                                 mock_complete, mock_sess):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "No market data available."
         mock_generate.return_value = None
@@ -202,17 +213,24 @@ class TestRunEntertainmentPipeline:
         assert result.posted is False
         assert result.error is None
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_context_error_handled(self, mock_client, mock_context):
+    def test_context_error_handled(self, mock_client, mock_context,
+                                    mock_complete, mock_sess):
         mock_client.return_value = MagicMock()
         mock_context.side_effect = Exception("Total failure")
         result = run_entertainment_pipeline()
         assert "Context gathering failed" in result.error
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.posted_tweet_exists", return_value=True)
     @patch("v2.entertainment.get_twitter_client")
-    def test_skips_twitter_if_already_posted_today(self, mock_client, mock_check):
+    def test_skips_twitter_if_already_posted_today(
+        self, mock_client, mock_check, mock_complete, mock_sess,
+    ):
         """Mirror of the recap-stage rerun guard. If today's entertainment
         tweet already exists for Twitter, skip generation and posting."""
         from v2.entertainment import run_entertainment_pipeline
@@ -225,12 +243,15 @@ class TestRunEntertainmentPipeline:
             mock_check.call_args[0][0], "entertainment", "twitter",
         )
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_tweet")
     @patch("v2.entertainment.generate_entertainment_tweet")
     @patch("v2.entertainment.gather_market_context")
     @patch("v2.entertainment.get_twitter_client")
-    def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate, mock_post, mock_insert):
+    def test_db_log_error_does_not_crash(self, mock_client, mock_context, mock_generate,
+                                          mock_post, mock_insert, mock_complete, mock_sess):
         mock_client.return_value = MagicMock()
         mock_context.return_value = "context"
         mock_generate.return_value = {"text": "Tweet", "type": "entertainment"}
@@ -242,10 +263,59 @@ class TestRunEntertainmentPipeline:
         result = run_entertainment_pipeline()
         assert result.posted is True
 
+    @patch("v2.entertainment.insert_session_record", return_value=77)
+    @patch("v2.entertainment.complete_session")
+    @patch("v2.entertainment.fail_session")
+    @patch("v2.entertainment.insert_tweet", return_value=1)
+    @patch("v2.entertainment.post_to_bluesky")
+    @patch("v2.entertainment.generate_bluesky_entertainment_post")
+    @patch("v2.entertainment.get_bluesky_client")
+    @patch("v2.entertainment.posted_tweet_exists", return_value=False)
+    @patch("v2.entertainment.post_tweet")
+    @patch("v2.entertainment.generate_entertainment_tweet")
+    @patch("v2.entertainment.gather_market_context")
+    @patch("v2.entertainment.get_twitter_client")
+    def test_entertainment_creates_session_row_and_threads_id(
+        self, mock_tw_client, mock_context, mock_tw_gen, mock_tw_post, mock_dedup,
+        mock_bs_client, mock_bs_gen, mock_bs_post, mock_insert_tweet,
+        mock_fail, mock_complete, mock_sess,
+    ):
+        from v2.entertainment import run_entertainment_pipeline
+
+        mock_tw_client.return_value = MagicMock()
+        mock_bs_client.return_value = MagicMock()
+        mock_context.return_value = "NEWS: NVDA up 5%"
+        mock_tw_gen.return_value = {"text": "Tweet", "type": "entertainment"}
+        mock_tw_post.return_value = {
+            "text": "Tweet", "type": "entertainment",
+            "posted": True, "tweet_id": "tw-111", "error": None,
+        }
+        mock_bs_gen.return_value = {"text": "Bluesky post", "type": "entertainment"}
+        mock_bs_post.return_value = {
+            "text": "Bluesky post", "type": "entertainment",
+            "posted": True, "post_id": "at://abc/123", "error": None,
+        }
+
+        run_entertainment_pipeline()
+
+        args, kwargs = mock_sess.call_args
+        assert (
+            kwargs.get("session_type") == "entertainment"
+            or (len(args) >= 2 and args[1] == "entertainment")
+        )
+        mock_complete.assert_called_once_with(77)
+        mock_fail.assert_not_called()
+        # Both Twitter and Bluesky insert_tweet calls carry session_id=77
+        assert mock_insert_tweet.call_count == 2
+        for call in mock_insert_tweet.call_args_list:
+            assert call.kwargs.get("session_id") == 77
+
 
 class TestEntertainmentBluesky:
     """Verify Bluesky integration in entertainment pipeline."""
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_to_bluesky")
     @patch("v2.entertainment.generate_bluesky_entertainment_post")
@@ -256,7 +326,7 @@ class TestEntertainmentBluesky:
     @patch("v2.entertainment.get_twitter_client")
     def test_posts_to_both_platforms(self, mock_tw_client, mock_context, mock_tw_gen,
                                      mock_tw_post, mock_bs_client, mock_bs_gen,
-                                     mock_bs_post, mock_insert):
+                                     mock_bs_post, mock_insert, mock_complete, mock_sess):
         mock_tw_client.return_value = MagicMock()
         mock_bs_client.return_value = MagicMock()
         mock_context.return_value = "NEWS: NVDA up 5%"
@@ -276,6 +346,8 @@ class TestEntertainmentBluesky:
         assert result.bluesky_post_id == "at://abc/123"
         assert mock_insert.call_count == 2  # one for Twitter, one for Bluesky
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.get_bluesky_client")
     @patch("v2.entertainment.post_tweet")
@@ -284,7 +356,8 @@ class TestEntertainmentBluesky:
     @patch("v2.entertainment.get_twitter_client")
     def test_bluesky_skipped_without_credentials(self, mock_tw_client, mock_context,
                                                    mock_tw_gen, mock_tw_post,
-                                                   mock_bs_client, mock_insert):
+                                                   mock_bs_client, mock_insert,
+                                                   mock_complete, mock_sess):
         mock_tw_client.return_value = MagicMock()
         mock_bs_client.return_value = None
         mock_context.return_value = "NEWS"
@@ -297,6 +370,8 @@ class TestEntertainmentBluesky:
         assert result.posted is True
         assert result.bluesky_posted is False
 
+    @patch("v2.entertainment.insert_session_record", return_value=1)
+    @patch("v2.entertainment.complete_session")
     @patch("v2.entertainment.insert_tweet")
     @patch("v2.entertainment.post_to_bluesky")
     @patch("v2.entertainment.generate_bluesky_entertainment_post")
@@ -308,7 +383,8 @@ class TestEntertainmentBluesky:
     def test_bluesky_failure_does_not_block_twitter(self, mock_tw_client, mock_context,
                                                       mock_tw_gen, mock_tw_post,
                                                       mock_bs_client, mock_bs_gen,
-                                                      mock_bs_post, mock_insert):
+                                                      mock_bs_post, mock_insert,
+                                                      mock_complete, mock_sess):
         mock_tw_client.return_value = MagicMock()
         mock_bs_client.return_value = MagicMock()
         mock_context.return_value = "NEWS"

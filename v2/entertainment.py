@@ -12,7 +12,13 @@ from datetime import date
 from .bluesky import generate_bluesky_entertainment_post, get_bluesky_client, post_to_bluesky
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor  # noqa: F401 — patched in tests via mock.patch
-from .database.trading_db import insert_tweet, posted_tweet_exists
+from .database.trading_db import (
+    complete_session,
+    fail_session,
+    insert_session_record,
+    insert_tweet,
+    posted_tweet_exists,
+)
 from .market_data import format_market_snapshot, get_market_snapshot
 from .news import fetch_broad_news
 from .twitter import get_twitter_client, post_tweet
@@ -129,6 +135,7 @@ def _post_entertainment_bluesky(
     today: date,
     model: str,
     result: EntertainmentResult,
+    session_id: int | None = None,
 ) -> None:
     try:
         bluesky_client = get_bluesky_client()
@@ -180,6 +187,7 @@ def _post_entertainment_bluesky(
             posted=bs_result["posted"],
             error=bs_result.get("error"),
             platform="bluesky",
+            session_id=session_id,
         )
     except Exception as e:
         logger.error("Failed to log Bluesky post to DB: %s", e)
@@ -190,77 +198,99 @@ def run_entertainment_pipeline(
     news_limit: int = 20,
     model: str = "claude-haiku-4-5-20251001",
 ) -> EntertainmentResult:
-    """Run the full entertainment tweet pipeline: context -> generate -> post -> log."""
+    """Run the full entertainment tweet pipeline: context -> generate -> post -> log.
+
+    On-demand; no idempotency gate. Each invocation opens a new
+    `entertainment` session row so the resulting tweet rows are
+    attributable to the run that produced them.
+    """
     result = EntertainmentResult()
     today = date.today()
 
-    client = get_twitter_client()
-    if client is None:
-        result.skipped = True
-        logger.info("Entertainment pipeline skipped — no credentials")
-        return result
+    session_id = insert_session_record(today, session_type="entertainment")
+    logger.info("Entertainment session ID: %d", session_id)
 
-    # Rerun guard mirroring the recap stage in twitter.py / bluesky.py.
-    # If today's entertainment tweet was already posted, short-circuit
-    # before re-burning Anthropic spend on generation.
     try:
-        if posted_tweet_exists(today, "entertainment", "twitter"):
+        client = get_twitter_client()
+        if client is None:
             result.skipped = True
-            logger.info("Entertainment pipeline skipped — already posted today")
+            logger.info("Entertainment pipeline skipped — no credentials")
+            complete_session(session_id)
             return result
-    except Exception as e:
-        logger.warning("Entertainment stage: posted_tweet_exists check failed (%s); proceeding", e)
 
-    try:
-        context = gather_market_context(news_hours=news_hours, news_limit=news_limit)
-    except Exception as e:
-        result.error = f"Context gathering failed: {e}"
-        logger.error("Failed to gather market context: %s", e)
-        return result
+        # Rerun guard mirroring the recap stage in twitter.py / bluesky.py.
+        # If today's entertainment tweet was already posted, short-circuit
+        # before re-burning Anthropic spend on generation.
+        try:
+            if posted_tweet_exists(today, "entertainment", "twitter"):
+                result.skipped = True
+                logger.info("Entertainment pipeline skipped — already posted today")
+                complete_session(session_id)
+                return result
+        except Exception as e:
+            logger.warning("Entertainment stage: posted_tweet_exists check failed (%s); proceeding", e)
 
-    try:
-        tweet = generate_entertainment_tweet(context, model=model)
-    except Exception as e:
-        result.error = f"Tweet generation failed: {e}"
-        logger.error("Failed to generate entertainment tweet: %s", e)
-        return result
+        try:
+            context = gather_market_context(news_hours=news_hours, news_limit=news_limit)
+        except Exception as e:
+            result.error = f"Context gathering failed: {e}"
+            logger.error("Failed to gather market context: %s", e)
+            complete_session(session_id)
+            return result
 
-    if tweet is None:
-        logger.info("No entertainment tweet generated")
-        return result
+        try:
+            tweet = generate_entertainment_tweet(context, model=model)
+        except Exception as e:
+            result.error = f"Tweet generation failed: {e}"
+            logger.error("Failed to generate entertainment tweet: %s", e)
+            complete_session(session_id)
+            return result
 
-    try:
-        post_result = post_tweet(tweet, client=client)
-    except Exception as e:
-        result.error = f"Tweet posting failed: {e}"
-        logger.error("Failed to post tweet: %s", e)
-        return result
+        if tweet is None:
+            logger.info("No entertainment tweet generated")
+            complete_session(session_id)
+            return result
 
-    result.posted = post_result["posted"]
-    result.tweet_id = post_result.get("tweet_id")
-    if post_result.get("error"):
-        result.error = post_result["error"]
+        try:
+            post_result = post_tweet(tweet, client=client)
+        except Exception as e:
+            result.error = f"Tweet posting failed: {e}"
+            logger.error("Failed to post tweet: %s", e)
+            complete_session(session_id)
+            return result
 
-    try:
-        insert_tweet(
-            session_date=today,
-            tweet_type="entertainment",
-            tweet_text=post_result["text"],
-            tweet_id=post_result.get("tweet_id"),
-            posted=post_result["posted"],
-            error=post_result.get("error"),
+        result.posted = post_result["posted"]
+        result.tweet_id = post_result.get("tweet_id")
+        if post_result.get("error"):
+            result.error = post_result["error"]
+
+        try:
+            insert_tweet(
+                session_date=today,
+                tweet_type="entertainment",
+                tweet_text=post_result["text"],
+                tweet_id=post_result.get("tweet_id"),
+                posted=post_result["posted"],
+                error=post_result.get("error"),
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error("Failed to log tweet to DB: %s", e)
+
+        _post_entertainment_bluesky(
+            context, today, model, result, session_id=session_id,
         )
+
+        logger.info(
+            "Entertainment pipeline complete: posted=%s, tweet_id=%s",
+            result.posted, result.tweet_id,
+        )
+
+        complete_session(session_id)
+        return result
     except Exception as e:
-        logger.error("Failed to log tweet to DB: %s", e)
-
-    _post_entertainment_bluesky(context, today, model, result)
-
-    logger.info(
-        "Entertainment pipeline complete: posted=%s, tweet_id=%s",
-        result.posted, result.tweet_id,
-    )
-
-    return result
+        fail_session(session_id, str(e))
+        raise
 
 
 def main():
