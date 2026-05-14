@@ -419,7 +419,7 @@ def _run_twitter_stage_wrapper(
     _start_stage(session_id, "twitter")
     with capture_usage() as usage:
         try:
-            result.twitter_result = run_twitter_stage()
+            result.twitter_result = run_twitter_stage(session_id=session_id)
             _complete_stage(session_id, "twitter", usage=usage)
         except Exception as e:
             result.twitter_error = str(e)
@@ -439,7 +439,7 @@ def _run_bluesky_stage_wrapper(
     _start_stage(session_id, "bluesky")
     with capture_usage() as usage:
         try:
-            result.bluesky_result = run_bluesky_stage()
+            result.bluesky_result = run_bluesky_stage(session_id=session_id)
             _complete_stage(session_id, "bluesky", usage=usage)
         except Exception as e:
             result.bluesky_error = str(e)
@@ -461,7 +461,7 @@ def _run_trade_posts_stage_wrapper(
     _start_stage(session_id, "trade_posts")
     with capture_usage() as usage:
         try:
-            result.trade_posts_result = run_trade_posts_stage()
+            result.trade_posts_result = run_trade_posts_stage(session_id=session_id)
             _complete_stage(session_id, "trade_posts", usage=usage)
         except Exception as e:
             result.trade_posts_error = str(e)

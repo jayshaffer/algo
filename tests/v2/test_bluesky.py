@@ -456,6 +456,27 @@ class TestRunBlueskyStage:
         assert len(result.errors) == 1
         assert "Failed to log" in result.errors[0]
 
+    @patch("v2.bluesky.insert_tweet")
+    @patch("v2.bluesky.post_to_bluesky")
+    @patch("v2.bluesky.generate_bluesky_post")
+    @patch("v2.bluesky.gather_tweet_context")
+    @patch("v2.bluesky.get_bluesky_client")
+    def test_run_bluesky_stage_writes_tweet_with_session_id(
+        self, mock_client, mock_context, mock_generate, mock_post, mock_insert,
+    ):
+        """Task 10: session_id threads from stage entry into insert_tweet."""
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "ctx"
+        mock_generate.return_value = {"text": "Post", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Post", "type": "recap", "posted": True,
+            "post_id": "at://did:plc:abc/app.bsky.feed.post/123", "error": None,
+        }
+        run_bluesky_stage(date(2026, 2, 15), session_id=42)
+        assert mock_insert.call_count >= 1
+        for call in mock_insert.call_args_list:
+            assert call.kwargs.get("session_id") == 42
+
     @patch("v2.bluesky.posted_tweet_exists")
     @patch("v2.bluesky.post_to_bluesky")
     @patch("v2.bluesky.generate_bluesky_post")

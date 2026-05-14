@@ -317,7 +317,7 @@ class TestStage5Twitter:
              patch("v2.session.run_twitter_stage") as mock_twitter:
 
             mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
-            mock_twitter.side_effect = lambda: call_order.append("twitter")
+            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
 
             run_session(dry_run=False)
 
@@ -394,8 +394,8 @@ class TestStage5Bluesky:
              patch("v2.session.run_twitter_stage") as mock_twitter, \
              patch("v2.session.run_bluesky_stage") as mock_bluesky:
 
-            mock_twitter.side_effect = lambda: call_order.append("twitter")
-            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
+            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
 
             run_session(dry_run=False)
 
@@ -476,7 +476,7 @@ class TestStage6Dashboard:
              patch("v2.session.run_bluesky_stage") as mock_bluesky, \
              patch("v2.session.run_dashboard_stage") as mock_dashboard:
 
-            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
             mock_dashboard.side_effect = lambda: call_order.append("dashboard")
 
             run_session(dry_run=False)

@@ -35,7 +35,7 @@ class TestInsertTweet:
         assert "INSERT INTO tweets" in sql
         assert "RETURNING id" in sql
         params = mock_db.execute.call_args[0][1]
-        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None, "twitter", None)
+        assert params == (date(2026, 2, 15), "recap", "Ahoy! Great day for me treasure!", None, False, None, "twitter", None, None)
 
     def test_insert_tweet_with_all_fields(self, mock_db):
         mock_db.fetchone.return_value = {"id": 1}
@@ -653,6 +653,26 @@ class TestRunTwitterStage:
         mock_context.assert_not_called()
         mock_generate.assert_not_called()
         mock_post.assert_not_called()
+
+    @patch("v2.twitter.insert_tweet")
+    @patch("v2.twitter.post_tweet")
+    @patch("v2.twitter.generate_tweet")
+    @patch("v2.twitter.gather_tweet_context")
+    @patch("v2.twitter.get_twitter_client")
+    def test_run_twitter_stage_writes_tweet_with_session_id(
+        self, mock_client, mock_context, mock_generate, mock_post, mock_insert,
+    ):
+        """Task 10: session_id threads from stage entry into insert_tweet."""
+        mock_client.return_value = MagicMock()
+        mock_context.return_value = "ctx"
+        mock_generate.return_value = {"text": "Tweet", "type": "recap"}
+        mock_post.return_value = {
+            "text": "Tweet", "type": "recap", "posted": True, "tweet_id": "111", "error": None,
+        }
+        run_twitter_stage(date(2026, 2, 15), session_id=42)
+        assert mock_insert.call_count >= 1
+        for call in mock_insert.call_args_list:
+            assert call.kwargs.get("session_id") == 42
 
     @patch("v2.twitter.insert_tweet")
     @patch("v2.twitter.post_tweet")
