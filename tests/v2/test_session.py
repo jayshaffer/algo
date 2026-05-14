@@ -632,8 +632,9 @@ class TestSessionIdempotency:
     def test_force_creates_new_session_row_when_one_already_exists(self):
         """Per-run uniqueness: --force inserts a brand-new sessions row
         even when a completed session already exists for today."""
-        from v2.session import _check_and_record_session
         from datetime import date
+
+        from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=99) as mock_insert, \
              patch("v2.session.get_session_for_date", return_value={"id": 7, "status": "completed"}):
             session_id, completed, err = _check_and_record_session(force=True, session_date=date(2026, 5, 13))
@@ -643,8 +644,9 @@ class TestSessionIdempotency:
         mock_insert.assert_called_once()
 
     def test_no_force_skips_when_completed_session_exists(self):
-        from v2.session import _check_and_record_session
         from datetime import date
+
+        from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record") as mock_insert, \
              patch("v2.session.get_session_for_date", return_value={"id": 7, "status": "completed"}):
             session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
@@ -655,8 +657,9 @@ class TestSessionIdempotency:
     def test_no_force_creates_new_session_when_prior_was_failed(self):
         """A failed prior session does not gate; a fresh run gets its own
         session row (no resume, no stage skipping)."""
-        from v2.session import _check_and_record_session
         from datetime import date
+
+        from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=12) as mock_insert, \
              patch("v2.session.get_session_for_date", return_value={"id": 5, "status": "failed"}):
             session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
