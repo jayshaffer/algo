@@ -352,7 +352,10 @@ class BlueskyStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
+def run_bluesky_stage(
+    session_date: date | None = None,
+    session_id: int | None = None,
+) -> BlueskyStageResult:
     """Run the full Bluesky pipeline: context -> generate -> post -> log."""
     if session_date is None:
         session_date = date.today()
@@ -423,6 +426,7 @@ def run_bluesky_stage(session_date: date | None = None) -> BlueskyStageResult:
             posted=post_result["posted"],
             error=post_result.get("error"),
             platform="bluesky",
+            session_id=session_id,
         )
     except Exception as e:
         db_logged = False

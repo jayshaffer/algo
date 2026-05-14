@@ -409,7 +409,7 @@ def get_strategy_memos(days=30):
     """Fetch recent strategy memos."""
     with get_cursor() as cur:
         cur.execute("""
-            SELECT id, session_date, memo_type, content, created_at
+            SELECT id, session_date, memo_type, content, created_at, session_id
             FROM strategy_memos
             WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
             ORDER BY session_date DESC, created_at DESC
@@ -428,8 +428,7 @@ def get_recent_tweets(days=30, limit=50):
                    tw.decision_id,
                    s.id AS session_id
             FROM tweets tw
-            LEFT JOIN sessions s ON s.session_date = tw.session_date
-                                 AND s.session_type = 'daily'
+            LEFT JOIN sessions s ON s.id = tw.session_id
             WHERE tw.session_date > CURRENT_DATE - INTERVAL '%s days'
             ORDER BY tw.session_date DESC, tw.created_at DESC
             LIMIT %s
@@ -553,43 +552,40 @@ def get_session(session_id: int):
 
 
 def get_session_decisions(session_id: int):
-    """Return decisions made during this session (by date match)."""
+    """Return decisions made during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT d.id, d.date, d.ticker, d.action, d.quantity, d.price,
                    d.reasoning, d.account_equity, d.outcome_7d, d.outcome_30d,
                    d.is_off_playbook, d.playbook_action_id
             FROM decisions d
-            JOIN sessions s ON s.session_date = d.date
-            WHERE s.id = %s
+            WHERE d.session_id = %s
             ORDER BY d.id ASC
         """, (session_id,))
         return cur.fetchall()
 
 
 def get_session_theses_created(session_id: int):
-    """Return theses created on this session's date."""
+    """Return theses created during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT t.id, t.ticker, t.direction, t.thesis, t.entry_trigger,
                    t.exit_trigger, t.invalidation, t.confidence, t.source,
                    t.status, t.created_at, t.updated_at
             FROM theses t
-            JOIN sessions s ON s.session_date = t.created_at::date
-            WHERE s.id = %s
+            WHERE t.session_id = %s
             ORDER BY t.created_at ASC
         """, (session_id,))
         return cur.fetchall()
 
 
 def get_session_memo(session_id: int):
-    """Return the strategy_memos row for this session's date, or None."""
+    """Return the strategy_memos row for this session, or None."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT m.id, m.session_date, m.memo_type, m.content, m.created_at
             FROM strategy_memos m
-            JOIN sessions s ON s.session_date = m.session_date
-            WHERE s.id = %s
+            WHERE m.session_id = %s
             ORDER BY m.created_at DESC
             LIMIT 1
         """, (session_id,))
@@ -597,15 +593,14 @@ def get_session_memo(session_id: int):
 
 
 def get_session_tweets(session_id: int):
-    """Return tweets posted on this session's date."""
+    """Return tweets posted during this session (by session_id)."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT tw.id, tw.session_date, tw.tweet_type, tw.tweet_text,
                    tw.platform, tw.posted, tw.error, tw.created_at,
                    tw.decision_id
             FROM tweets tw
-            JOIN sessions s ON s.session_date = tw.session_date
-            WHERE s.id = %s
+            WHERE tw.session_id = %s
             ORDER BY tw.created_at DESC
         """, (session_id,))
         return cur.fetchall()
@@ -667,9 +662,15 @@ def get_llm_call(call_id: int):
 def lookup_session_id_by_date(d, session_type: str = 'daily'):
     """Return the most recent sessions.id for a given date + type, or None.
 
-    Multiple sessions can share a (date, type) only if the UNIQUE constraint
-    is bypassed — in practice the ON CONFLICT path keeps one row per pair —
-    but we ORDER BY started_at DESC for safety.
+    Legacy/fallback lookup. Per-run session IDs are now the norm: decisions,
+    theses, strategy_memos, and tweets all carry a `session_id` FK directly
+    (see migration 029), and the dashboard prefers that field. This helper
+    is retained as a fallback for historical rows where `session_id` is
+    NULL (pre-migration data, or rows written before per-run threading
+    landed in every code path). The UNIQUE (session_date, session_type)
+    constraint was dropped in migration 029, so multiple sessions per
+    (date, type) are now possible — we ORDER BY started_at DESC and return
+    the most recent.
     """
     with get_cursor() as cur:
         cur.execute("""
@@ -689,7 +690,7 @@ def get_thesis(thesis_id: int):
         cur.execute("""
             SELECT id, ticker, direction, thesis, entry_trigger, exit_trigger,
                    invalidation, confidence, source, status,
-                   created_at, updated_at, closed_at, close_reason
+                   created_at, updated_at, closed_at, close_reason, session_id
             FROM theses
             WHERE id = %s
         """, (thesis_id,))
@@ -733,7 +734,8 @@ def get_decision(decision_id: int):
         cur.execute("""
             SELECT id, date, ticker, action, quantity, price, reasoning,
                    signals_used, account_equity, buying_power,
-                   outcome_7d, outcome_30d, is_off_playbook, playbook_action_id
+                   outcome_7d, outcome_30d, is_off_playbook, playbook_action_id,
+                   session_id
             FROM decisions
             WHERE id = %s
         """, (decision_id,))

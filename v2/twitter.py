@@ -307,7 +307,10 @@ class TwitterStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
+def run_twitter_stage(
+    session_date: date | None = None,
+    session_id: int | None = None,
+) -> TwitterStageResult:
     """Run the full tweet pipeline: context -> generate -> post -> log."""
     if session_date is None:
         session_date = date.today()
@@ -372,6 +375,7 @@ def run_twitter_stage(session_date: date | None = None) -> TwitterStageResult:
             tweet_id=post_result.get("tweet_id"),
             posted=post_result["posted"],
             error=post_result.get("error"),
+            session_id=session_id,
         )
     except Exception as e:
         db_logged = False

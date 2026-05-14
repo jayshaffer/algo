@@ -18,9 +18,13 @@ from datetime import date
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor  # noqa: F401  used via mock_db patch
 from .database.trading_db import (
+    complete_session,
+    fail_session,
     get_closed_losers,
     get_retired_rules,
+    get_session_for_date,
     get_signal_attribution,
+    insert_session_record,
     insert_tweet,
     posted_tweet_exists,
 )
@@ -250,6 +254,7 @@ def _post_one(
     today: date,
     type_label: str,
     result: WeeklyPostResult,
+    session_id: int | None = None,
 ) -> None:
     if _is_dry_run():
         logger.info("[DRY-RUN] %s %s post:\n%s",
@@ -270,6 +275,7 @@ def _post_one(
             posted=post_result["posted"],
             error=post_result.get("error"),
             platform=platform,
+            session_id=session_id,
         )
         if post_result["posted"]:
             if platform == "twitter":
@@ -287,6 +293,7 @@ def _run_weekly(
     type_label: str,
     gather,
     generate,
+    force: bool = False,
 ) -> WeeklyPostResult:
     if today is None:
         today = date.today()
@@ -299,82 +306,114 @@ def _run_weekly(
         logger.info("Weekly %s skipped — %s", type_label, result.skip_reason)
         return result
 
-    twitter_client = get_twitter_client()
-    bluesky_client = get_bluesky_client()
-    if twitter_client is None and bluesky_client is None:
-        result.skipped = True
-        result.skip_reason = "no platform credentials"
-        logger.info("Weekly %s skipped — no platform credentials", type_label)
-        return result
+    if not force:
+        existing = get_session_for_date(today, session_type=type_label)
+        if existing and existing.get("status") == "completed":
+            result.skipped = True
+            result.skip_reason = f"{type_label} session already completed today"
+            logger.info(
+                "Weekly %s already completed for %s — skipping. Use --force to override.",
+                type_label, today,
+            )
+            return result
+
+    session_id = insert_session_record(today, session_type=type_label)
+    logger.info("Weekly %s session ID: %d", type_label, session_id)
 
     try:
-        context = gather(today=today) if type_label == "weekly_mistakes" else gather()
+        twitter_client = get_twitter_client()
+        bluesky_client = get_bluesky_client()
+        if twitter_client is None and bluesky_client is None:
+            result.skipped = True
+            result.skip_reason = "no platform credentials"
+            logger.info("Weekly %s skipped — no platform credentials", type_label)
+            complete_session(session_id)
+            return result
+
+        try:
+            context = gather(today=today) if type_label == "weekly_mistakes" else gather()
+        except Exception as e:
+            result.errors.append(f"Context gather failed: {e}")
+            logger.error("%s context gather failed: %s", type_label, e)
+            complete_session(session_id)
+            return result
+
+        if not context:
+            result.skipped = True
+            result.skip_reason = "no data this window"
+            logger.info("Weekly %s skipped — no data", type_label)
+            complete_session(session_id)
+            return result
+
+        # Idempotency check — both platforms
+        tw_already = False
+        bs_already = False
+        try:
+            if twitter_client is not None:
+                tw_already = posted_tweet_exists(today, type_label, "twitter")
+            if bluesky_client is not None:
+                bs_already = posted_tweet_exists(today, type_label, "bluesky")
+        except Exception as e:
+            logger.warning("Weekly %s dedup check failed: %s; proceeding",
+                           type_label, e)
+
+        if (twitter_client is None or tw_already) and (bluesky_client is None or bs_already):
+            result.skipped = True
+            result.skip_reason = "already posted on all configured platforms"
+            logger.info("Weekly %s skipped — already posted today", type_label)
+            complete_session(session_id)
+            return result
+
+        dashboard_base_url = os.environ.get("DASHBOARD_URL", "")
+        post_body = generate(context, dashboard_base_url=dashboard_base_url)
+        if post_body is None:
+            result.errors.append("LLM generation returned None")
+            complete_session(session_id)
+            return result
+
+        if twitter_client is not None and not tw_already:
+            _post_one(
+                platform="twitter", client=twitter_client, poster=post_tweet,
+                post_body=post_body, today=today, type_label=type_label,
+                result=result, session_id=session_id,
+            )
+        if bluesky_client is not None and not bs_already:
+            _post_one(
+                platform="bluesky", client=bluesky_client, poster=post_to_bluesky,
+                post_body=post_body, today=today, type_label=type_label,
+                result=result, session_id=session_id,
+            )
+
+        logger.info("Weekly %s complete: twitter=%s, bluesky=%s",
+                    type_label, result.twitter_posted, result.bluesky_posted)
+        complete_session(session_id)
+        return result
     except Exception as e:
-        result.errors.append(f"Context gather failed: {e}")
-        logger.error("%s context gather failed: %s", type_label, e)
-        return result
-
-    if not context:
-        result.skipped = True
-        result.skip_reason = "no data this window"
-        logger.info("Weekly %s skipped — no data", type_label)
-        return result
-
-    # Idempotency check — both platforms
-    tw_already = False
-    bs_already = False
-    try:
-        if twitter_client is not None:
-            tw_already = posted_tweet_exists(today, type_label, "twitter")
-        if bluesky_client is not None:
-            bs_already = posted_tweet_exists(today, type_label, "bluesky")
-    except Exception as e:
-        logger.warning("Weekly %s dedup check failed: %s; proceeding",
-                       type_label, e)
-
-    if (twitter_client is None or tw_already) and (bluesky_client is None or bs_already):
-        result.skipped = True
-        result.skip_reason = "already posted on all configured platforms"
-        logger.info("Weekly %s skipped — already posted today", type_label)
-        return result
-
-    dashboard_base_url = os.environ.get("DASHBOARD_URL", "")
-    post_body = generate(context, dashboard_base_url=dashboard_base_url)
-    if post_body is None:
-        result.errors.append("LLM generation returned None")
-        return result
-
-    if twitter_client is not None and not tw_already:
-        _post_one(
-            platform="twitter", client=twitter_client, poster=post_tweet,
-            post_body=post_body, today=today, type_label=type_label, result=result,
-        )
-    if bluesky_client is not None and not bs_already:
-        _post_one(
-            platform="bluesky", client=bluesky_client, poster=post_to_bluesky,
-            post_body=post_body, today=today, type_label=type_label, result=result,
-        )
-
-    logger.info("Weekly %s complete: twitter=%s, bluesky=%s",
-                type_label, result.twitter_posted, result.bluesky_posted)
-    return result
+        fail_session(session_id, str(e))
+        raise
 
 
-def run_mistakes_post(today: date | None = None) -> WeeklyPostResult:
+def run_mistakes_post(
+    today: date | None = None, force: bool = False,
+) -> WeeklyPostResult:
     return _run_weekly(
         today=today,
         type_label="weekly_mistakes",
         gather=gather_mistakes_context,
         generate=generate_mistakes_post,
+        force=force,
     )
 
 
-def run_attribution_post(today: date | None = None) -> WeeklyPostResult:
+def run_attribution_post(
+    today: date | None = None, force: bool = False,
+) -> WeeklyPostResult:
     return _run_weekly(
         today=today,
         type_label="weekly_attribution",
         gather=gather_attribution_context,
         generate=generate_attribution_post,
+        force=force,
     )
 
 
@@ -384,14 +423,24 @@ def _main(argv: list[str] | None = None) -> int:
         description="Weekly social posts (mistakes / attribution).",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("mistakes", help="Run the weekly mistakes post.")
-    sub.add_parser("attribution", help="Run the weekly attribution post.")
+    mistakes_p = sub.add_parser("mistakes", help="Run the weekly mistakes post.")
+    mistakes_p.add_argument(
+        "--force", action="store_true",
+        help="Bypass the session-level idempotency gate.",
+    )
+    attribution_p = sub.add_parser(
+        "attribution", help="Run the weekly attribution post.",
+    )
+    attribution_p.add_argument(
+        "--force", action="store_true",
+        help="Bypass the session-level idempotency gate.",
+    )
     args = parser.parse_args(argv)
 
     if args.cmd == "mistakes":
-        result = run_mistakes_post()
+        result = run_mistakes_post(force=args.force)
     else:
-        result = run_attribution_post()
+        result = run_attribution_post(force=args.force)
     return 1 if getattr(result, "errors", []) else 0
 
 

@@ -34,7 +34,6 @@ from .database.trading_db import (
     complete_session_stage,
     fail_session,
     fail_session_stage,
-    get_completed_stages,
     get_current_strategy_state,
     get_playbook,
     get_session_for_date,
@@ -166,29 +165,28 @@ def _log_session_costs(session_id: int | None) -> None:
 def _check_and_record_session(force: bool, session_date) -> tuple[int | None, set, str | None]:
     """Returns (session_id, completed_stages, early_error).
 
-    early_error is non-None when the caller should return immediately
-    (e.g., session already completed and force=False).
+    Per-run sessions: every invocation creates a new sessions row.
+    completed_stages is always the empty set — no resume across runs.
+
+    Idempotency: if force=False and a session of session_type='daily'
+    is already 'completed' for this date, we skip with early_error set.
+    --force bypasses that gate.
     """
-    session_id: int | None = None
-    completed_stages: set = set()
     if not force:
         try:
             existing = get_session_for_date(session_date)
             if existing and existing["status"] == "completed":
                 logger.warning("Session already completed for %s. Use --force to override.", session_date)
                 return None, set(), f"Session already completed for {session_date}"
-            if existing:
-                completed_stages = get_completed_stages(existing["id"])
-                if completed_stages:
-                    logger.info("Resuming session — already completed: %s", completed_stages)
         except Exception as e:
             logger.warning("Could not check session status: %s — proceeding", e)
     try:
         session_id = insert_session_record(session_date)
         logger.info("Session ID: %d", session_id)
+        return session_id, set(), None
     except Exception as e:
         logger.warning("Could not create session record: %s — proceeding without tracking", e)
-    return session_id, completed_stages, None
+        return None, set(), None
 
 
 def _run_learning_refresh(
@@ -252,7 +250,7 @@ def _run_pipeline_stage(
 STRATEGIST_MEMO_MIN_LENGTH = 40
 
 
-def _persist_strategist_memo(result: SessionResult, session_date) -> None:
+def _persist_strategist_memo(result: SessionResult, session_date, session_id: int | None = None) -> None:
     try:
         if not (result.strategist_result and result.strategist_result.final_summary):
             return
@@ -274,6 +272,7 @@ def _persist_strategist_memo(result: SessionResult, session_date) -> None:
             memo_type='strategist_notes',
             content=summary,
             strategy_state_id=state['id'] if state else None,
+            session_id=session_id,
         )
         logger.info("Strategist summary saved as memo")
     except Exception as e:
@@ -314,7 +313,7 @@ def _run_strategist_stage(
                     f"Strategist finished without writing a playbook for {session_date} "
                     "(likely hit max_tokens or max_turns before calling write_playbook)"
                 )
-            _persist_strategist_memo(result, session_date)
+            _persist_strategist_memo(result, session_date, session_id=session_id)
             _complete_stage(session_id, "strategist", usage=usage)
         except Exception as e:
             result.strategist_error = str(e)
@@ -420,7 +419,7 @@ def _run_twitter_stage_wrapper(
     _start_stage(session_id, "twitter")
     with capture_usage() as usage:
         try:
-            result.twitter_result = run_twitter_stage()
+            result.twitter_result = run_twitter_stage(session_id=session_id)
             _complete_stage(session_id, "twitter", usage=usage)
         except Exception as e:
             result.twitter_error = str(e)
@@ -440,7 +439,7 @@ def _run_bluesky_stage_wrapper(
     _start_stage(session_id, "bluesky")
     with capture_usage() as usage:
         try:
-            result.bluesky_result = run_bluesky_stage()
+            result.bluesky_result = run_bluesky_stage(session_id=session_id)
             _complete_stage(session_id, "bluesky", usage=usage)
         except Exception as e:
             result.bluesky_error = str(e)
@@ -462,7 +461,7 @@ def _run_trade_posts_stage_wrapper(
     _start_stage(session_id, "trade_posts")
     with capture_usage() as usage:
         try:
-            result.trade_posts_result = run_trade_posts_stage()
+            result.trade_posts_result = run_trade_posts_stage(session_id=session_id)
             _complete_stage(session_id, "trade_posts", usage=usage)
         except Exception as e:
             result.trade_posts_error = str(e)

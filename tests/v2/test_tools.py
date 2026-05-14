@@ -686,6 +686,83 @@ class TestToolAdoptThesis:
         assert "already exists" in result
 
 
+class TestThesisHandlersSessionId:
+    """Task 8: thesis-creation handlers must forward session_id to
+    insert_thesis so newly-created theses are tagged with the active
+    session row."""
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_positions")
+    @patch("v2.tools.get_active_theses")
+    def test_create_thesis_passes_session_id_to_insert(
+        self, mock_theses, mock_positions, mock_insert, mock_validate, mock_links
+    ):
+        mock_theses.return_value = []
+        mock_positions.return_value = []
+        mock_insert.return_value = 1
+        mock_validate.return_value = [{"type": "news_signal", "id": 1}]
+        tool_create_thesis(
+            ticker="AAPL",
+            direction="long",
+            thesis="t",
+            entry_trigger="e",
+            exit_trigger="x",
+            invalidation="i",
+            confidence="high",
+            signal_refs=[{"type": "news_signal", "id": 1}],
+            session_id=42,
+        )
+        assert mock_insert.call_args.kwargs.get("session_id") == 42
+
+    @patch("v2.tools.insert_thesis_signals")
+    @patch("v2.tools.validate_signal_refs")
+    @patch("v2.tools.insert_thesis")
+    @patch("v2.tools.get_positions")
+    @patch("v2.tools.get_active_theses")
+    def test_adopt_thesis_passes_session_id_to_insert(
+        self, mock_theses, mock_positions, mock_insert, mock_validate, mock_links
+    ):
+        mock_theses.return_value = []
+        mock_positions.return_value = [{"ticker": "AAPL"}]
+        mock_insert.return_value = 1
+        mock_validate.return_value = []
+        tool_adopt_thesis(
+            ticker="AAPL",
+            direction="long",
+            thesis="t",
+            exit_trigger="x",
+            invalidation="i",
+            confidence="high",
+            session_id=42,
+        )
+        assert mock_insert.call_args.kwargs.get("session_id") == 42
+
+    def test_create_thesis_defaults_session_id_to_none(self, mock_db, mock_cursor):
+        """Backwards compat: existing callers that don't pass session_id
+        get session_id=None forwarded to insert_thesis."""
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = {"id": 5}
+        with patch(
+            "v2.tools.validate_signal_refs",
+            return_value=[{"type": "news_signal", "id": 1}],
+        ), patch("v2.tools.insert_thesis_signals"), patch(
+            "v2.tools.insert_thesis", return_value=5
+        ) as mock_insert:
+            tool_create_thesis(
+                ticker="GOOG",
+                direction="long",
+                thesis="t",
+                entry_trigger="e",
+                exit_trigger="x",
+                invalidation="i",
+                confidence="high",
+                signal_refs=[{"type": "news_signal", "id": 1}],
+            )
+        assert mock_insert.call_args.kwargs.get("session_id") is None
+
+
 # --- Tool completeness tests ---
 
 

@@ -869,6 +869,35 @@ class TestStrategyPage:
         resp = client.get("/strategy")
         assert resp.status_code == 200
 
+    def test_strategy_memo_prefers_row_session_id_over_date_lookup(self, client):
+        """When the memo row carries its own session_id, use it directly
+        instead of date-resolving (which on multi-session days picks the
+        wrong session)."""
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [
+            make_strategy_memo_row(session_id=123),
+        ]
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/strategy")
+        assert b'href="/session/123"' in resp.data
+        assert b'href="/session/42"' not in resp.data
+        mock_queries.lookup_session_id_by_date.assert_not_called()
+
+    def test_strategy_memo_falls_back_to_date_lookup_when_session_id_null(self, client):
+        memo_date = date(2026, 5, 11)
+        mock_queries.get_current_strategy.return_value = make_strategy_state_row()
+        mock_queries.get_strategy_rules.return_value = []
+        mock_queries.get_strategy_memos.return_value = [
+            make_strategy_memo_row(session_date=memo_date, session_id=None),
+        ]
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/strategy")
+        assert b'href="/session/42"' in resp.data
+        mock_queries.lookup_session_id_by_date.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Tweets page
@@ -1166,6 +1195,37 @@ class TestDecisionDetail:
         resp = client.get("/decision/5")
         assert b'href="/session/42"' in resp.data
 
+    def test_prefers_row_session_id_over_date_lookup(self, client):
+        """When the decision row carries its own session_id, use it
+        directly and do NOT fall back to the date-based lookup
+        (which on a multi-session day resolves to whichever session
+        ran last, not necessarily the one that wrote this decision).
+        """
+        mock_queries.get_decision.return_value = make_decision_row(id=5, session_id=99)
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/decision/5")
+        assert b'href="/session/99"' in resp.data
+        assert b'href="/session/42"' not in resp.data
+        mock_queries.lookup_session_id_by_date.assert_not_called()
+
+    def test_falls_back_to_date_lookup_when_session_id_null(self, client):
+        """Legacy rows where session_id is NULL must still resolve a
+        session via the date-based fallback.
+        """
+        mock_queries.get_decision.return_value = make_decision_row(id=5, session_id=None)
+        mock_queries.get_decision_signals_full.return_value = []
+        mock_queries.get_decision_tweets.return_value = []
+        mock_queries.get_playbook_action.return_value = None
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/decision/5")
+        assert b'href="/session/42"' in resp.data
+        mock_queries.lookup_session_id_by_date.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Thesis detail
@@ -1198,6 +1258,29 @@ class TestThesisDetail:
         mock_queries.lookup_session_id_by_date.return_value = None
         resp = client.get("/thesis/3")
         assert b'href="/decision/10"' in resp.data
+
+    def test_prefers_row_session_id_over_date_lookup(self, client):
+        """Thesis detail should use the thesis row's session_id directly,
+        not re-resolve via the date-based lookup."""
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA", session_id=77)
+        mock_queries.get_thesis_decisions.return_value = []
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/thesis/3")
+        assert b'href="/session/77"' in resp.data
+        assert b'href="/session/42"' not in resp.data
+        mock_queries.lookup_session_id_by_date.assert_not_called()
+
+    def test_falls_back_to_date_lookup_when_session_id_null(self, client):
+        mock_queries.get_thesis.return_value = make_thesis_row(id=3, ticker="NVDA", session_id=None)
+        mock_queries.get_thesis_decisions.return_value = []
+        mock_queries.get_thesis_playbook_actions.return_value = []
+        mock_queries.lookup_session_id_by_date.reset_mock()
+        mock_queries.lookup_session_id_by_date.return_value = 42
+        resp = client.get("/thesis/3")
+        assert b'href="/session/42"' in resp.data
+        mock_queries.lookup_session_id_by_date.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

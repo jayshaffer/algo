@@ -156,7 +156,7 @@ def get_account_snapshots(days=30) -> list:
 
 # --- Decisions ---
 
-def insert_decision(decision_date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id=None, is_off_playbook=False, order_id=None) -> int:
+def insert_decision(decision_date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id=None, is_off_playbook=False, order_id=None, session_id=None) -> int:
     """
     Insert a trading decision.
 
@@ -164,13 +164,14 @@ def insert_decision(decision_date, ticker, action, quantity, price, reasoning, s
     - playbook_action_id: Links decision to a specific playbook action
     - is_off_playbook: Marks decisions made outside the playbook
     - order_id: Alpaca order ID for trade verification
+    - session_id: FK to sessions.id (per-run; nullable for legacy rows)
     """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO decisions (date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id, is_off_playbook, order_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO decisions (date, ticker, action, quantity, price, reasoning, signals_used, account_equity, buying_power, playbook_action_id, is_off_playbook, order_id, session_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (decision_date, ticker, action, quantity, price, reasoning, Json(signals_used), account_equity, buying_power, playbook_action_id, is_off_playbook, order_id))
+        """, (decision_date, ticker, action, quantity, price, reasoning, Json(signals_used), account_equity, buying_power, playbook_action_id, is_off_playbook, order_id, session_id))
         return cur.fetchone()["id"]
 
 
@@ -326,13 +327,18 @@ def delete_all_positions():
 
 # --- Theses ---
 
-def insert_thesis(ticker, direction, thesis, entry_trigger=None, exit_trigger=None, invalidation=None, confidence="medium", source="ideation") -> int:
+def insert_thesis(ticker, direction, thesis, entry_trigger=None, exit_trigger=None, invalidation=None, confidence="medium", source="ideation", session_id=None) -> int:
+    """
+    Insert a trading thesis.
+
+    - session_id: FK to sessions.id (per-run; nullable for legacy rows)
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO theses (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO theses (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source, session_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source))
+        """, (ticker, direction, thesis, entry_trigger, exit_trigger, invalidation, confidence, source, session_id))
         return cur.fetchone()["id"]
 
 
@@ -819,13 +825,18 @@ def retire_strategy_rule(rule_id, reason=None) -> bool:
 
 # --- Strategy Memos ---
 
-def insert_strategy_memo(session_date, memo_type, content, strategy_state_id=None) -> int:
+def insert_strategy_memo(session_date, memo_type, content, strategy_state_id=None, session_id=None) -> int:
+    """
+    Insert a strategy memo.
+
+    - session_id: FK to sessions.id (per-run; nullable for legacy rows)
+    """
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO strategy_memos (session_date, memo_type, content, strategy_state_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO strategy_memos (session_date, memo_type, content, strategy_state_id, session_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
-        """, (session_date, memo_type, content, strategy_state_id))
+        """, (session_date, memo_type, content, strategy_state_id, session_id))
         return cur.fetchone()["id"]
 
 
@@ -850,23 +861,24 @@ def insert_tweet(
     error: str | None = None,
     platform: str = "twitter",
     decision_id: int | None = None,
+    session_id: int | None = None,
 ) -> int:
     """Log a tweet/post to the audit table.
 
-    decision_id (new) ties a per-trade post back to its source decision,
-    enabling the (decision_id, platform) rerun guard used by the live-
-    trade pipeline. Recap and entertainment posts leave it NULL.
+    decision_id ties a per-trade post back to its source decision.
+    session_id ties the row to the sessions.id of the run that produced it
+    (per-run; nullable for legacy rows).
     """
     with get_cursor() as cur:
         cur.execute("""
             INSERT INTO tweets (
                 session_date, tweet_type, tweet_text, tweet_id,
-                posted, error, platform, decision_id
+                posted, error, platform, decision_id, session_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (session_date, tweet_type, tweet_text, tweet_id,
-              posted, error, platform, decision_id))
+              posted, error, platform, decision_id, session_id))
         return cur.fetchone()["id"]
 
 

@@ -13,7 +13,14 @@ from datetime import date
 
 from .claude_client import _call_with_retry, get_claude_client
 from .database.connection import get_cursor
-from .database.trading_db import insert_tweet, posted_tweet_exists
+from .database.trading_db import (
+    complete_session,
+    fail_session,
+    get_session_for_date,
+    insert_session_record,
+    insert_tweet,
+    posted_tweet_exists,
+)
 from .market_calendar import is_trading_day
 
 logger = logging.getLogger("premarket")
@@ -138,12 +145,19 @@ def _is_dry_run() -> bool:
     return os.environ.get("ALGO_TRADE_POST_DRY_RUN") == "1"
 
 
-def run_premarket_stage(today: date | None = None) -> PremarketStageResult:
+def run_premarket_stage(
+    today: date | None = None,
+    force: bool = False,
+) -> PremarketStageResult:
     """Generate + post one pre-market take to Twitter and Bluesky.
 
     Skipped on weekends and NYSE holidays. Idempotent via
     posted_tweet_exists(today, "premarket", platform) so cron retries
     don't double-post.
+
+    Also gated by an additional session-level idempotency check: if a
+    completed `premarket` session row already exists for today, this run
+    short-circuits (use ``force=True`` to override).
     """
     if today is None:
         today = date.today()
@@ -156,96 +170,129 @@ def run_premarket_stage(today: date | None = None) -> PremarketStageResult:
         logger.info("Pre-market stage skipped — %s", result.skip_reason)
         return result
 
-    twitter_client = get_twitter_client()
-    bluesky_client = get_bluesky_client()
-    if twitter_client is None and bluesky_client is None:
-        result.skipped = True
-        result.skip_reason = "no platform credentials"
-        logger.info("Pre-market stage skipped — no platform credentials")
-        return result
+    if not force:
+        existing = get_session_for_date(today, session_type="premarket")
+        if existing and existing.get("status") == "completed":
+            result.skipped = True
+            result.skip_reason = "premarket session already completed today"
+            logger.info(
+                "Premarket already completed for %s — skipping. Use --force to override.",
+                today,
+            )
+            return result
 
-    # Both platforms might already be posted (cron retry on the same day).
-    tw_already = False
-    bs_already = False
-    try:
-        if twitter_client is not None:
-            tw_already = posted_tweet_exists(today, "premarket", "twitter")
-        if bluesky_client is not None:
-            bs_already = posted_tweet_exists(today, "premarket", "bluesky")
-    except Exception as e:
-        logger.warning("Pre-market dedup check failed: %s; proceeding", e)
-
-    if (twitter_client is None or tw_already) and (bluesky_client is None or bs_already):
-        result.skipped = True
-        result.skip_reason = "already posted on all configured platforms"
-        logger.info("Pre-market stage skipped — already posted today")
-        return result
+    session_id = insert_session_record(today, session_type="premarket")
+    logger.info("Premarket session ID: %d", session_id)
 
     try:
-        context = gather_premarket_context(today)
+        twitter_client = get_twitter_client()
+        bluesky_client = get_bluesky_client()
+        if twitter_client is None and bluesky_client is None:
+            result.skipped = True
+            result.skip_reason = "no platform credentials"
+            logger.info("Pre-market stage skipped — no platform credentials")
+            complete_session(session_id)
+            return result
+
+        # Both platforms might already be posted (cron retry on the same day).
+        tw_already = False
+        bs_already = False
+        try:
+            if twitter_client is not None:
+                tw_already = posted_tweet_exists(today, "premarket", "twitter")
+            if bluesky_client is not None:
+                bs_already = posted_tweet_exists(today, "premarket", "bluesky")
+        except Exception as e:
+            logger.warning("Pre-market dedup check failed: %s; proceeding", e)
+
+        if (twitter_client is None or tw_already) and (bluesky_client is None or bs_already):
+            result.skipped = True
+            result.skip_reason = "already posted on all configured platforms"
+            logger.info("Pre-market stage skipped — already posted today")
+            complete_session(session_id)
+            return result
+
+        try:
+            context = gather_premarket_context(today)
+        except Exception as e:
+            result.errors.append(f"Context gather failed: {e}")
+            logger.error("Pre-market context gather failed: %s", e)
+            complete_session(session_id)
+            return result
+
+        post = generate_premarket_post(context)
+        if post is None:
+            result.errors.append("LLM generation returned None")
+            complete_session(session_id)
+            return result
+
+        if twitter_client is not None and not tw_already:
+            if _is_dry_run():
+                logger.info("[DRY-RUN] premarket twitter:\n%s", post["text"])
+                result.twitter_posted = True
+            else:
+                try:
+                    post_result = post_tweet(post, client=twitter_client)
+                    insert_tweet(
+                        session_date=today,
+                        tweet_type="premarket",
+                        tweet_text=post_result["text"],
+                        tweet_id=post_result.get("tweet_id"),
+                        posted=post_result["posted"],
+                        error=post_result.get("error"),
+                        platform="twitter",
+                        session_id=session_id,
+                    )
+                    result.twitter_posted = post_result["posted"]
+                except Exception as e:
+                    result.errors.append(f"Twitter post/log failed: {e}")
+                    logger.error("Twitter post/log failed: %s", e)
+
+        if bluesky_client is not None and not bs_already:
+            if _is_dry_run():
+                logger.info("[DRY-RUN] premarket bluesky:\n%s", post["text"])
+                result.bluesky_posted = True
+            else:
+                try:
+                    post_result = post_to_bluesky(post, client=bluesky_client)
+                    insert_tweet(
+                        session_date=today,
+                        tweet_type="premarket",
+                        tweet_text=post_result["text"],
+                        tweet_id=post_result.get("post_id"),
+                        posted=post_result["posted"],
+                        error=post_result.get("error"),
+                        platform="bluesky",
+                        session_id=session_id,
+                    )
+                    result.bluesky_posted = post_result["posted"]
+                except Exception as e:
+                    result.errors.append(f"Bluesky post/log failed: {e}")
+                    logger.error("Bluesky post/log failed: %s", e)
+
+        logger.info("Pre-market stage complete: twitter=%s, bluesky=%s",
+                    result.twitter_posted, result.bluesky_posted)
+        complete_session(session_id)
+        return result
     except Exception as e:
-        result.errors.append(f"Context gather failed: {e}")
-        logger.error("Pre-market context gather failed: %s", e)
-        return result
-
-    post = generate_premarket_post(context)
-    if post is None:
-        result.errors.append("LLM generation returned None")
-        return result
-
-    if twitter_client is not None and not tw_already:
-        if _is_dry_run():
-            logger.info("[DRY-RUN] premarket twitter:\n%s", post["text"])
-            result.twitter_posted = True
-        else:
-            try:
-                post_result = post_tweet(post, client=twitter_client)
-                insert_tweet(
-                    session_date=today,
-                    tweet_type="premarket",
-                    tweet_text=post_result["text"],
-                    tweet_id=post_result.get("tweet_id"),
-                    posted=post_result["posted"],
-                    error=post_result.get("error"),
-                    platform="twitter",
-                )
-                result.twitter_posted = post_result["posted"]
-            except Exception as e:
-                result.errors.append(f"Twitter post/log failed: {e}")
-                logger.error("Twitter post/log failed: %s", e)
-
-    if bluesky_client is not None and not bs_already:
-        if _is_dry_run():
-            logger.info("[DRY-RUN] premarket bluesky:\n%s", post["text"])
-            result.bluesky_posted = True
-        else:
-            try:
-                post_result = post_to_bluesky(post, client=bluesky_client)
-                insert_tweet(
-                    session_date=today,
-                    tweet_type="premarket",
-                    tweet_text=post_result["text"],
-                    tweet_id=post_result.get("post_id"),
-                    posted=post_result["posted"],
-                    error=post_result.get("error"),
-                    platform="bluesky",
-                )
-                result.bluesky_posted = post_result["posted"]
-            except Exception as e:
-                result.errors.append(f"Bluesky post/log failed: {e}")
-                logger.error("Bluesky post/log failed: %s", e)
-
-    logger.info("Pre-market stage complete: twitter=%s, bluesky=%s",
-                result.twitter_posted, result.bluesky_posted)
-    return result
+        fail_session(session_id, str(e))
+        raise
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import argparse
     import logging as _logging
     _logging.basicConfig(level=_logging.INFO,
                          format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                          datefmt="%Y-%m-%d %H:%M:%S")
-    res = run_premarket_stage()
+    parser = argparse.ArgumentParser(prog="v2.premarket")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the session-level idempotency gate.",
+    )
+    args = parser.parse_args()
+    res = run_premarket_stage(force=args.force)
     if res.errors:
         import sys
         sys.exit(1)

@@ -23,7 +23,6 @@ def _bypass_session_idempotency():
     playbook" patch get_playbook to return None inside the test body.
     """
     with patch("v2.session.get_session_for_date", return_value=None), \
-         patch("v2.session.get_completed_stages", return_value=set()), \
          patch("v2.session.get_playbook", return_value={"id": 1}):
         yield
 
@@ -118,29 +117,6 @@ class TestRunSession:
         # learning stage should be the one marked failed.
         failed_stages = [c.args[1] for c in mock_fail.call_args_list]
         assert "learning" in failed_stages
-
-    def test_stage_0_skipped_when_completed(self):
-        """T2.2: a resumed session whose learning stage already completed
-        must NOT re-run backfill — that's the whole point of stage tracking.
-        """
-        with patch("v2.session.run_backfill") as mock_backfill, \
-             patch("v2.session.compute_signal_attribution") as mock_attr, \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.insert_session_record", return_value=42), \
-             patch("v2.session.insert_session_stage"), \
-             patch("v2.session.complete_session_stage"), \
-             patch("v2.session.fail_session_stage"), \
-             patch("v2.session.get_completed_stages", return_value={"learning"}), \
-             patch("v2.session.get_session_for_date",
-                   return_value={"id": 42, "status": "running"}):
-
-            run_session(dry_run=False)
-
-        mock_backfill.assert_not_called()
-        mock_attr.assert_not_called()
 
     def test_idempotent_skip_routes_to_idempotent_field(self):
         """T2.1: when a session is already completed and force=False, the
@@ -341,7 +317,7 @@ class TestStage5Twitter:
              patch("v2.session.run_twitter_stage") as mock_twitter:
 
             mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
-            mock_twitter.side_effect = lambda: call_order.append("twitter")
+            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
 
             run_session(dry_run=False)
 
@@ -418,8 +394,8 @@ class TestStage5Bluesky:
              patch("v2.session.run_twitter_stage") as mock_twitter, \
              patch("v2.session.run_bluesky_stage") as mock_bluesky:
 
-            mock_twitter.side_effect = lambda: call_order.append("twitter")
-            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
+            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
 
             run_session(dry_run=False)
 
@@ -500,7 +476,7 @@ class TestStage6Dashboard:
              patch("v2.session.run_bluesky_stage") as mock_bluesky, \
              patch("v2.session.run_dashboard_stage") as mock_dashboard:
 
-            mock_bluesky.side_effect = lambda: call_order.append("bluesky")
+            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
             mock_dashboard.side_effect = lambda: call_order.append("dashboard")
 
             run_session(dry_run=False)
@@ -653,12 +629,52 @@ class TestSessionIdempotency:
 
         mock_pipeline.assert_called_once()
 
+    def test_force_creates_new_session_row_when_one_already_exists(self):
+        """Per-run uniqueness: --force inserts a brand-new sessions row
+        even when a completed session already exists for today."""
+        from datetime import date
+
+        from v2.session import _check_and_record_session
+        with patch("v2.session.insert_session_record", return_value=99) as mock_insert, \
+             patch("v2.session.get_session_for_date", return_value={"id": 7, "status": "completed"}):
+            session_id, completed, err = _check_and_record_session(force=True, session_date=date(2026, 5, 13))
+        assert session_id == 99
+        assert completed == set()
+        assert err is None
+        mock_insert.assert_called_once()
+
+    def test_no_force_skips_when_completed_session_exists(self):
+        from datetime import date
+
+        from v2.session import _check_and_record_session
+        with patch("v2.session.insert_session_record") as mock_insert, \
+             patch("v2.session.get_session_for_date", return_value={"id": 7, "status": "completed"}):
+            session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
+        assert session_id is None
+        assert err is not None
+        mock_insert.assert_not_called()
+
+    def test_no_force_creates_new_session_when_prior_was_failed(self):
+        """A failed prior session does not gate; a fresh run gets its own
+        session row (no resume, no stage skipping)."""
+        from datetime import date
+
+        from v2.session import _check_and_record_session
+        with patch("v2.session.insert_session_record", return_value=12) as mock_insert, \
+             patch("v2.session.get_session_for_date", return_value={"id": 5, "status": "failed"}):
+            session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
+        assert session_id == 12
+        assert completed == set()
+        assert err is None
+        mock_insert.assert_called_once()
+
 
 class TestPerStageResume:
-    def test_resumes_skipping_completed_stages(self):
-        """Re-run should skip stages that completed in a prior run."""
+    def test_no_resume_all_stages_run_after_prior_failure(self):
+        """Per-run sessions: a re-run after a failed prior session does NOT skip
+        any stages — every invocation runs every stage from scratch.
+        """
         with patch("v2.session.get_session_for_date") as mock_get, \
-             patch("v2.session.get_completed_stages", return_value={"pipeline", "strategist"}), \
              patch("v2.session.insert_session_record", return_value=2), \
              patch("v2.session.complete_session"), \
              patch("v2.session.insert_session_stage"), \
@@ -678,10 +694,8 @@ class TestPerStageResume:
 
             result = run_session(dry_run=False)
 
-        # Pipeline and strategist were completed before — should be skipped
-        mock_pipeline.assert_not_called()
-        mock_strat.assert_not_called()
-        # Executor was not completed — should run
+        mock_pipeline.assert_called_once()
+        mock_strat.assert_called_once()
         mock_trade.assert_called_once()
 
     def test_stage_tracking_calls_insert_and_complete(self):
@@ -689,7 +703,6 @@ class TestPerStageResume:
         with patch("v2.session.get_session_for_date", return_value=None), \
              patch("v2.session.insert_session_record", return_value=5), \
              patch("v2.session.complete_session"), \
-             patch("v2.session.get_completed_stages", return_value=set()), \
              patch("v2.session.insert_session_stage") as mock_insert_stage, \
              patch("v2.session.complete_session_stage") as mock_complete_stage, \
              patch("v2.session.run_backfill"), \
@@ -720,7 +733,6 @@ class TestPerStageResume:
         with patch("v2.session.get_session_for_date", return_value=None), \
              patch("v2.session.insert_session_record", return_value=5), \
              patch("v2.session.fail_session"), \
-             patch("v2.session.get_completed_stages", return_value=set()), \
              patch("v2.session.insert_session_stage"), \
              patch("v2.session.complete_session_stage"), \
              patch("v2.session.fail_session_stage") as mock_fail_stage, \
@@ -750,7 +762,6 @@ class TestPerStageResume:
         with patch("v2.session.get_session_for_date", return_value=None), \
              patch("v2.session.insert_session_record", return_value=5), \
              patch("v2.session.complete_session"), \
-             patch("v2.session.get_completed_stages", return_value=set()), \
              patch("v2.session.insert_session_stage", side_effect=Exception("DB down")), \
              patch("v2.session.complete_session_stage", side_effect=Exception("DB down")), \
              patch("v2.session.run_backfill"), \
@@ -844,6 +855,35 @@ class TestStrategistMemoPersistence:
         mock_memo.assert_not_called()
         assert result.strategist_error is not None
         assert "without writing a playbook" in result.strategist_error
+
+    def test_strategist_summary_memo_save_passes_session_id(self):
+        """The strategist-stage path saves the strategist's final summary as a
+        memo. Verify that the direct insert_strategy_memo call in session.py
+        receives session_id from the caller."""
+        mock_ideation_result = MagicMock()
+        mock_ideation_result.final_summary = (
+            "A sufficiently long strategist summary that passes the min-length guard."
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
+             patch("v2.session.get_playbook", return_value={"id": 1}), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_twitter_stage"), \
+             patch("v2.session.run_bluesky_stage"), \
+             patch("v2.session.run_dashboard_stage"), \
+             patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
+             patch("v2.session._check_and_record_session", return_value=(7777, set(), None)), \
+             patch("v2.session.insert_strategy_memo") as mock_memo:
+
+            run_session(dry_run=False)
+
+        mock_memo.assert_called_once()
+        assert mock_memo.call_args.kwargs.get("session_id") == 7777
 
     def test_strategist_memo_skipped_when_summary_too_short(self):
         """ALGO-15: strategist agentic loops occasionally end with a stub
@@ -996,34 +1036,6 @@ class TestExecutorPlaybookDependency:
             result = run_session(dry_run=False)
 
         mock_trade.assert_called_once()
-
-    def test_executor_skipped_on_resume_when_playbook_missing(self):
-        """P2.23: on a resume run where the strategist completed in a prior
-        invocation but the playbook was manually deleted (or otherwise
-        vanished), the executor must skip rather than crash with TypeError
-        from `get_pending_playbook_actions(playbook["id"])` against None.
-        """
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.get_playbook", return_value=None), \
-             patch("v2.session.run_trading_session") as mock_trade, \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
-             patch("v2.session.run_dashboard_stage"), \
-             patch("v2.session.get_session_for_date", return_value={"id": 1, "status": "in_progress"}), \
-             patch("v2.session.get_completed_stages", return_value={"strategist"}), \
-             patch("v2.session.insert_session_record", return_value=1):
-
-            result = run_session(dry_run=False)
-
-        mock_trade.assert_not_called()
-        assert result.skipped_executor is True
-        # No strategist invocation this run, so no strategist_error.
-        assert result.strategist_error is None
-
 
 class TestStrategistMissingPlaybook:
     """If run_strategist_loop returns without raising but never called

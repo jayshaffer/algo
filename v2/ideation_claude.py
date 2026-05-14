@@ -4,6 +4,7 @@ import argparse
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 
 from .claude_client import AgentPurpose, extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
@@ -13,6 +14,8 @@ from .tools import (
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
     reset_session,
+    tool_adopt_thesis,
+    tool_create_thesis,
     tool_get_active_theses,
     tool_get_decision_history,
     tool_get_portfolio_state,
@@ -223,13 +226,24 @@ def _run_claude_loop(
     reset_session()
     client = get_claude_client()
 
+    # Closure-bind `session_id` into the thesis-creation handlers so newly-
+    # created theses are tagged with the active session row. Other handlers
+    # either don't write or are session-tagged at their own write site.
+    # Build this dict inside the function (not at module import) so we don't
+    # accidentally bind `session_id=None` once for all callers.
+    handlers = {
+        **TOOL_HANDLERS,
+        "create_thesis": partial(tool_create_thesis, session_id=session_id),
+        "adopt_thesis": partial(tool_adopt_thesis, session_id=session_id),
+    }
+
     result = run_agentic_loop(
         client=client,
         model=model,
         system=system,
         initial_message=initial_message,
         tools=TOOL_DEFINITIONS,
-        tool_handlers=TOOL_HANDLERS,
+        tool_handlers=handlers,
         max_turns=max_turns,
         session_id=session_id,
         stage_name=stage_name,

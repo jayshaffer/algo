@@ -264,6 +264,20 @@ class TestDecisions:
         params = mock_cursor.execute.call_args[0][1]
         assert "abc-123-def" in params
 
+    def test_insert_decision_passes_session_id(self, mock_db, mock_cursor):
+        from datetime import date
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_decision
+        insert_decision(
+            decision_date=date(2026, 5, 13), ticker="AAPL", action="buy",
+            quantity=10, price=200.0, reasoning="t", signals_used=[],
+            account_equity=10000, buying_power=5000, session_id=42,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
+
     def test_get_recent_decisions(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = []
         from v2.database.trading_db import get_recent_decisions
@@ -351,6 +365,15 @@ class TestTheses:
             source="ideation"
         )
         assert result == 1
+
+    def test_insert_thesis_passes_session_id(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_thesis
+        insert_thesis(ticker="AAPL", direction="long", thesis="t", session_id=42)
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
 
     def test_get_active_theses(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"id": 1, "ticker": "AAPL", "status": "active"}]
@@ -1079,6 +1102,32 @@ class TestStrategyMemos:
         sql = mock_cursor.execute.call_args[0][0]
         assert "LIMIT" in sql
         assert "ORDER BY" in sql
+
+    def test_insert_strategy_memo_passes_session_id(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_strategy_memo
+        insert_strategy_memo(
+            session_date=date(2026, 5, 13), memo_type="notes",
+            content="x", session_id=42,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
+
+
+class TestTweets:
+    def test_insert_tweet_passes_session_id(self, mock_db, mock_cursor):
+        mock_cursor.fetchone.return_value = {"id": 1}
+        from v2.database.trading_db import insert_tweet
+        insert_tweet(
+            session_date=date(2026, 5, 13), tweet_type="recap",
+            tweet_text="t", session_id=42,
+        )
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_id" in sql
+        assert 42 in params
 
 
 class TestDecisionDedup:

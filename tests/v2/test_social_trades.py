@@ -320,6 +320,80 @@ class TestRunTradePostsStage:
         result = run_trade_posts_stage(date(2026, 5, 4))
         assert result.skipped is True
 
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.posted_tweet_for_decision_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_trade_post")
+    @patch("v2.social_trades.select_postable_decisions_for_date")
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client")
+    def test_run_trade_posts_stage_writes_tweet_with_session_id(
+        self, mock_tw_client, mock_bs_client, mock_select,
+        mock_gen, mock_post_tw, mock_post_bs,
+        mock_dedup, mock_insert,
+    ):
+        """Task 10: session_id threads from stage entry into every
+        insert_tweet call (per-trade twitter + bluesky)."""
+        from datetime import date
+
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_select.return_value = [self._decision(1), self._decision(2, "TSLA")]
+        mock_gen.side_effect = [
+            {"text": "Bought 10 $NVDA", "type": "trade", "decision_id": 1},
+            {"text": "Bought 10 $TSLA", "type": "trade", "decision_id": 2},
+        ]
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "trade", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "trade", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4), session_id=42)
+
+        assert mock_insert.call_count == 4
+        for call in mock_insert.call_args_list:
+            assert call.kwargs.get("session_id") == 42
+
+    @patch("v2.social_trades.insert_tweet", return_value=1)
+    @patch("v2.social_trades.is_trading_day", return_value=True)
+    @patch("v2.social_trades.posted_tweet_exists", return_value=False)
+    @patch("v2.social_trades.post_to_bluesky")
+    @patch("v2.social_trades.post_tweet")
+    @patch("v2.social_trades.generate_bluesky_post")
+    @patch("v2.social_trades.generate_tweet")
+    @patch("v2.social_trades.gather_tweet_context")
+    @patch("v2.social_trades.select_postable_decisions_for_date", return_value=[])
+    @patch("v2.social_trades.get_bluesky_client")
+    @patch("v2.social_trades.get_twitter_client")
+    def test_quiet_day_recap_writes_tweet_with_session_id(
+        self, mock_tw_client, mock_bs_client, mock_select,
+        mock_context, mock_gen_tw, mock_gen_bs, mock_post_tw, mock_post_bs,
+        mock_exists, mock_trading_day, mock_insert,
+    ):
+        """Task 10: quiet-day fallback inserts must also carry session_id."""
+        from datetime import date
+
+        from v2.social_trades import run_trade_posts_stage
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_context.return_value = "ctx"
+        mock_gen_tw.return_value = {"text": "tw recap", "type": "recap"}
+        mock_gen_bs.return_value = {"text": "bs recap", "type": "recap"}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "tw recap", "type": "recap", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "bs recap", "type": "recap", "error": None}
+
+        run_trade_posts_stage(date(2026, 5, 4), session_id=42)
+
+        assert mock_insert.call_count >= 1
+        for call in mock_insert.call_args_list:
+            assert call.kwargs.get("session_id") == 42
+
 
 class TestBlueskyExternalCardWiring:
     """`run_trade_posts_stage` should enrich the bluesky post_body with an

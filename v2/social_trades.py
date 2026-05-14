@@ -212,6 +212,7 @@ def _platform_post_one(
     poster,
     session_date: date,
     result: TradePostsStageResult,
+    session_id: int | None = None,
 ) -> None:
     """Post one body to one platform; record the outcome."""
     decision_id = decision["id"]
@@ -250,6 +251,7 @@ def _platform_post_one(
             error=post_result.get("error"),
             platform=platform,
             decision_id=decision_id,
+            session_id=session_id,
         )
     except Exception as e:
         db_logged = False
@@ -271,6 +273,7 @@ def _post_quiet_day_recap(
     twitter_client,
     bluesky_client,
     result: TradePostsStageResult,
+    session_id: int | None = None,
 ) -> None:
     """Quiet-day fallback: post the existing recap-style summary on trading
     days when there are no postable decisions. Skipped entirely on weekends
@@ -311,6 +314,7 @@ def _post_quiet_day_recap(
                             posted=post_result["posted"],
                             error=post_result.get("error"),
                             platform="twitter",
+                            session_id=session_id,
                         )
                         if post_result["posted"]:
                             posted_any = True
@@ -341,6 +345,7 @@ def _post_quiet_day_recap(
                             posted=post_result["posted"],
                             error=post_result.get("error"),
                             platform="bluesky",
+                            session_id=session_id,
                         )
                         if post_result["posted"]:
                             posted_any = True
@@ -355,6 +360,7 @@ def run_trade_posts_stage(
     session_date: date | None = None,
     min_notional: float = DEFAULT_MIN_NOTIONAL,
     max_posts: int = DEFAULT_MAX_POSTS_PER_SESSION,
+    session_id: int | None = None,
 ) -> TradePostsStageResult:
     """Post one tweet per significant non-hold decision today."""
     if session_date is None:
@@ -381,7 +387,10 @@ def run_trade_posts_stage(
         return result
 
     if not decisions:
-        _post_quiet_day_recap(session_date, twitter_client, bluesky_client, result)
+        _post_quiet_day_recap(
+            session_date, twitter_client, bluesky_client, result,
+            session_id=session_id,
+        )
         return result
 
     dashboard_base_url = os.environ.get("DASHBOARD_URL", "")
@@ -404,6 +413,7 @@ def run_trade_posts_stage(
             _platform_post_one(
                 "twitter", post_body, decision, twitter_client,
                 post_tweet, session_date, result,
+                session_id=session_id,
             )
         if bluesky_client is not None:
             bs_post_body = dict(post_body)
@@ -413,6 +423,7 @@ def run_trade_posts_stage(
             _platform_post_one(
                 "bluesky", bs_post_body, decision, bluesky_client,
                 post_to_bluesky, session_date, result,
+                session_id=session_id,
             )
 
     logger.info(

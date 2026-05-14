@@ -356,6 +356,13 @@ class TestToolWriteStrategyMemo:
                call_kwargs[1].get("strategy_state_id") is None or \
                call_kwargs[0][3] is None  # positional
 
+    def test_write_strategy_memo_tool_passes_session_id(self):
+        from v2.strategy import tool_write_strategy_memo
+        with patch("v2.strategy.insert_strategy_memo", return_value=1) as mock_ins, \
+             patch("v2.strategy.get_current_strategy_state", return_value=None):
+            tool_write_strategy_memo(memo_type="notes", content="t", session_id=42)
+        assert mock_ins.call_args.kwargs.get("session_id") == 42
+
 
 class TestToolGetSessionSummary:
     @patch("v2.strategy.get_attribution_summary")
@@ -659,12 +666,14 @@ class TestRunStrategyReflection:
         call_kwargs = mock_loop.call_args
         assert call_kwargs.kwargs["system"] == STRATEGY_REFLECTION_SYSTEM
         assert call_kwargs.kwargs["tools"] == STRATEGY_TOOL_DEFINITIONS
-        # `get_session_summary` is wrapped by the telemetry partial; check the
-        # remaining handlers identity-match and the wrapped slot is present.
+        # `get_session_summary` and `write_strategy_memo` are wrapped by
+        # session-aware partials; check the remaining handlers identity-match
+        # and the wrapped slots are present.
         passed_handlers = call_kwargs.kwargs["tool_handlers"]
         assert "get_session_summary" in passed_handlers
+        assert "write_strategy_memo" in passed_handlers
         for name, fn in STRATEGY_TOOL_HANDLERS.items():
-            if name == "get_session_summary":
+            if name in ("get_session_summary", "write_strategy_memo"):
                 continue
             assert passed_handlers[name] is fn
         assert call_kwargs.kwargs["max_turns"] == 5

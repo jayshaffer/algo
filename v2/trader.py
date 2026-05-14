@@ -927,6 +927,10 @@ def _insert_decision_with_retry(
     appends to logs/orphan_decisions.jsonl ONLY when the order actually filled
     (Alpaca confirmed shares moved). No-op decisions and pre-fill failures
     don't produce orphans.
+
+    session_id rides inside `payload` so it flows through the JSONL orphan
+    fallback automatically — operators reconciling an orphan record need the
+    owning session to correlate against `sessions` rows.
     """
     last_exc: Exception | None = None
     for attempt in range(_INSERT_RETRY_ATTEMPTS):
@@ -979,6 +983,7 @@ def _log_decisions(
     errors: list[str],
     session_date: date,
     decision_account_states: dict | None = None,
+    session_id: int | None = None,
 ) -> int:
     """Insert decision rows and signal-links. Returns count of successfully logged decisions.
 
@@ -1032,6 +1037,9 @@ def _log_decisions(
                 playbook_action_id=decision.playbook_action_id,
                 is_off_playbook=decision.is_off_playbook,
                 order_id=order_ids.get(i),
+                # session_id rides inside the payload so the JSONL orphan
+                # fallback in _persist_orphan_decision captures it too.
+                session_id=session_id,
             )
             decision_id = _insert_decision_with_retry(
                 decision=decision,
@@ -1138,6 +1146,7 @@ def run_trading_session(
         response, order_ids, order_results, data_client, account_info, errors,
         session_date,
         decision_account_states=decision_account_states,
+        session_id=session_id,
     )
     logger.info("Logged %d decisions (%d emitted by executor)", logged_count, len(response.decisions))
 
