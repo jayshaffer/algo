@@ -567,6 +567,31 @@ def tool_write_playbook(
                 f"hold). For a full exit, use intent_type=exit_full instead."
             )
 
+    # ALGO-18: reject exit-style intents whose ticker has 0 live shares. The
+    # strategist was repeatedly writing exit_full against zeroed positions
+    # (e.g. AMD stub cleanup ran 6 sessions before being caught), and every
+    # session produced a runtime "invalid" decision with no downstream
+    # effect. Catch at write time using live positions.
+    _EXIT_INTENTS_REQUIRING_HELD = {
+        "exit_full", "exit_partial_pct", "exit_dollar", "trim_to_portfolio_pct",
+    }
+    _ZERO_HELD_EPS = 0.0001
+    if any(a.get("intent_type") in _EXIT_INTENTS_REQUIRING_HELD for a in priority_actions):
+        live_positions = {p["ticker"]: float(p["shares"]) for p in get_positions()}
+        for action in priority_actions:
+            intent = action.get("intent_type")
+            ticker = action.get("ticker")
+            if intent in _EXIT_INTENTS_REQUIRING_HELD:
+                held = live_positions.get(ticker, 0.0)
+                if abs(held) <= _ZERO_HELD_EPS:
+                    return (
+                        f"Error: Playbook {action.get('action')} for {ticker} has "
+                        f"intent_type={intent}, but the live position is empty "
+                        f"(held={held}). Omit this action — there is nothing to "
+                        f"exit. If the underlying thesis is closed, retire it via "
+                        f"close_thesis instead of writing a no-op exit."
+                    )
+
     try:
         playbook_date = date.today()
         # P2.22: single transaction for upsert + delete + N inserts. The
