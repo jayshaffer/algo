@@ -84,11 +84,15 @@ class TestRunPremarketStage:
                "trading day" in (result.skip_reason or "").lower()
 
     @patch("v2.premarket.is_trading_day", return_value=True)
+    @patch("v2.premarket.insert_session_record", return_value=1)
+    @patch("v2.premarket.complete_session")
+    @patch("v2.premarket.get_session_for_date", return_value=None)
     @patch("v2.premarket.posted_tweet_exists", return_value=True)
     @patch("v2.premarket.get_twitter_client")
     @patch("v2.premarket.get_bluesky_client")
     def test_skipped_when_already_posted_today(
-        self, mock_bs, mock_tw, mock_dedup, mock_is_td,
+        self, mock_bs, mock_tw, mock_dedup, mock_get_sess,
+        mock_complete, mock_sess, mock_is_td,
     ):
         """Idempotent: if both platforms already posted today, the whole
         stage short-circuits."""
@@ -101,6 +105,9 @@ class TestRunPremarketStage:
         assert result.skipped is True
 
     @patch("v2.premarket.is_trading_day", return_value=True)
+    @patch("v2.premarket.insert_session_record", return_value=1)
+    @patch("v2.premarket.complete_session")
+    @patch("v2.premarket.get_session_for_date", return_value=None)
     @patch("v2.premarket.insert_tweet", return_value=1)
     @patch("v2.premarket.posted_tweet_exists", return_value=False)
     @patch("v2.premarket.post_to_bluesky")
@@ -111,7 +118,8 @@ class TestRunPremarketStage:
     @patch("v2.premarket.get_bluesky_client")
     def test_posts_to_both_platforms_on_trading_day(
         self, mock_bs_client, mock_tw_client, mock_ctx, mock_gen,
-        mock_post_tw, mock_post_bs, mock_dedup, mock_insert, mock_is_td,
+        mock_post_tw, mock_post_bs, mock_dedup, mock_insert,
+        mock_get_sess, mock_complete, mock_sess, mock_is_td,
     ):
         from v2.premarket import run_premarket_stage
 
@@ -129,3 +137,68 @@ class TestRunPremarketStage:
         assert result.twitter_posted is True
         assert result.bluesky_posted is True
         assert mock_insert.call_count == 2
+
+    @patch("v2.premarket.is_trading_day", return_value=True)
+    @patch("v2.premarket.insert_session_record", return_value=77)
+    @patch("v2.premarket.complete_session")
+    @patch("v2.premarket.fail_session")
+    @patch("v2.premarket.get_session_for_date", return_value=None)
+    @patch("v2.premarket.insert_tweet", return_value=1)
+    @patch("v2.premarket.posted_tweet_exists", return_value=False)
+    @patch("v2.premarket.post_to_bluesky")
+    @patch("v2.premarket.post_tweet")
+    @patch("v2.premarket.generate_premarket_post")
+    @patch("v2.premarket.gather_premarket_context", return_value="ctx")
+    @patch("v2.premarket.get_twitter_client")
+    @patch("v2.premarket.get_bluesky_client")
+    def test_premarket_creates_session_row_and_threads_id(
+        self, mock_bs_client, mock_tw_client, mock_ctx, mock_gen,
+        mock_post_tw, mock_post_bs, mock_dedup, mock_insert_tweet,
+        mock_get_session, mock_fail, mock_complete, mock_sess, mock_is_td,
+    ):
+        from v2.premarket import run_premarket_stage
+
+        mock_tw_client.return_value = object()
+        mock_bs_client.return_value = object()
+        mock_gen.return_value = {"text": "Watching $NVDA", "type": "premarket"}
+        mock_post_tw.return_value = {"posted": True, "tweet_id": "tw1",
+                                     "text": "x", "type": "premarket", "error": None}
+        mock_post_bs.return_value = {"posted": True, "post_id": "bs1",
+                                     "text": "x", "type": "premarket", "error": None}
+
+        run_premarket_stage(today=date(2026, 5, 4))
+
+        args, kwargs = mock_sess.call_args
+        assert (
+            kwargs.get("session_type") == "premarket"
+            or (len(args) >= 2 and args[1] == "premarket")
+        )
+        mock_complete.assert_called_once_with(77)
+        mock_fail.assert_not_called()
+        assert mock_insert_tweet.call_count == 2
+        for call in mock_insert_tweet.call_args_list:
+            assert call.kwargs.get("session_id") == 77
+
+    @patch("v2.premarket.is_trading_day", return_value=True)
+    @patch("v2.premarket.insert_session_record", return_value=77)
+    @patch("v2.premarket.complete_session")
+    @patch("v2.premarket.fail_session")
+    @patch("v2.premarket.get_session_for_date",
+           return_value={"status": "completed"})
+    @patch("v2.premarket.get_twitter_client")
+    @patch("v2.premarket.get_bluesky_client")
+    def test_skipped_when_session_already_completed(
+        self, mock_bs, mock_tw, mock_get_session, mock_fail,
+        mock_complete, mock_sess, mock_is_td,
+    ):
+        """Idempotency gate: existing completed session for today short-circuits."""
+        from v2.premarket import run_premarket_stage
+
+        mock_tw.return_value = object()
+        mock_bs.return_value = object()
+
+        run_premarket_stage(today=date(2026, 5, 4))
+
+        mock_sess.assert_not_called()
+        mock_complete.assert_not_called()
+        mock_fail.assert_not_called()
