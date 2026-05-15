@@ -149,6 +149,17 @@ class TestComputeSignalAttribution:
         assert "INTERVAL" not in sql
         assert "BETWEEN" not in sql
 
+    def test_meta_signal_types_excluded_from_attribution_sql(self, mock_db, mock_cursor):
+        """Audit marker rows must not become predictive signal categories."""
+        mock_cursor.fetchall.return_value = []
+
+        with patch("v2.attribution.upsert_signal_attribution"):
+            from v2.attribution import compute_signal_attribution
+            compute_signal_attribution()
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "ds.signal_type IN ('news_signal', 'macro_signal', 'thesis')" in sql
+
     def test_upserts_results(self, mock_db, mock_cursor):
         """Verify upsert_signal_attribution called for each result row."""
         mock_cursor.fetchall.return_value = [

@@ -67,6 +67,7 @@ def compute_signal_attribution(days: int = 90) -> list[dict]:
                 LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
                 WHERE d.action IN ('buy', 'sell')
                   AND d.date >= %s
+                  AND ds.signal_type IN ('news_signal', 'macro_signal', 'thesis')
                   AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
                   AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
                   AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
