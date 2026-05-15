@@ -483,6 +483,33 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "5 consecutive sessions surfaced round-trip evidence to reflection, but no rules were proposed or retired in any of them. Either the rules already cover the pattern (and reflection should retire dead rules), or reflection is ignoring the signal. Sessions: {sessions}."
 - **suggested_fix:** "In `v2/strategy.py`, audit the reflection prompt and tool surface to ensure round-trip evidence is surfaced prominently and that propose_rule/retire_rule are expected outputs when evidence persists across sessions."
 
+### TELEMETRY_INERT_WINDOW
+
+- **env:** both
+- **severity:** critical
+- **category:** audit_gap
+- **worktype:** code
+- **topic_slug:** telemetry-inert-window
+- **title_template:** "agent_events recorded zero events in last 7d despite {stages_completed_7d} completed stage(s)"
+- **sql:**
+  ```sql
+  WITH activity AS (
+    SELECT
+      (SELECT COUNT(*) FROM session_stages
+         WHERE status = 'completed'
+           AND completed_at > now() - interval '7 days') AS stages_completed_7d,
+      (SELECT COUNT(*) FROM agent_events
+         WHERE occurred_at > now() - interval '7 days') AS events_recorded_7d
+  )
+  SELECT stages_completed_7d, events_recorded_7d
+  FROM activity
+  WHERE stages_completed_7d > 0
+    AND events_recorded_7d = 0;
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "`agent_events` recorded zero rows in the last 7 days even though {stages_completed_7d} session stage(s) completed successfully. This silently disables the entire telemetry-based audit catalog — TOOL_ERROR_RATE, RISK_BLOCK_*, IDEATION_TOOL_DROUGHT, EXECUTOR_*, CLASSIFIER_ERROR_RATE, AGENT_CALL_*, LOOP_*, CACHE_HIT_RATIO_DEGRADATION, COST_TREND_SPIKE, STRATEGIST_NOT_USING_REVERSAL_TOOL, REFLECTION_INERT_ON_ROUND_TRIPS — because each gate threshold (`n >= 5`, `total >= 10`, etc.) is never satisfied. The audit becomes effectively blind to quality/health/cost while still appearing to run."
+- **suggested_fix:** "`v2/telemetry.py::record_event` wraps the INSERT in a broad `except Exception: logger.exception(...)` (intentional — telemetry must never break a session). Inspect the trading container logs for `\"Failed to record agent_event; continuing\"` over the last 7 days; the accompanying psycopg2 exception will name the cause (most likely schema drift in `agent_events`, a missing index, or an FK violation against `sessions`). Confirm with `\\d agent_events` against the affected DB vs `db/init/026_agent_events.sql`. If the table is missing or partial, re-apply the init script (or add a migration under `db/migrations/`). Do NOT tighten the swallowing except clause without explicit sign-off — that invariant is load-bearing for session reliability."
+
 ### TOOL_ERROR_RATE
 
 - **env:** prod
@@ -939,6 +966,41 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **finding_when:** "rows returned"
 - **body_template:** "The executor's response text (assembled from response_content text blocks) does not start with `{{`, indicating the model went off-format — refused, replied in prose, or returned something the parser cannot consume. `max_tokens`-truncated rows are excluded (those are tracked by `EXECUTOR_TRUNCATION_RATE`). Affected (id, session, stop_reason): {rows}. Look at the `/llm-call/<id>` page on the local dashboard to see what the model actually said."
 - **suggested_fix:** "Inspect each affected row's full response via `/llm-call/<id>` on the local dashboard. If the executor is replying in prose, tighten the prompt in `v2/agent.py::TRADING_SYSTEM_PROMPT` to insist on JSON-only output. If it's a refusal pattern (e.g., the executor balking at sector-cap signals), either teach the executor to emit a structured `hold` decision instead, or revisit the upstream input shape so the refusal is no longer prompted. This check complements `EXECUTOR_PARSE_FAILURE_RATE` (which looks at the post-parse telemetry); this one looks at the raw assistant text."
+
+### LLM_CONTEXT_MISSING_ROWS_FOR_PURPOSE
+
+- **env:** both
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** llm-context-missing-rows-for-purpose
+- **title_template:** "{n} purpose(s) with downstream artifacts but zero llm_call_contexts rows (last 7d)"
+- **sql:**
+  ```sql
+  WITH coverage AS (
+    SELECT
+      'executor' AS purpose,
+      (SELECT COUNT(*) FROM decisions
+         WHERE date > current_date - interval '7 days') AS expected,
+      (SELECT COUNT(*) FROM llm_call_contexts
+         WHERE purpose = 'executor'
+           AND created_at > now() - interval '7 days') AS captured
+    UNION ALL
+    SELECT
+      'reflection_loop',
+      (SELECT COUNT(*) FROM strategy_memos
+         WHERE created_at > now() - interval '7 days'),
+      (SELECT COUNT(*) FROM llm_call_contexts
+         WHERE purpose = 'reflection_loop'
+           AND created_at > now() - interval '7 days')
+  )
+  SELECT purpose, expected, captured
+  FROM coverage
+  WHERE expected > 0 AND captured = 0;
+  ```
+- **finding_when:** "rows returned"
+- **body_template:** "A pipeline purpose produced downstream artifacts (executor → decisions, reflection_loop → strategy_memos) but recorded zero rows to `llm_call_contexts`. `LLM_CONTEXT_MISSING_SYSTEM_PROMPT` only fires on NULL `system_prompt`, so a purpose whose rows are missing entirely would slip past it silently. The `/llm-call/<id>` dashboard view and the session-detail \"LLM Calls\" section will be empty for the affected purpose. Affected (purpose, expected, captured): {rows}."
+- **suggested_fix:** "Confirm `v2/claude_client.py::_call_with_retry` still calls `_record_call_context` in its `finally` block and that the affected purpose is in `_CONTEXT_LOGGED_PURPOSES`. Check that the call site that produces the downstream artifact (`v2/agent.py` for executor, `v2/strategy.py` for reflection) routes through `_call_with_retry` / `run_agentic_loop` with the correct `purpose=` kwarg — a regression that bypasses those helpers (e.g., calling the SDK directly) would silently drop the capture without raising. Wired in commit `aef76ea`; if rows have stopped appearing after a code change since then, bisect from there."
 
 ### RULE_CHURN_SHORT_LIVED
 

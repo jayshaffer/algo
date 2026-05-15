@@ -14,7 +14,19 @@ ENV/
 
 # Logs
 logs/
+logs_paper/
 *.log
+
+# Coverage / test artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# Pip stderr-redirect artifacts (e.g. =0.6.0 from misquoted version specifiers)
+=*
+
+# Local dashboard data snapshots — published artifacts, not source
+public_dashboard/data/
 
 # IDE
 .vscode/
