@@ -37,6 +37,7 @@ _NETWORK_PATCH_TARGETS = (
     # Session stage wrappers (import-site names used by v2.session.run_session)
     "v2.session.run_twitter_stage",
     "v2.session.run_bluesky_stage",
+    "v2.session.run_trade_posts_stage",
     "v2.session.run_strategy_reflection",
     "v2.session.run_dashboard_stage",
     "v2.session.run_pipeline",
@@ -58,15 +59,38 @@ _NETWORK_PATCH_NONE_TARGETS = (
     "v2.entertainment.get_bluesky_client",
 )
 
+_SESSION_DB_PATCH_TARGETS = (
+    # Default session tracking to "unavailable" in tests. Individual tests
+    # that assert tracking behavior patch these import-site names themselves,
+    # and their patches override this fixture while it is active.
+    "v2.session.get_session_for_date",
+    "v2.session.insert_session_record",
+    "v2.session.insert_session_stage",
+    "v2.session.complete_session_stage",
+    "v2.session.fail_session_stage",
+    "v2.session.close_orphan_running_stages",
+    "v2.session.complete_session",
+    "v2.session.fail_session",
+)
+
 
 @pytest.fixture(autouse=True)
-def _block_social_and_llm_calls():
-    """Defensive net: any v2 test that reaches real posting/LLM code is blocked."""
+def _block_social_llm_and_session_db_calls(monkeypatch):
+    """Defensive net: tests must not reach real posting/LLM/session DB code."""
+    monkeypatch.delenv("ALGO_ENABLE_TRADE_POSTS", raising=False)
     with ExitStack() as stack:
         for target in _NETWORK_PATCH_TARGETS:
             stack.enter_context(patch(target))
         for target in _NETWORK_PATCH_NONE_TARGETS:
             stack.enter_context(patch(target, return_value=None))
+        for target in _SESSION_DB_PATCH_TARGETS:
+            stack.enter_context(patch(target))
+        # Returning None makes run_session proceed without telemetry tracking,
+        # matching the production fallback when session-row creation fails.
+        import v2.session as session_module
+        session_module.get_session_for_date.return_value = None
+        session_module.insert_session_record.return_value = None
+        session_module.close_orphan_running_stages.return_value = []
         yield
 
 
