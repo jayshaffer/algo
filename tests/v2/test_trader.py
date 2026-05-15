@@ -122,6 +122,68 @@ class TestRunTradingSession:
         mock_build.assert_called_once()
         assert isinstance(result, TradingSessionResult)
 
+
+class TestDecisionRejectionTelemetry:
+    def test_price_rejection_emits_decision_rejected_event(self):
+        from v2.trader import _ExecutionTotals, _prepare_decision
+
+        decision = _make_decision(ticker="AAPL")
+        totals = _ExecutionTotals()
+
+        with patch("v2.trader.get_latest_price_with_reason",
+                   return_value=(None, "wide quote spread")), \
+             patch("v2.trader.record_event") as mock_record:
+            price = _prepare_decision(
+                decision=decision,
+                positions={},
+                data_client=None,
+                dry_run=False,
+                portfolio_value=Decimal("100000"),
+                buying_power=Decimal("50000"),
+                totals=totals,
+                errors=[],
+                session_date=date(2026, 5, 15),
+                session_id=42,
+            )
+
+        assert price is None
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["event_type"] == "decision_rejected"
+        payload = mock_record.call_args.kwargs["payload"]
+        assert payload["reason_code"] == "pricing"
+        assert payload["ticker"] == "AAPL"
+
+    def test_duplicate_decision_emits_decision_rejected_event(self):
+        from v2.trader import _ExecutionTotals, _prepare_decision
+
+        decision = _make_decision(ticker="AAPL")
+        totals = _ExecutionTotals()
+
+        with patch("v2.trader.get_latest_price_with_reason",
+                   return_value=(Decimal("100"), None)), \
+             patch("v2.trader.check_churn_gate", return_value=None), \
+             patch("v2.trader.check_sector_cap_for_buy", return_value=None), \
+             patch("v2.trader.check_decision_exists", return_value=123), \
+             patch("v2.trader.record_event") as mock_record:
+            price = _prepare_decision(
+                decision=decision,
+                positions={},
+                data_client=None,
+                dry_run=False,
+                portfolio_value=Decimal("100000"),
+                buying_power=Decimal("50000"),
+                totals=totals,
+                errors=[],
+                session_date=date(2026, 5, 15),
+                position_values={},
+                session_id=42,
+            )
+
+        assert price is None
+        payload = mock_record.call_args.kwargs["payload"]
+        assert payload["reason_code"] == "duplicate_decision"
+        assert payload["existing_decision_id"] == 123
+
     def test_logs_playbook_action_id(self, mock_db, mock_cursor):
         """Decisions should log playbook_action_id and is_off_playbook."""
         decision = ExecutorDecision(
