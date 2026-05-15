@@ -17,7 +17,8 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .agent import DEFAULT_EXECUTOR_MODEL
 from .attribution import build_attribution_constraints, compute_signal_attribution
@@ -45,6 +46,13 @@ from .telemetry import session_summary_line
 from .trader import TradingSessionResult, run_trading_session
 
 logger = logging.getLogger("session")
+
+
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+
+
+def current_market_date():
+    return datetime.now(MARKET_TIMEZONE).date()
 
 
 _ERROR_FIELDS = (
@@ -344,7 +352,10 @@ def _run_executor_stage(
     with capture_usage() as usage:
         try:
             result.trading_result = run_trading_session(
-                dry_run=dry_run, model=executor_model, session_id=session_id,
+                dry_run=dry_run,
+                model=executor_model,
+                session_id=session_id,
+                session_date=session_date,
             )
             _complete_stage(session_id, "executor", usage=usage)
         except Exception as e:
@@ -481,7 +492,7 @@ def run_session(
         skipped_executor=skip_executor, skipped_strategy=skip_strategy,
         skipped_dashboard=skip_dashboard,
     )
-    today = date.today()
+    today = current_market_date()
 
     session_id, completed_stages, early_error = _check_and_record_session(force, today)
     if early_error:

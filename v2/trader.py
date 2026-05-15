@@ -1066,6 +1066,7 @@ def run_trading_session(
     dry_run: bool = False,
     model: str = DEFAULT_EXECUTOR_MODEL,
     session_id: int | None = None,
+    session_date: date | None = None,
 ) -> TradingSessionResult:
     """
     Run a complete trading session.
@@ -1090,7 +1091,8 @@ def run_trading_session(
     # callsite (client_order_id signing, dedup checks, decision row
     # insertion) reuses this value so a session that runs across midnight
     # ET still shows up as a single trading day.
-    session_date = datetime.now(ZoneInfo("America/New_York")).date()
+    if session_date is None:
+        session_date = datetime.now(ZoneInfo("America/New_York")).date()
 
     logger.info(
         "Starting trading session (dry_run=%s, model=%s, session_date=%s)",
