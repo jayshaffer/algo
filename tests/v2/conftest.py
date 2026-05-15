@@ -21,23 +21,17 @@ def _isolate_attribution_summary_cache():
 # --- Network safety net ---
 #
 # Background: tests in this directory have historically called
-# ``v2.session.run_session`` or ``v2.entertainment.run_entertainment_pipeline``
-# without patching every outbound I/O function. When prod credentials are
-# present in the container env, the unmocked paths post to real X / Bluesky
-# and burn Anthropic tokens. One afternoon of missed mocks produced 200+
-# live posts before it was caught.
+# ``v2.session.run_session`` without patching every outbound I/O function.
+# When prod credentials are present in the container env, the unmocked paths
+# burn Anthropic tokens.
 #
-# This autouse fixture pre-patches the session/entertainment hooks that
-# make network calls. Tests that want finer-grained behaviour still win —
-# their own ``@patch`` decorators override these defaults for the duration
-# of the test.
+# This autouse fixture pre-patches the session hooks that make network calls.
+# Tests that want finer-grained behaviour still win — their own ``@patch``
+# decorators override these defaults for the duration of the test.
 # Targets whose default patched return is MagicMock (structure doesn't matter
 # to callers, they just need a truthy mock).
 _NETWORK_PATCH_TARGETS = (
     # Session stage wrappers (import-site names used by v2.session.run_session)
-    "v2.session.run_twitter_stage",
-    "v2.session.run_bluesky_stage",
-    "v2.session.run_trade_posts_stage",
     "v2.session.run_strategy_reflection",
     "v2.session.run_dashboard_stage",
     "v2.session.run_pipeline",
@@ -45,19 +39,11 @@ _NETWORK_PATCH_TARGETS = (
     "v2.session.run_trading_session",
     "v2.session.run_backfill",
     "v2.session.compute_signal_attribution",
-    # Entertainment pipeline I/O (posts to X + Bluesky, calls Claude)
-    "v2.entertainment.post_tweet",
-    "v2.entertainment.post_to_bluesky",
-    "v2.entertainment.generate_entertainment_tweet",
-    "v2.entertainment.generate_bluesky_entertainment_post",
 )
 
 # Client factories must default to returning None so the production
 # "no credentials → skip" path runs unless a test explicitly wires up a client.
-_NETWORK_PATCH_NONE_TARGETS = (
-    "v2.entertainment.get_twitter_client",
-    "v2.entertainment.get_bluesky_client",
-)
+_NETWORK_PATCH_NONE_TARGETS = ()
 
 _SESSION_DB_PATCH_TARGETS = (
     # Default session tracking to "unavailable" in tests. Individual tests
@@ -116,12 +102,7 @@ def mock_db(mock_cursor):
     with patch("v2.database.connection.get_cursor", _get_cursor), \
          patch("v2.database.trading_db.get_cursor", _get_cursor), \
          patch("v2.database.dashboard_db.get_cursor", _get_cursor), \
-         patch("v2.twitter.get_cursor", _get_cursor), \
-         patch("v2.entertainment.get_cursor", _get_cursor), \
-         patch("v2.bluesky.get_cursor", _get_cursor), \
          patch("v2.dashboard_publish.get_cursor", _get_cursor), \
-         patch("v2.premarket.get_cursor", _get_cursor), \
-         patch("v2.social_weekly.get_cursor", _get_cursor), \
          patch("alpaca.data.historical.StockHistoricalDataClient"), \
          patch("v2.database.connection.get_connection") as mock_conn:
         mock_conn.return_value = MagicMock()
