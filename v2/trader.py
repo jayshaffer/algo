@@ -224,7 +224,10 @@ def _client_order_id(decision: ExecutorDecision, session_date: date) -> str:
 
 
 def _precheck_sell_against_alpaca(
-    decision: ExecutorDecision, held: Decimal, errors: list[str],
+    decision: ExecutorDecision,
+    held: Decimal,
+    errors: list[str],
+    session_id: int | None = None,
 ) -> bool:
     """Return True if the sell should proceed; False if it was fully rejected.
 
@@ -236,6 +239,14 @@ def _precheck_sell_against_alpaca(
     def _reject(reason: str) -> bool:
         errors.append(f"{decision.ticker} pre-submit check failed: {reason}")
         logger.warning("%s: SKIP - %s", decision.ticker, reason)
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=decision,
+            reason_code="sell_availability",
+            reason_text=reason,
+            extra={"held": str(held)},
+        )
         if decision.playbook_action_id:
             try:
                 update_playbook_action_status(decision.playbook_action_id, "skipped")
@@ -426,6 +437,34 @@ def _resolve_logged_qty(result, decision) -> Decimal | None:
     return None
 
 
+def _record_decision_rejection(
+    *,
+    session_id: int | None,
+    stage_name: str,
+    decision: ExecutorDecision,
+    reason_code: str,
+    reason_text: str,
+    extra: dict | None = None,
+) -> None:
+    """Emit structured telemetry for every pre-submit rejection/skip path."""
+    payload = {
+        "ticker": decision.ticker,
+        "action": decision.action,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "playbook_action_id": decision.playbook_action_id,
+        "thesis_id": decision.thesis_id,
+    }
+    if extra:
+        payload.update(extra)
+    record_event(
+        session_id=session_id,
+        stage_name=stage_name,
+        event_type="decision_rejected",
+        payload=payload,
+    )
+
+
 _RULE_CITATION_RE = re.compile(r"\brule\s*#?\s*(\d+)\b", re.IGNORECASE)
 
 
@@ -554,6 +593,13 @@ def _prepare_decision(
         errors.append(f"Could not price {decision.ticker}: {reject_reason}")
         logger.error("%s: pricing rejected — %s", decision.ticker, reject_reason)
         totals.trades_failed += 1
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=decision,
+            reason_code="pricing",
+            reason_text=reject_reason,
+        )
         decision.reasoning = f"[REJECTED: {reject_reason}] {decision.reasoning}"
         decision.action = "invalid"
         return None
@@ -573,6 +619,13 @@ def _prepare_decision(
         errors.append(f"{decision.ticker} intent error: {e}")
         logger.warning("%s: INVALID - intent error: %s", decision.ticker, e)
         totals.trades_failed += 1
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=decision,
+            reason_code="intent_error",
+            reason_text=str(e),
+        )
         decision.reasoning = f"[REJECTED: intent error: {e}] {decision.reasoning}"
         decision.action = "invalid"
         return None
@@ -586,6 +639,23 @@ def _prepare_decision(
         decision.reasoning = (
             f"[SKIPPED: intent {decision.intent_type} resolved to 0 shares "
             f"against held={held}] {decision.reasoning}"
+        )
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=decision,
+            reason_code="zero_quantity",
+            reason_text=(
+                f"intent {decision.intent_type} resolved to 0 shares against held={held}"
+            ),
+            extra={
+                "held": str(held),
+                "intent_type": decision.intent_type,
+                "intent_magnitude": (
+                    str(decision.intent_magnitude)
+                    if decision.intent_magnitude is not None else None
+                ),
+            },
         )
         decision.action = "invalid"
         return None
@@ -602,6 +672,14 @@ def _prepare_decision(
         logger.warning("%s: REJECTED (churn gate) - %s", decision.ticker, churn_breach)
         decision.reasoning = (
             f"[REJECTED: {churn_breach}] (Rule 43 churn gate) {decision.reasoning}"
+        )
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=decision,
+            reason_code="churn_gate",
+            reason_text=churn_breach,
+            extra={"rule_id": 43},
         )
         decision.action = "invalid"
         totals.trades_failed += 1
@@ -633,6 +711,13 @@ def _prepare_decision(
             errors.append(f"{decision.ticker} sector cap: {breach}")
             logger.warning("%s: REJECTED (sector cap) - %s", decision.ticker, breach)
             decision.reasoning = f"[REJECTED: {breach}] {decision.reasoning}"
+            _record_decision_rejection(
+                session_id=session_id,
+                stage_name="trading",
+                decision=decision,
+                reason_code="sector_cap",
+                reason_text=breach,
+            )
             decision.action = "invalid"
             totals.trades_failed += 1
 
@@ -683,6 +768,14 @@ def _prepare_decision(
             decision.reasoning = (
                 f"[REJECTED: duplicate decision today (existing id={existing_id})] {decision.reasoning}"
             )
+            _record_decision_rejection(
+                session_id=session_id,
+                stage_name="trading",
+                decision=decision,
+                reason_code="duplicate_decision",
+                reason_text=f"duplicate decision today (existing id={existing_id})",
+                extra={"existing_decision_id": existing_id},
+            )
             decision.action = "invalid"
             totals.trades_failed += 1
             return None
@@ -693,7 +786,9 @@ def _prepare_decision(
     if (
         decision.action == "sell"
         and not dry_run
-        and not _precheck_sell_against_alpaca(decision, held, errors)
+        and not _precheck_sell_against_alpaca(
+            decision, held, errors, session_id=session_id,
+        )
     ):
         totals.trades_failed += 1
         return None
