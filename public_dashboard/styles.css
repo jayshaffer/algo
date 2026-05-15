@@ -165,6 +165,24 @@ a:hover { text-decoration: underline; }
   letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 0.4rem;
 }
 
+/* === Changelog === */
+.changelog-list { display: grid; gap: 0.9rem; }
+.changelog-entry {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 1rem;
+}
+.changelog-entry h2 { font-size: 1rem; margin-bottom: 0.35rem; }
+.changelog-entry p { color: var(--text-dim); font-size: 0.9rem; }
+.changelog-entry ul { margin: 0.65rem 0 0 1.2rem; color: var(--text); font-size: 0.875rem; }
+.changelog-entry li + li { margin-top: 0.25rem; }
+.changelog-date {
+  font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-dim);
+  margin-bottom: 0.25rem;
+}
+.changelog-shas { margin-top: 0.65rem; }
+.changelog-shas code { margin-right: 0.45rem; }
+.changelog-table code { color: var(--accent); font-size: 0.78rem; }
+
 /* === Tables === */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }

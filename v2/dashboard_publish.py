@@ -18,6 +18,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
+from .claude_client import _call_with_retry, get_claude_client
 from .dashboard_og import (
     render_attribution_og,
     render_home_og,
@@ -28,6 +29,7 @@ from .dashboard_og import (
 from .dashboard_pages import (
     render_activity_page,
     render_attribution_page,
+    render_changelog_page,
     render_homepage,
     render_how_it_works_hub,
     render_learning_hub,
@@ -1040,6 +1042,356 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
 
 # Static asset filenames to copy from public_dashboard/
 _STATIC_ASSETS = ("styles.css", "app.js")
+_CHANGELOG_POINTER_KEY = "changelog_last_published_sha"
+_CHANGELOG_PROMPT_VERSION = "public_changelog_v1"
+_CHANGELOG_MODEL = "claude-3-5-haiku-latest"
+
+
+def get_current_git_sha(repo_path: str | None = None) -> str | None:
+    """Return the current repository HEAD SHA, or None if git is unavailable."""
+    root = repo_path or os.path.dirname(os.path.dirname(__file__))
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    except Exception:
+        logger.warning("Failed to resolve current git SHA", exc_info=True)
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def get_changelog_pointer(cur) -> str | None:
+    """Return the last git SHA successfully published to the dashboard."""
+    cur.execute(
+        "SELECT value FROM dashboard_publish_state WHERE key = %s",
+        (_CHANGELOG_POINTER_KEY,),
+    )
+    row = cur.fetchone()
+    return row["value"] if row else None
+
+
+def update_changelog_pointer(cur, sha: str) -> None:
+    """Persist the git SHA that was successfully published to the dashboard."""
+    cur.execute(
+        """
+        INSERT INTO dashboard_publish_state (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO UPDATE SET
+            value = EXCLUDED.value,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (_CHANGELOG_POINTER_KEY, sha),
+    )
+
+
+def read_changelog_pointer() -> str | None:
+    """Read the last successfully published changelog SHA from the DB."""
+    with get_cursor() as cur:
+        return get_changelog_pointer(cur)
+
+
+def persist_changelog_pointer(sha: str) -> None:
+    """Write the latest successfully published changelog SHA to the DB."""
+    with get_cursor() as cur:
+        update_changelog_pointer(cur, sha)
+
+
+def fetch_changelog_commits(repo_path: str | None = None,
+                            from_sha: str | None = None,
+                            to_sha: str | None = None,
+                            bootstrap_limit: int = 30) -> list[dict]:
+    """Fetch new changelog commit rows from git.
+
+    When `from_sha` is present, only commits in `from_sha..to_sha` are read.
+    On first publish, there is no pointer yet, so this bootstraps with the most
+    recent `bootstrap_limit` commits and the successful publish then advances
+    the pointer.
+    """
+    root = repo_path or os.path.dirname(os.path.dirname(__file__))
+    target = to_sha or "HEAD"
+    log_args = [
+        "git", "-C", root, "log", "--no-merges",
+        "--pretty=format:%cI%x1f%H%x1f%h%x1f%s%x1f%b%x1e",
+    ]
+    if from_sha:
+        if from_sha == target:
+            return []
+        log_args.append(f"{from_sha}..{target}")
+    else:
+        log_args.extend([f"-n{bootstrap_limit}", target])
+
+    try:
+        result = subprocess.run(
+            log_args,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    except Exception:
+        logger.warning("Failed to generate changelog from git history", exc_info=True)
+        return []
+
+    commits: list[dict] = []
+    for raw in result.stdout.split("\x1e"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        parts = raw.split("\x1f", 4)
+        if len(parts) != 5:
+            continue
+        committed_at, sha, short_sha, subject, body = parts
+        commits.append({
+            "sha": sha,
+            "short_sha": short_sha,
+            "committed_at": committed_at,
+            "subject": subject,
+            "body": body.strip(),
+            "files": fetch_commit_files(sha, repo_path=root),
+        })
+    return commits
+
+
+def fetch_commit_files(sha: str, repo_path: str | None = None) -> list[str]:
+    """Return files touched by a commit, best-effort."""
+    root = repo_path or os.path.dirname(os.path.dirname(__file__))
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "show", "--name-only", "--pretty=format:", sha],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    except Exception:
+        logger.warning("Failed to fetch files for changelog commit %s", sha, exc_info=True)
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _commit_date(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+    return str(value)[:10]
+
+
+def group_changelog_commits(commits: list[dict]) -> list[dict]:
+    """Group flat changelog commit rows into date buckets for rendering."""
+    entries_by_date: dict[str, list[dict]] = {}
+    for commit in commits:
+        commit_date = _commit_date(commit.get("committed_at"))
+        entries_by_date.setdefault(commit_date, []).append({
+            "sha": commit.get("sha"),
+            "short_sha": commit.get("short_sha"),
+            "subject": commit.get("subject"),
+        })
+
+    entries = []
+    for commit_date, items in entries_by_date.items():
+        commit_count = len(items)
+        noun = "commit" if commit_count == 1 else "commits"
+        entries.append({
+            "date": commit_date,
+            "title": "Repository updates",
+            "summary": f"{commit_count} {noun} published from git history.",
+            "items": items,
+        })
+    return entries
+
+
+def generate_changelog_entries(repo_path: str | None = None,
+                               from_sha: str | None = None,
+                               to_sha: str | None = None,
+                               bootstrap_limit: int = 30) -> list[dict]:
+    """Build changelog entries from git without reading stored DB rows."""
+    commits = fetch_changelog_commits(
+        repo_path=repo_path,
+        from_sha=from_sha,
+        to_sha=to_sha,
+        bootstrap_limit=bootstrap_limit,
+    )
+    return group_changelog_commits(commits)
+
+
+def _extract_text_blocks(message) -> str:
+    parts = []
+    for block in getattr(message, "content", []) or []:
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _changelog_prompt(commits: list[dict]) -> str:
+    payload = [
+        {
+            "sha": c.get("sha"),
+            "short_sha": c.get("short_sha"),
+            "committed_at": c.get("committed_at"),
+            "subject": c.get("subject"),
+            "body": c.get("body") or "",
+            "files": c.get("files") or [],
+        }
+        for c in commits
+    ]
+    return (
+        "You are writing a public changelog for Pinchy, an AI trading dashboard.\n\n"
+        "Audience: people following a public AI-operated trading account.\n\n"
+        "Create public product notes from these repository commits. Group related "
+        "commits into meaningful entries. Ignore internal-only cleanup unless it "
+        "changes reliability, transparency, safety, publishing, dashboard UX, or "
+        "trading behavior. Do not invent user-visible behavior. Do not mention raw "
+        "implementation details unless they explain a user-facing change or safety "
+        "improvement.\n\n"
+        "Return JSON only in this shape:\n"
+        '{"entries":[{"title":"Short public title","summary":"One sentence summary",'
+        '"bullets":["Specific readable note"],"commit_shas":["full_sha"]}]}\n\n'
+        "Commits:\n"
+        f"{json.dumps(payload, indent=2)}"
+    )
+
+
+def validate_changelog_entries(raw_entries: list[dict], commits: list[dict]) -> list[dict]:
+    """Validate and normalize LLM changelog entries."""
+    known_shas = {c["sha"] for c in commits}
+    entries = []
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        summary = str(entry.get("summary") or "").strip()
+        bullets = entry.get("bullets") or []
+        commit_shas = entry.get("commit_shas") or []
+        if not title or not summary:
+            continue
+        if not isinstance(bullets, list) or not isinstance(commit_shas, list):
+            continue
+        normalized_shas = [str(s) for s in commit_shas if str(s) in known_shas]
+        if not normalized_shas:
+            continue
+        entries.append({
+            "title": title[:120],
+            "summary": summary[:500],
+            "bullets": [str(b).strip()[:300] for b in bullets if str(b).strip()][:5],
+            "commit_shas": normalized_shas,
+        })
+    return entries
+
+
+def summarize_changelog_commits(commits: list[dict],
+                                model: str = _CHANGELOG_MODEL) -> list[dict]:
+    """Ask Claude to turn raw commits into public changelog entries."""
+    if not commits:
+        return []
+    try:
+        message = _call_with_retry(
+            get_claude_client(),
+            model=model,
+            max_tokens=2000,
+            temperature=0,
+            system="Return strict JSON only. Do not wrap the response in markdown.",
+            messages=[{"role": "user", "content": _changelog_prompt(commits)}],
+            stage_name="dashboard_publish",
+            purpose="changelog_summary",
+        )
+        text = _extract_text_blocks(message)
+        payload = json.loads(text)
+        return validate_changelog_entries(payload.get("entries") or [], commits)
+    except Exception:
+        logger.warning("Failed to summarize changelog commits", exc_info=True)
+        return []
+
+
+def store_changelog_commits(cur, commits: list[dict]) -> None:
+    """Persist changelog commits idempotently."""
+    for commit in commits:
+        cur.execute(
+            """
+            INSERT INTO dashboard_changelog_commits
+                (sha, short_sha, committed_at, subject, body, files, published_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (sha) DO NOTHING
+            """,
+            (
+                commit["sha"],
+                commit["short_sha"],
+                commit["committed_at"],
+                commit["subject"],
+                commit.get("body"),
+                json.dumps(commit.get("files") or []),
+            ),
+        )
+
+
+def store_changelog_entries(cur, entries: list[dict], *,
+                            from_sha: str | None, to_sha: str,
+                            model: str | None) -> None:
+    """Persist LLM-written changelog entries."""
+    for entry in entries:
+        cur.execute(
+            """
+            INSERT INTO dashboard_changelog_entries
+                (from_sha, to_sha, title, summary, bullets, commit_shas,
+                 model, prompt_version)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                from_sha,
+                to_sha,
+                entry["title"],
+                entry["summary"],
+                json.dumps(entry.get("bullets") or []),
+                json.dumps(entry.get("commit_shas") or []),
+                model,
+                _CHANGELOG_PROMPT_VERSION,
+            ),
+        )
+
+
+def get_recent_changelog_entries(cur, limit: int = 60) -> list[dict]:
+    """Read recent stored LLM entries, falling back to raw commits."""
+    cur.execute(
+        """
+        SELECT id, created_at, title, summary, bullets, commit_shas
+        FROM dashboard_changelog_entries
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    if rows:
+        entries = []
+        for row in rows:
+            d = dict(row)
+            entries.append({
+                "date": _commit_date(d.get("created_at")),
+                "title": d.get("title"),
+                "summary": d.get("summary"),
+                "bullets": d.get("bullets") or [],
+                "commit_shas": d.get("commit_shas") or [],
+            })
+        return entries
+
+    cur.execute(
+        """
+        SELECT sha, short_sha, committed_at, subject
+        FROM dashboard_changelog_commits
+        ORDER BY committed_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return group_changelog_commits([dict(r) for r in cur.fetchall()])
 
 
 def _detect_how_it_works_state(deploy_dir: str) -> dict:
@@ -1142,6 +1494,8 @@ def emit_new_pages(data: dict, deploy_dir: str, base_url: str) -> None:
             summary=summary, performance=performance, base_url=base_url)),
         ("activity", render_activity_page(
             base_url=base_url, memos=memos)),
+        ("changelog", render_changelog_page(
+            entries=data.get("changelog") or [], base_url=base_url)),
         ("learning", render_learning_hub(
             attribution_top3=attribution[:3],
             losers_top3=(mistakes.get("closed_losers") or [])[:3],
@@ -1276,6 +1630,30 @@ def run_dashboard_stage(session_date: date | None = None) -> DashboardStageResul
         logger.error("Failed to gather dashboard data: %s", e)
         return result
 
+    publish_sha = get_current_git_sha()
+    data["changelog"] = []
+    if publish_sha:
+        try:
+            with get_cursor() as cur:
+                last_published_sha = get_changelog_pointer(cur)
+                commits = fetch_changelog_commits(
+                    from_sha=last_published_sha,
+                    to_sha=publish_sha,
+                )
+                store_changelog_commits(cur, commits)
+                entries = summarize_changelog_commits(commits)
+                if entries:
+                    store_changelog_entries(
+                        cur,
+                        entries,
+                        from_sha=last_published_sha,
+                        to_sha=publish_sha,
+                        model=_CHANGELOG_MODEL,
+                    )
+                data["changelog"] = get_recent_changelog_entries(cur)
+        except Exception as e:
+            logger.warning("Could not prepare changelog entries: %s", e)
+
     # Assemble deploy directory
     base_url = os.environ.get("DASHBOARD_URL", "").rstrip("/")
     deploy_dir = tempfile.mkdtemp(prefix="dashboard_deploy_")
@@ -1297,5 +1675,11 @@ def run_dashboard_stage(session_date: date | None = None) -> DashboardStageResul
         shutil.rmtree(deploy_dir, ignore_errors=True)
 
     result.published = True
+    if publish_sha:
+        try:
+            persist_changelog_pointer(publish_sha)
+        except Exception as e:
+            result.errors.append(f"Changelog pointer update failed: {e}")
+            logger.error("Failed to update changelog pointer: %s", e)
     logger.info("Dashboard publish complete (published=%s)", result.published)
     return result

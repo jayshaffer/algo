@@ -526,6 +526,7 @@ class TestRenderPageShell:
             ("Home", "/"),
             ("Performance", "/performance/"),
             ("Activity", "/activity/"),
+            ("Changelog", "/changelog/"),
             ("Learning", "/learning/"),
             ("How it works", "/how-it-works/"),
         ]:
@@ -807,6 +808,84 @@ class TestRenderActivityPage:
     def test_memos_empty_state(self):
         html = render_activity_page(**self._data(memos=[]))
         assert "No memos yet" in html
+
+
+from v2.dashboard_pages import render_changelog_page
+
+
+class TestRenderChangelogPage:
+    def _data(self, **overrides):
+        defaults = dict(
+            entries=[
+                {
+                    "date": "2026-05-15",
+                    "title": "Public release polish",
+                    "summary": "Cleaned up the public surface.",
+                    "bullets": ["Finished the Pinchy rebrand.", "Rewrote the README."],
+                    "commit_shas": ["abc123full", "def456full"],
+                },
+                {
+                    "date": "2026-05-14",
+                    "title": "Audit hardening",
+                    "summary": "Added guardrails found during audit work.",
+                    "bullets": ["Reject exit intents when shares are zero."],
+                    "commit_shas": ["999aaaafull"],
+                },
+            ],
+            base_url="https://example.com",
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_changelog_active(self):
+        html = render_changelog_page(**self._data())
+        assert 'data-page="changelog"' in html
+        assert 'class="active" href="/changelog/"' in html
+
+    def test_renders_entries(self):
+        html = render_changelog_page(**self._data())
+        assert 'class="changelog-entry"' in html
+        assert "Public release polish" in html
+        assert "Cleaned up the public surface" in html
+        assert "2026-05-15" in html
+        assert "abc123f" in html
+        assert "abc123full" in html
+        assert "Finished the Pinchy rebrand" in html
+
+    def test_renders_raw_commit_fallback_table(self):
+        html = render_changelog_page(
+            **self._data(entries=[{
+                "date": "2026-05-15",
+                "items": [{
+                    "sha": "abc123full",
+                    "short_sha": "abc123",
+                    "subject": "Finished the Pinchy rebrand.",
+                }],
+            }])
+        )
+        assert '<table class="changelog-table">' in html
+        assert "SHA" in html
+        assert "Change" in html
+
+    def test_escapes_entry_content(self):
+        html = render_changelog_page(
+            **self._data(
+                entries=[{
+                    "date": "2026-05-15",
+                    "title": "<script>",
+                    "summary": "Bad <b>html</b>",
+                    "bullets": ["Use > raw"],
+                    "commit_shas": ["abc>full"],
+                }]
+            )
+        )
+        assert "&lt;script&gt;" in html
+        assert "Bad &lt;b&gt;html&lt;/b&gt;" in html
+        assert "abc&gt;" in html
+
+    def test_empty_state(self):
+        html = render_changelog_page(**self._data(entries=[]))
+        assert "No public updates posted yet" in html
 
 
 from v2.dashboard_pages import render_learning_hub
