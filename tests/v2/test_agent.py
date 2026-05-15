@@ -218,7 +218,7 @@ class TestGetTradingDecisions:
             "system kwarg should be exactly TRADING_SYSTEM_PROMPT (not a truncation or substitute)"
 
     def test_parses_decisions_with_playbook_action_id(self):
-        json_response = '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL","action":"buy","quantity":2.5,"reasoning":"Entry hit","confidence":"high","is_off_playbook":false,"signal_refs":[{"type":"news_signal","id":5}]}],"thesis_invalidations":[],"market_summary":"Active day","risk_assessment":"Medium"}'
+        json_response = '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL","action":"buy","intent_type":"invest_dollar","intent_magnitude":500,"quantity":2.5,"reasoning":"Entry hit","confidence":"high","is_off_playbook":false,"signal_refs":[{"type":"news_signal","id":5}]}],"thesis_invalidations":[],"market_summary":"Active day","risk_assessment":"Medium"}'
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=json_response)]
         mock_response.stop_reason = "end_turn"
@@ -240,6 +240,82 @@ class TestGetTradingDecisions:
         assert d.ticker == "AAPL"
         assert d.is_off_playbook is False
         assert len(d.signal_refs) == 1
+
+    def test_normalizes_action_and_confidence_at_parse_boundary(self):
+        json_response = (
+            '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL",'
+            '"action":" BUY ","intent_type":"invest_dollar","intent_magnitude":500,'
+            '"reasoning":"Entry hit","confidence":" HIGH ","is_off_playbook":false,'
+            '"signal_refs":[]}],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_response)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response):
+            response = get_trading_decisions(executor_input)
+
+        assert response.decisions[0].action == "buy"
+        assert response.decisions[0].confidence == "high"
+
+    def test_invalid_action_fails_schema_validation(self):
+        json_response = (
+            '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL",'
+            '"action":"accumulate","intent_type":"invest_dollar","intent_magnitude":500,'
+            '"reasoning":"Entry hit","confidence":"high","is_off_playbook":false,'
+            '"signal_refs":[]}],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_response)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response), \
+             patch("v2.agent.record_event") as mock_record:
+            with pytest.raises(ValueError, match="schema validation"):
+                get_trading_decisions(executor_input, session_id=42)
+
+        payload = mock_record.call_args.kwargs["payload"]
+        assert payload["parse_succeeded"] is False
+        assert "SchemaValidationError" in payload["error"]
+
+    def test_sell_with_buy_intent_fails_schema_validation(self):
+        json_response = (
+            '{"decisions":[{"playbook_action_id":1,"ticker":"AAPL",'
+            '"action":"sell","intent_type":"invest_dollar","intent_magnitude":500,'
+            '"reasoning":"Exit","confidence":"high","is_off_playbook":false,'
+            '"signal_refs":[]}],"thesis_invalidations":[],"market_summary":"","risk_assessment":""}'
+        )
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=json_response)]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        executor_input = ExecutorInput(
+            playbook_actions=[], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+        with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
+             patch("v2.agent._call_with_retry", return_value=mock_response):
+            with pytest.raises(ValueError, match="intent_type invalid"):
+                get_trading_decisions(executor_input)
 
     def test_raises_on_max_tokens(self):
         mock_response = MagicMock()

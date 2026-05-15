@@ -23,6 +23,15 @@ EXECUTOR_KNOWN_DECISION_KEYS = {
 }
 
 EXECUTOR_RAW_TEXT_CAP = 4096
+VALID_ACTIONS = {"buy", "sell", "hold"}
+VALID_CONFIDENCES = {"high", "medium", "low"}
+VALID_SELL_INTENTS = {
+    "exit_full", "exit_partial_pct", "exit_dollar", "trim_to_portfolio_pct",
+}
+VALID_BUY_INTENTS = {
+    "invest_dollar", "invest_portfolio_pct", "invest_buying_power_pct",
+    "add_to_target_pct",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +47,36 @@ def _safe_int(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _validate_decision_contract(raw: dict, index: int) -> tuple[str, str, str | None]:
+    action = str(raw.get("action", "hold")).strip().lower()
+    if action not in VALID_ACTIONS:
+        raise ValueError(f"decision[{index}].action invalid: {raw.get('action')!r}")
+
+    confidence = str(raw.get("confidence", "low")).strip().lower()
+    if confidence not in VALID_CONFIDENCES:
+        raise ValueError(f"decision[{index}].confidence invalid: {raw.get('confidence')!r}")
+
+    intent_type = raw.get("intent_type")
+    if intent_type is not None:
+        intent_type = str(intent_type).strip()
+        if not intent_type:
+            intent_type = None
+
+    if action == "hold":
+        if intent_type is not None or raw.get("intent_magnitude") is not None:
+            raise ValueError(f"decision[{index}] hold must not include an intent")
+        return action, confidence, None
+
+    valid_intents = VALID_BUY_INTENTS if action == "buy" else VALID_SELL_INTENTS
+    if intent_type not in valid_intents:
+        raise ValueError(
+            f"decision[{index}].intent_type invalid for {action}: {intent_type!r}"
+        )
+    if action == "buy" and raw.get("intent_magnitude") is None:
+        raise ValueError(f"decision[{index}] buy intent requires intent_magnitude")
+    return action, confidence, intent_type
 
 
 @dataclass
@@ -307,25 +346,49 @@ def get_trading_decisions(
 
     # Build response object
     decisions = []
-    for d in data.get("decisions", []):
-        raw_mag = d.get("intent_magnitude")
-        magnitude = Decimal(str(raw_mag)) if raw_mag is not None else None
-        # T1.3: normalize at the parse boundary so every downstream consumer
-        # (sector lookup, position dict keys, sell precheck) sees the same
-        # canonical TICKER. LLM has been observed emitting "aapl" or " AAPL ".
-        ticker = (d.get("ticker") or "").strip().upper()
-        decisions.append(ExecutorDecision(
-            playbook_action_id=d.get("playbook_action_id"),
-            ticker=ticker,
-            action=d.get("action", "hold"),
-            intent_type=d.get("intent_type"),
-            intent_magnitude=magnitude,
-            reasoning=d.get("reasoning", ""),
-            confidence=d.get("confidence", "low"),
-            is_off_playbook=d.get("is_off_playbook", False),
-            signal_refs=d.get("signal_refs", []),
-            thesis_id=_safe_int(d.get("thesis_id")),
-        ))
+    try:
+        for i, d in enumerate(data.get("decisions", [])):
+            if not isinstance(d, dict):
+                raise ValueError(f"decision[{i}] must be an object")
+            action, confidence, intent_type = _validate_decision_contract(d, i)
+            raw_mag = d.get("intent_magnitude")
+            try:
+                magnitude = Decimal(str(raw_mag)) if raw_mag is not None else None
+            except Exception as e:
+                raise ValueError(f"decision[{i}].intent_magnitude invalid: {raw_mag!r}") from e
+            # T1.3: normalize at the parse boundary so every downstream consumer
+            # (sector lookup, position dict keys, sell precheck) sees the same
+            # canonical TICKER. LLM has been observed emitting "aapl" or " AAPL ".
+            ticker = (d.get("ticker") or "").strip().upper()
+            decisions.append(ExecutorDecision(
+                playbook_action_id=d.get("playbook_action_id"),
+                ticker=ticker,
+                action=action,
+                intent_type=intent_type,
+                intent_magnitude=magnitude,
+                reasoning=d.get("reasoning", ""),
+                confidence=confidence,
+                is_off_playbook=d.get("is_off_playbook", False),
+                signal_refs=d.get("signal_refs", []),
+                thesis_id=_safe_int(d.get("thesis_id")),
+            ))
+    except ValueError as e:
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="executor_response",
+            payload={
+                "parse_succeeded": False,
+                "stop_reason": response.stop_reason,
+                "decision_count": 0,
+                "thesis_invalidation_count": 0,
+                "unknown_top_level_keys": [],
+                "unknown_decision_keys": [],
+                "raw_response_text_truncated": response_text[:EXECUTOR_RAW_TEXT_CAP],
+                "error": f"SchemaValidationError: {e}",
+            },
+        )
+        raise ValueError(f"Executor response failed schema validation: {e}") from e
 
     thesis_invalidations = []
     for inv in data.get("thesis_invalidations", []):
