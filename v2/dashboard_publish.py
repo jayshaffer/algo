@@ -1044,7 +1044,7 @@ def write_json_files(data: dict, repo_path: str) -> list[str]:
 _STATIC_ASSETS = ("styles.css", "app.js")
 _CHANGELOG_POINTER_KEY = "changelog_last_published_sha"
 _CHANGELOG_PROMPT_VERSION = "public_changelog_v1"
-_CHANGELOG_MODEL = "claude-3-5-haiku-latest"
+_CHANGELOG_MODEL = "claude-haiku-4-5"
 
 
 def get_current_git_sha(repo_path: str | None = None) -> str | None:
