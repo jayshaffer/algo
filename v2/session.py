@@ -6,9 +6,7 @@ Runs the full daily pipeline in a single invocation:
   Stage 2: Claude strategist (thesis management + playbook generation)
   Stage 3: Trading executor (decisions + order execution)
   Stage 4: Strategy reflection (rules, identity, memos)
-  Stage 5: Twitter posting (Mr. Krabs voice tweets)
-  Stage 5b: Bluesky posting
-  Stage 6: Public dashboard publish (GitHub Pages)
+  Stage 5: Public dashboard publish
 
 Each stage is independent — failures are captured and do not prevent
 subsequent stages from running.
@@ -16,7 +14,6 @@ subsequent stages from running.
 
 import argparse
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -25,7 +22,6 @@ from datetime import date
 from .agent import DEFAULT_EXECUTOR_MODEL
 from .attribution import build_attribution_constraints, compute_signal_attribution
 from .backfill import run_backfill
-from .bluesky import BlueskyStageResult, run_bluesky_stage
 from .claude_client import capture_usage
 from .dashboard_publish import DashboardStageResult, run_dashboard_stage
 from .database.trading_db import (
@@ -44,19 +40,16 @@ from .database.trading_db import (
 from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
-from .social_trades import TradePostsStageResult, run_trade_posts_stage
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
 from .telemetry import session_summary_line
 from .trader import TradingSessionResult, run_trading_session
-from .twitter import TwitterStageResult, run_twitter_stage
 
 logger = logging.getLogger("session")
 
 
 _ERROR_FIELDS = (
     "learning_error", "pipeline_error", "strategist_error", "trading_error",
-    "strategy_error", "twitter_error", "bluesky_error", "trade_posts_error",
-    "dashboard_error",
+    "strategy_error", "dashboard_error",
 )
 
 
@@ -66,9 +59,6 @@ class SessionResult:
     strategist_result: ClaudeIdeationResult | None = None
     trading_result: TradingSessionResult | None = None
     strategy_result: StrategyReflectionResult | None = None
-    twitter_result: TwitterStageResult | None = None
-    bluesky_result: BlueskyStageResult | None = None
-    trade_posts_result: TradePostsStageResult | None = None
     dashboard_result: DashboardStageResult | None = None
 
     learning_error: str | None = None     # V3: Stage 0
@@ -76,9 +66,6 @@ class SessionResult:
     strategist_error: str | None = None
     trading_error: str | None = None
     strategy_error: str | None = None
-    twitter_error: str | None = None
-    bluesky_error: str | None = None
-    trade_posts_error: str | None = None
     dashboard_error: str | None = None
 
     # T2.1: distinct from errors — set when the session was already completed
@@ -90,8 +77,6 @@ class SessionResult:
     skipped_ideation: bool = False
     skipped_executor: bool = False
     skipped_strategy: bool = False
-    skipped_twitter: bool = False
-    skipped_bluesky: bool = False
     skipped_dashboard: bool = False
     duration_seconds: float = 0.0
 
@@ -407,77 +392,15 @@ def _run_strategy_stage(
             logger.error("Strategy reflection failed: %s", e)
 
 
-def _run_twitter_stage_wrapper(
-    result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
-) -> None:
-    if skip or "twitter" in completed_stages:
-        logger.info("[Stage 5] Twitter posting — SKIPPED%s",
-                    " (completed in prior run)" if "twitter" in completed_stages else "")
-        result.skipped_twitter = True
-        return
-    logger.info("[Stage 5] Running Twitter posting")
-    _start_stage(session_id, "twitter")
-    with capture_usage() as usage:
-        try:
-            result.twitter_result = run_twitter_stage(session_id=session_id)
-            _complete_stage(session_id, "twitter", usage=usage)
-        except Exception as e:
-            result.twitter_error = str(e)
-            _fail_stage(session_id, "twitter", str(e), usage=usage)
-            logger.error("Twitter stage failed: %s", e)
-
-
-def _run_bluesky_stage_wrapper(
-    result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
-) -> None:
-    if skip or "bluesky" in completed_stages:
-        logger.info("[Stage 5b] Bluesky posting — SKIPPED%s",
-                    " (completed in prior run)" if "bluesky" in completed_stages else "")
-        result.skipped_bluesky = True
-        return
-    logger.info("[Stage 5b] Running Bluesky posting")
-    _start_stage(session_id, "bluesky")
-    with capture_usage() as usage:
-        try:
-            result.bluesky_result = run_bluesky_stage(session_id=session_id)
-            _complete_stage(session_id, "bluesky", usage=usage)
-        except Exception as e:
-            result.bluesky_error = str(e)
-            _fail_stage(session_id, "bluesky", str(e), usage=usage)
-            logger.error("Bluesky stage failed: %s", e)
-
-
-def _run_trade_posts_stage_wrapper(
-    result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
-) -> None:
-    """New live-trade pipeline stage; runs in place of the legacy twitter+bluesky
-    stages when ALGO_ENABLE_TRADE_POSTS=1. Idempotency, error trapping, and
-    session_stages completion follow the same shape as the legacy wrappers."""
-    if skip or "trade_posts" in completed_stages:
-        logger.info("[Stage 5] Trade-posts — SKIPPED%s",
-                    " (completed in prior run)" if "trade_posts" in completed_stages else "")
-        return
-    logger.info("[Stage 5] Running trade-posts stage")
-    _start_stage(session_id, "trade_posts")
-    with capture_usage() as usage:
-        try:
-            result.trade_posts_result = run_trade_posts_stage(session_id=session_id)
-            _complete_stage(session_id, "trade_posts", usage=usage)
-        except Exception as e:
-            result.trade_posts_error = str(e)
-            _fail_stage(session_id, "trade_posts", str(e), usage=usage)
-            logger.error("Trade-posts stage crashed: %s", e)
-
-
 def _run_dashboard_stage_wrapper(
     result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
 ) -> None:
     if skip or "dashboard" in completed_stages:
-        logger.info("[Stage 6] Dashboard publish — SKIPPED%s",
+        logger.info("[Stage 5] Dashboard publish — SKIPPED%s",
                     " (completed in prior run)" if "dashboard" in completed_stages else "")
         result.skipped_dashboard = True
         return
-    logger.info("[Stage 6] Publishing public dashboard")
+    logger.info("[Stage 5] Publishing public dashboard")
     _start_stage(session_id, "dashboard")
     try:
         result.dashboard_result = run_dashboard_stage()
@@ -534,8 +457,6 @@ def run_session(
     skip_ideation: bool = False,
     skip_executor: bool = False,
     skip_strategy: bool = False,
-    skip_twitter: bool = False,
-    skip_bluesky: bool = False,
     skip_dashboard: bool = False,
     pipeline_hours: int = 24,
     pipeline_limit: int = 300,
@@ -545,22 +466,19 @@ def run_session(
 
     # P1.12: --dry-run was misleading — it only gated the executor's order
     # submission, leaving the strategist (writes theses/playbooks/memos) and
-    # reflection (writes rules/memos/identity) and the social/dashboard
-    # publishers free to mutate state and post publicly. Promote dry_run to
-    # the skip flags for any stage that would otherwise mutate strategy state
-    # or be visible to the outside world. Pipeline is left running (it just
+    # reflection (writes rules/memos/identity) and the dashboard publisher
+    # free to mutate state and publish publicly. Promote dry_run to the skip
+    # flags for any stage that would otherwise mutate strategy state or be
+    # visible to the outside world. Pipeline is left running (it just
     # observes new news; not a strategy mutation).
     if dry_run:
         skip_ideation = True
         skip_strategy = True
-        skip_twitter = True
-        skip_bluesky = True
         skip_dashboard = True
 
     result = SessionResult(
         skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation,
         skipped_executor=skip_executor, skipped_strategy=skip_strategy,
-        skipped_twitter=skip_twitter, skipped_bluesky=skip_bluesky,
         skipped_dashboard=skip_dashboard,
     )
     today = date.today()
@@ -582,17 +500,6 @@ def run_session(
         )
         _run_executor_stage(result, session_id, completed_stages, skip_executor, dry_run, executor_model, today)
         _run_strategy_stage(result, session_id, completed_stages, skip_strategy)
-        if os.environ.get("ALGO_ENABLE_TRADE_POSTS") == "1":
-            # New live-trade pipeline. --skip-twitter / --skip-bluesky still apply
-            # but propagate inside run_trade_posts_stage (which decides per-platform
-            # based on the available client). Treat skip_twitter+skip_bluesky as
-            # an OR-skip of the whole stage for simplicity until we add a dedicated
-            # --skip-trade-posts flag.
-            skip_combined = skip_twitter and skip_bluesky
-            _run_trade_posts_stage_wrapper(result, session_id, completed_stages, skip_combined)
-        else:
-            _run_twitter_stage_wrapper(result, session_id, completed_stages, skip_twitter)
-            _run_bluesky_stage_wrapper(result, session_id, completed_stages, skip_bluesky)
         _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard)
     finally:
         result.duration_seconds = time.monotonic() - start
@@ -613,8 +520,6 @@ def main():
     parser.add_argument("--skip-ideation", action="store_true")
     parser.add_argument("--skip-executor", action="store_true")
     parser.add_argument("--skip-strategy", action="store_true")
-    parser.add_argument("--skip-twitter", action="store_true")
-    parser.add_argument("--skip-bluesky", action="store_true")
     parser.add_argument("--skip-dashboard", action="store_true")
     parser.add_argument("--pipeline-hours", type=int, default=24)
     parser.add_argument("--force", action="store_true", help="Override session idempotency check")
@@ -625,7 +530,6 @@ def main():
         max_turns=args.max_turns, skip_pipeline=args.skip_pipeline,
         skip_ideation=args.skip_ideation, skip_executor=args.skip_executor,
         skip_strategy=args.skip_strategy,
-        skip_twitter=args.skip_twitter, skip_bluesky=args.skip_bluesky,
         skip_dashboard=args.skip_dashboard,
         pipeline_hours=args.pipeline_hours,
         force=args.force,

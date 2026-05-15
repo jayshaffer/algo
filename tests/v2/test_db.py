@@ -1116,20 +1116,6 @@ class TestStrategyMemos:
         assert 42 in params
 
 
-class TestTweets:
-    def test_insert_tweet_passes_session_id(self, mock_db, mock_cursor):
-        mock_cursor.fetchone.return_value = {"id": 1}
-        from v2.database.trading_db import insert_tweet
-        insert_tweet(
-            session_date=date(2026, 5, 13), tweet_type="recap",
-            tweet_text="t", session_id=42,
-        )
-        sql = mock_cursor.execute.call_args[0][0]
-        params = mock_cursor.execute.call_args[0][1]
-        assert "session_id" in sql
-        assert 42 in params
-
-
 class TestDecisionDedup:
     def test_check_decision_exists(self, mock_db, mock_cursor):
         """Should find existing decision for same ticker+action+date."""

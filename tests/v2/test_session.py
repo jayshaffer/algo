@@ -3,11 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from v2.bluesky import BlueskyStageResult
 from v2.dashboard_publish import DashboardStageResult
 from v2.session import SessionResult, run_session
 from v2.strategy import StrategyReflectionResult
-from v2.twitter import TwitterStageResult
 
 
 @pytest.fixture(autouse=True)
@@ -210,9 +208,6 @@ class TestSessionResult:
         assert result.skipped_pipeline is False
         assert result.skipped_ideation is False
         assert result.skipped_strategy is False
-        assert result.bluesky_result is None
-        assert result.bluesky_error is None
-        assert result.skipped_bluesky is False
         assert result.dashboard_result is None
         assert result.dashboard_error is None
         assert result.skipped_dashboard is False
@@ -302,9 +297,9 @@ class TestStage4StrategyReflection:
         assert result.skipped_strategy is True
 
 
-class TestStage5Twitter:
-    def test_stage_5_runs_after_strategy(self):
-        """Twitter should run after strategy reflection."""
+class TestStage5Dashboard:
+    def test_dashboard_runs_after_strategy(self):
+        """Dashboard should run after strategy reflection."""
         call_order = []
 
         with patch("v2.session.run_backfill"), \
@@ -314,174 +309,14 @@ class TestStage5Twitter:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection") as mock_reflect, \
-             patch("v2.session.run_twitter_stage") as mock_twitter:
-
-            mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
-            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
-
-            run_session(dry_run=False)
-
-        assert call_order.index("reflection") < call_order.index("twitter")
-
-    def test_stage_5_result_captured(self):
-        """Twitter result should be in SessionResult."""
-        mock_twitter_result = TwitterStageResult(tweet_posted=True)
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage", return_value=mock_twitter_result):
-
-            result = run_session(dry_run=False)
-
-        assert result.twitter_result is not None
-        assert result.twitter_result.tweet_posted is True
-
-    def test_stage_5_failure_does_not_block(self):
-        """Twitter failure should be captured but not crash."""
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage", side_effect=Exception("Tweepy down")):
-
-            result = run_session(dry_run=False)
-
-        assert result.twitter_error == "Tweepy down"
-        assert result.twitter_result is None
-
-    def test_stage_5_error_in_has_errors(self):
-        """Twitter error should be included in has_errors check."""
-        result = SessionResult(twitter_error="test")
-        assert result.has_errors is True
-
-    def test_skip_twitter_flag(self):
-        """Twitter should be skippable."""
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage") as mock_twitter:
-
-            result = run_session(dry_run=False, skip_twitter=True)
-
-        mock_twitter.assert_not_called()
-        assert result.skipped_twitter is True
-
-
-class TestStage5Bluesky:
-    def test_bluesky_runs_after_twitter(self):
-        """Bluesky should run after Twitter posting."""
-        call_order = []
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage") as mock_twitter, \
-             patch("v2.session.run_bluesky_stage") as mock_bluesky:
-
-            mock_twitter.side_effect = lambda **kw: call_order.append("twitter")
-            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
-
-            run_session(dry_run=False)
-
-        assert call_order.index("twitter") < call_order.index("bluesky")
-
-    def test_bluesky_result_captured(self):
-        """Bluesky result should be in SessionResult."""
-        mock_bluesky_result = BlueskyStageResult(post_posted=True)
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage", return_value=mock_bluesky_result):
-
-            result = run_session(dry_run=False)
-
-        assert result.bluesky_result is not None
-        assert result.bluesky_result.post_posted is True
-
-    def test_bluesky_failure_does_not_block(self):
-        """Bluesky failure should be captured but not crash."""
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage", side_effect=Exception("atproto down")):
-
-            result = run_session(dry_run=False)
-
-        assert result.bluesky_error == "atproto down"
-        assert result.bluesky_result is None
-
-    def test_bluesky_error_in_has_errors(self):
-        """Bluesky error should be included in has_errors check."""
-        result = SessionResult(bluesky_error="test")
-        assert result.has_errors is True
-
-    def test_skip_bluesky_flag(self):
-        """Bluesky should be skippable."""
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage") as mock_bluesky:
-
-            result = run_session(dry_run=False, skip_bluesky=True)
-
-        mock_bluesky.assert_not_called()
-        assert result.skipped_bluesky is True
-
-
-class TestStage6Dashboard:
-    def test_dashboard_runs_after_bluesky(self):
-        """Dashboard should run after Bluesky posting."""
-        call_order = []
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage") as mock_bluesky, \
              patch("v2.session.run_dashboard_stage") as mock_dashboard:
 
-            mock_bluesky.side_effect = lambda **kw: call_order.append("bluesky")
+            mock_reflect.side_effect = lambda **kw: call_order.append("reflection")
             mock_dashboard.side_effect = lambda: call_order.append("dashboard")
 
             run_session(dry_run=False)
 
-        assert call_order.index("bluesky") < call_order.index("dashboard")
+        assert call_order.index("reflection") < call_order.index("dashboard")
 
     def test_dashboard_result_captured(self):
         """Dashboard result should be in SessionResult."""
@@ -494,8 +329,6 @@ class TestStage6Dashboard:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", return_value=mock_dashboard_result):
 
             result = run_session(dry_run=False)
@@ -512,8 +345,6 @@ class TestStage6Dashboard:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", side_effect=Exception("gh-pages down")):
 
             result = run_session(dry_run=False)
@@ -535,8 +366,6 @@ class TestStage6Dashboard:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage") as mock_dashboard:
 
             result = run_session(dry_run=False, skip_dashboard=True)
@@ -577,8 +406,6 @@ class TestSessionIdempotency:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -597,8 +424,6 @@ class TestSessionIdempotency:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             mock_get.return_value = {"id": 1, "status": "failed"}
@@ -619,8 +444,6 @@ class TestSessionIdempotency:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             mock_get.return_value = {"id": 1, "status": "completed"}
@@ -686,8 +509,6 @@ class TestPerStageResume:
              patch("v2.session.run_strategist_loop") as mock_strat, \
              patch("v2.session.run_trading_session") as mock_trade, \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             mock_get.return_value = {"id": 1, "status": "failed"}
@@ -712,8 +533,6 @@ class TestPerStageResume:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             run_session(dry_run=False)
@@ -743,8 +562,6 @@ class TestPerStageResume:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -771,8 +588,6 @@ class TestPerStageResume:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -796,8 +611,6 @@ class TestStrategistMemoPersistence:
              patch("v2.session.run_strategist_loop", return_value=mock_ideation_result), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.insert_strategy_memo") as mock_memo, \
              patch("v2.session.get_current_strategy_state", return_value={"id": 1}):
@@ -818,8 +631,6 @@ class TestStrategistMemoPersistence:
              patch("v2.session.get_playbook", return_value=None), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.insert_strategy_memo") as mock_memo:
 
@@ -844,8 +655,6 @@ class TestStrategistMemoPersistence:
              patch("v2.session.get_playbook", return_value=None), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
              patch("v2.session.insert_strategy_memo") as mock_memo:
@@ -873,8 +682,6 @@ class TestStrategistMemoPersistence:
              patch("v2.session.get_playbook", return_value={"id": 1}), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
              patch("v2.session._check_and_record_session", return_value=(7777, set(), None)), \
@@ -902,8 +709,6 @@ class TestStrategistMemoPersistence:
              patch("v2.session.get_playbook", return_value={"id": 1}), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.get_current_strategy_state", return_value={"id": 1}), \
              patch("v2.session.insert_strategy_memo") as mock_memo:
@@ -940,8 +745,6 @@ class TestReflectionMemoGuard:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection", return_value=no_memo_result), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.insert_session_record", return_value=42), \
              patch("v2.session.insert_session_stage"), \
@@ -979,8 +782,6 @@ class TestReflectionMemoGuard:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection", return_value=good_result), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"), \
              patch("v2.session.insert_session_record", return_value=42), \
              patch("v2.session.insert_session_stage"), \
@@ -1009,8 +810,6 @@ class TestExecutorPlaybookDependency:
              patch("v2.session.get_playbook", return_value=None), \
              patch("v2.session.run_trading_session") as mock_trade, \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1029,8 +828,6 @@ class TestExecutorPlaybookDependency:
              patch("v2.session.get_playbook", return_value={"id": 1}), \
              patch("v2.session.run_trading_session") as mock_trade, \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1052,8 +849,6 @@ class TestStrategistMissingPlaybook:
              patch("v2.session.get_playbook", return_value=None), \
              patch("v2.session.run_trading_session") as mock_trade, \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             mock_strat.return_value = MagicMock(final_summary=None)
@@ -1074,8 +869,6 @@ class TestStrategistMissingPlaybook:
              patch("v2.session.get_playbook", return_value={"id": 1}), \
              patch("v2.session.run_trading_session") as mock_trade, \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             mock_strat.return_value = MagicMock(final_summary="all good")
@@ -1110,8 +903,6 @@ class TestSessionIdempotencyExceptionHandler:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1139,8 +930,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1160,8 +949,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1182,8 +969,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.get_playbook", return_value={"id": 1}), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1205,8 +990,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session", side_effect=Exception("trader broke")), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1228,8 +1011,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection", side_effect=Exception("reflection broke")), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1237,52 +1018,6 @@ class TestStageFailFailureSwallowed:
         assert result.strategy_error == "reflection broke"
         stages_failed = [c.args[1] for c in mock_fail.call_args_list]
         assert "strategy" in stages_failed
-
-    def test_twitter_stage_failure_tracks_and_captures(self):
-        with patch("v2.session.insert_session_record", return_value=5), \
-             patch("v2.session.complete_session"), \
-             patch("v2.session.fail_session"), \
-             patch("v2.session.insert_session_stage"), \
-             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
-             patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage", side_effect=Exception("twitter broke")), \
-             patch("v2.session.run_bluesky_stage"), \
-             patch("v2.session.run_dashboard_stage"):
-
-            result = run_session(dry_run=False)
-
-        assert result.twitter_error == "twitter broke"
-        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
-        assert "twitter" in stages_failed
-
-    def test_bluesky_stage_failure_tracks_and_captures(self):
-        with patch("v2.session.insert_session_record", return_value=5), \
-             patch("v2.session.complete_session"), \
-             patch("v2.session.fail_session"), \
-             patch("v2.session.insert_session_stage"), \
-             patch("v2.session.fail_session_stage", side_effect=Exception("tracking down")) as mock_fail, \
-             patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage", side_effect=Exception("bluesky broke")), \
-             patch("v2.session.run_dashboard_stage"):
-
-            result = run_session(dry_run=False)
-
-        assert result.bluesky_error == "bluesky broke"
-        stages_failed = [c.args[1] for c in mock_fail.call_args_list]
-        assert "bluesky" in stages_failed
 
     def test_dashboard_stage_failure_tracks_and_captures(self):
         with patch("v2.session.insert_session_record", return_value=5), \
@@ -1297,8 +1032,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage", side_effect=Exception("dash broke")):
 
             result = run_session(dry_run=False)
@@ -1320,8 +1053,6 @@ class TestStageFailFailureSwallowed:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session", side_effect=Exception("trader broke")), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1346,8 +1077,6 @@ class TestFinalSessionStatusExceptionHandler:
              patch("v2.session.run_strategist_loop"), \
              patch("v2.session.run_trading_session"), \
              patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_twitter_stage"), \
-             patch("v2.session.run_bluesky_stage"), \
              patch("v2.session.run_dashboard_stage"):
 
             result = run_session(dry_run=False)
@@ -1360,7 +1089,7 @@ class TestDryRunSkipPromotion:
     """P1.12: --dry-run must skip every stage that would mutate strategy state
     or be visible to the outside world. Previously dry_run was forwarded only
     to the executor, so strategist/reflection still wrote DB rows and the
-    Twitter/Bluesky/Dashboard publishers still posted.
+    Dashboard publisher still posted.
     """
 
     def _all_mocks(self):
@@ -1372,8 +1101,6 @@ class TestDryRunSkipPromotion:
             patch("v2.session.run_strategist_loop"),
             patch("v2.session.run_trading_session"),
             patch("v2.session.run_strategy_reflection"),
-            patch("v2.session.run_twitter_stage"),
-            patch("v2.session.run_bluesky_stage"),
             patch("v2.session.run_dashboard_stage"),
         ]
 
@@ -1401,17 +1128,13 @@ class TestDryRunSkipPromotion:
             for c in ctxs:
                 c.stop()
 
-    def test_dry_run_skips_socials_and_dashboard(self):
+    def test_dry_run_skips_dashboard(self):
         ctxs = self._all_mocks()
         mocks = [c.start() for c in ctxs]
         try:
             result = run_session(dry_run=True)
-            mock_tw, mock_bs, mock_dash = mocks[7], mocks[8], mocks[9]
-            mock_tw.assert_not_called()
-            mock_bs.assert_not_called()
+            mock_dash = mocks[7]
             mock_dash.assert_not_called()
-            assert result.skipped_twitter is True
-            assert result.skipped_bluesky is True
             assert result.skipped_dashboard is True
         finally:
             for c in ctxs:
@@ -1452,7 +1175,7 @@ class TestCliMain:
 
         argv = [
             "v2.session", "--dry-run", "--skip-pipeline",
-            "--skip-twitter", "--skip-bluesky", "--skip-dashboard",
+            "--skip-dashboard",
         ]
         with patch.object(_sys, "argv", argv), \
              patch("v2.session.setup_logging"), \
@@ -1480,63 +1203,6 @@ class TestCliMain:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1
-
-
-class TestAlgoEnableTradePostsFlag:
-    """Feature-flag branching: ALGO_ENABLE_TRADE_POSTS=1 routes to new stage,
-    absence of the flag preserves legacy twitter+bluesky path."""
-
-    def test_trade_posts_flag_routes_to_new_stage_and_skips_old(self, monkeypatch):
-        """When ALGO_ENABLE_TRADE_POSTS=1, run_trade_posts_stage runs and
-        the legacy run_twitter_stage / run_bluesky_stage are NOT called."""
-        from v2.social_trades import TradePostsStageResult
-
-        monkeypatch.setenv("ALGO_ENABLE_TRADE_POSTS", "1")
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_dashboard_stage"), \
-             patch("v2.session.run_trade_posts_stage",
-                   return_value=TradePostsStageResult()) as mock_new, \
-             patch("v2.session.run_twitter_stage") as mock_old_tw, \
-             patch("v2.session.run_bluesky_stage") as mock_old_bs:
-            run_session(
-                dry_run=False, skip_dashboard=True,
-            )
-
-        mock_new.assert_called_once()
-        mock_old_tw.assert_not_called()
-        mock_old_bs.assert_not_called()
-
-    def test_trade_posts_flag_off_runs_legacy_stages(self, monkeypatch):
-        """Default behavior: ALGO_ENABLE_TRADE_POSTS unset → legacy path runs."""
-        monkeypatch.delenv("ALGO_ENABLE_TRADE_POSTS", raising=False)
-
-        with patch("v2.session.run_backfill"), \
-             patch("v2.session.compute_signal_attribution", return_value=[]), \
-             patch("v2.session.build_attribution_constraints", return_value=""), \
-             patch("v2.session.run_pipeline"), \
-             patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
-             patch("v2.session.run_strategy_reflection"), \
-             patch("v2.session.run_dashboard_stage"), \
-             patch("v2.session.run_trade_posts_stage") as mock_new, \
-             patch("v2.session.run_twitter_stage",
-                   return_value=TwitterStageResult()) as mock_old_tw, \
-             patch("v2.session.run_bluesky_stage",
-                   return_value=BlueskyStageResult()) as mock_old_bs:
-            run_session(
-                dry_run=False, skip_dashboard=True,
-            )
-
-        mock_new.assert_not_called()
-        mock_old_tw.assert_called_once()
-        mock_old_bs.assert_called_once()
 
 
 class TestStageCaptureUsage:

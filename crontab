@@ -4,12 +4,6 @@
 
 PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 
-# Pre-market social post (5:30 AM MST / 7:30 AM ET, Mon-Fri)
-# Independent of the daily session. Self-skips on NYSE holidays.
-# Posts a forward-looking take based on active theses + latest memo.
-# Idempotent on retries via posted_tweet_exists(today, "premarket", platform).
-30 5 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.premarket
-
 # Paper trading session (12:30 PM MST / 2:30 PM ET, Mon-Fri)
 30 12 * * 1-5 cd /home/jay/dev/algo/ && task paper:session
 
@@ -19,22 +13,8 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Stage 2: Claude Opus strategist (thesis management, playbook generation)
 # Stage 3: Claude Haiku executor (validate, execute, log)
 # Stage 4: strategy reflection (memo, identity, rule proposals)
-# Stage 5: social posts. With ALGO_ENABLE_TRADE_POSTS=1 in .env, this runs
-#          the live-trade pipeline (one tweet per significant decision,
-#          linking to /trade/<id>/ on the public dashboard) instead of the
-#          legacy single recap. Off by default — flip ALGO_ENABLE_TRADE_POSTS
-#          to "1" in .env once paper smoke-test confirms behavior.
-# Stage 6: dashboard publish
+# Stage 5: dashboard publish
 0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
-
-# Weekly mistakes post (2:00 PM MST / 4:00 PM ET, Friday)
-# Posts "what didn't work" with a link to /mistakes/.
-# Self-skips on NYSE holidays. Idempotent on retries.
-0 14 * * 5 /home/jay/dev/algo/run-docker.sh trading python -m v2.social_weekly mistakes
-
-# Weekly attribution post (2:15 PM MST / 4:15 PM ET, Friday)
-# Posts the attribution roundup with a link to /attribution/.
-15 14 * * 5 /home/jay/dev/algo/run-docker.sh trading python -m v2.social_weekly attribution
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
 0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
