@@ -307,6 +307,7 @@ def tool_get_session_summary(days: int = 30) -> str:
                     LEFT JOIN macro_signals ms ON ds.signal_type = 'macro_signal' AND ms.id = ds.signal_id
                     LEFT JOIN theses t ON ds.signal_type = 'thesis' AND t.id = ds.signal_id
                     WHERE ds.decision_id = ANY(%s)
+                      AND ds.signal_type IN ('news_signal', 'macro_signal', 'thesis')
                       AND (ds.signal_type != 'news_signal' OR ns.id IS NOT NULL)
                       AND (ds.signal_type != 'macro_signal' OR ms.id IS NOT NULL)
                       AND (ds.signal_type != 'thesis' OR t.id IS NOT NULL)
