@@ -346,6 +346,8 @@ def _run_executor_stage(
             result.trading_result = run_trading_session(
                 dry_run=dry_run, model=executor_model, session_id=session_id,
             )
+            if result.trading_result.errors:
+                raise RuntimeError("; ".join(result.trading_result.errors))
             _complete_stage(session_id, "executor", usage=usage)
         except Exception as e:
             result.trading_error = str(e)

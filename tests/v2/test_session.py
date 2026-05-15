@@ -1,4 +1,6 @@
 """Tests for 5-stage session orchestrator."""
+from datetime import datetime
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -6,6 +8,7 @@ import pytest
 from v2.dashboard_publish import DashboardStageResult
 from v2.session import SessionResult, run_session
 from v2.strategy import StrategyReflectionResult
+from v2.trader import TradingSessionResult
 
 
 @pytest.fixture(autouse=True)
@@ -1306,3 +1309,37 @@ class TestSessionEndTelemetryLog:
             result = run_session(dry_run=False)
 
         assert result is not None
+
+
+class TestExecutorStageErrors:
+    def test_executor_result_errors_fail_stage(self):
+        """A returned TradingSessionResult with errors is not a successful stage."""
+        failed = TradingSessionResult(
+            timestamp=datetime(2026, 5, 15, 10, 0, 0),
+            account_snapshot_id=0,
+            positions_synced=0,
+            orders_synced=0,
+            decisions_made=0,
+            trades_executed=0,
+            trades_failed=0,
+            total_buy_value=Decimal("0"),
+            total_sell_value=Decimal("0"),
+            errors=["Market is closed -- skipped trading"],
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session", return_value=failed), \
+             patch("v2.session.insert_session_record", return_value=77), \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage") as mock_fail:
+            result = run_session(dry_run=False)
+
+        assert "Market is closed" in result.trading_error
+        completed = [c.args[1] for c in mock_complete.call_args_list]
+        failed_stages = [c.args[1] for c in mock_fail.call_args_list]
+        assert "executor" not in completed
+        assert "executor" in failed_stages
