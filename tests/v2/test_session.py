@@ -1,4 +1,5 @@
 """Tests for 5-stage session orchestrator."""
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -61,6 +62,23 @@ class TestRunSession:
 
         mock_strat.assert_called_once()
         assert "STRONG: earnings" in str(mock_strat.call_args)
+
+    def test_market_date_passed_to_executor(self):
+        """One canonical market date should own session and decision rows."""
+        market_date = date(2026, 5, 15)
+        with patch("v2.session.current_market_date", return_value=market_date), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session") as mock_trade, \
+             patch("v2.session.insert_session_record", return_value=77) as mock_insert:
+
+            run_session(dry_run=False)
+
+        mock_insert.assert_called_once_with(market_date)
+        assert mock_trade.call_args.kwargs["session_date"] == market_date
 
     def test_stage_0_failure_does_not_block(self):
         """If learning refresh fails, session continues with stale data."""
