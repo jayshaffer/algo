@@ -17,7 +17,7 @@ OG_WIDTH = 1200
 OG_HEIGHT = 630
 _BG = (8, 24, 32)        # dark teal
 _FG = (220, 240, 230)    # warm off-white
-_ACCENT = (0, 212, 170)  # bikini-bottom green
+_ACCENT = (0, 212, 170)  # accent green
 _MUTED = (140, 160, 150)
 
 _FONT_CACHE: dict[int, _ImageFontModule.FreeTypeFont] = {}

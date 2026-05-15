@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Alpaca Learning Platform - an agentic trading system that uses Claude (via Anthropic API) to integrate with the Alpaca trading API, learn from past behavior, and make trading decisions.
+Pinchy — an agentic trading system that uses Claude (via Anthropic API) to integrate with the Alpaca trading API, learn from past behavior, and make trading decisions. The public dashboard is the project's surface area; the automated social posting layer was retired 2026-05-15.
 
 **Status:** Active development — `v2/` is the current active codebase.
 
@@ -29,7 +29,7 @@ The same v2 code runs against two isolated pipelines selected by docker-compose 
 | Logs | `./logs` | `./logs_paper` |
 | Alpaca account | Live account | Paper account |
 
-Paper runs skip social/public-dashboard stages by default (`--skip-twitter --skip-bluesky --skip-dashboard`). Taskfile targets prefixed `paper:*` (e.g. `paper:up`, `paper:session`, `paper:session:dry-run`) exercise the paper pipeline; the unprefixed targets (`session`, `trade`, etc.) run against prod. The two stacks use separate Postgres volumes, so data never crosses between them.
+Paper runs skip the public-dashboard stage by default (`--skip-dashboard`). Taskfile targets prefixed `paper:*` (e.g. `paper:up`, `paper:session`, `paper:session:dry-run`) exercise the paper pipeline; the unprefixed targets (`session`, `trade`, etc.) run against prod. The two stacks use separate Postgres volumes, so data never crosses between them.
 
 ## Project Goals
 
@@ -38,7 +38,7 @@ Paper runs skip social/public-dashboard stages by default (`--skip-twitter --ski
 - Daily automated session after market close
 - Learning system that journals behavior, computes signal attribution, and reflects on strategy
 - Single Alpaca account with an evolving day-to-day strategy
-- Public dashboard published to GitHub Pages
+- Public dashboard published to Cloudflare Pages
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Paper runs skip social/public-dashboard stages by default (`--skip-twitter --ski
 - **LLM:** Claude via Anthropic API (Haiku for execution, larger models for ideation/reflection)
 - **Database:** PostgreSQL 16 + pgvector
 - **API:** Alpaca Trading API (read/write)
-- **Dashboard:** Published to GitHub Pages
+- **Dashboard:** Published to Cloudflare Pages
 
 ## v2 Daily Session (`v2/session.py`)
 
@@ -68,56 +68,20 @@ The session orchestrator runs stages sequentially. Each stage is independent —
 | 2 | `ideation_claude.py` | Strategist: thesis management + playbook generation (agentic loop with tools) |
 | 3 | `trader.py` | Executor: decisions from playbook + order execution |
 | 4 | `strategy.py` | Reflection: update strategy identity, rules, and write session memo |
-| 5 | `twitter.py` / `bluesky.py` (legacy) or `social_trades.py` (new, gated by `ALGO_ENABLE_TRADE_POSTS=1`) | Social posting |
-| 6 | `dashboard_publish.py` | Public dashboard publish |
+| 5 | `dashboard_publish.py` | Public dashboard publish |
 
-### Pre-market post stage
+The dashboard renders permalinks at `/mistakes/` and `/attribution/`
+(surfacing closed losers + retired rules, and best/worst signal types
+respectively) so those pages stay fresh against each session's data.
 
-Independent of the daily session. Triggered by cron via `task premarket`
-(or `python -m v2.premarket` directly). Skipped on weekends and NYSE
-holidays. Posts a forward-looking take referencing 1–2 names from
-active theses + the latest session memo.
+### Retired: social posting pipeline
 
-### Live-trade pipeline feature flag
-
-When `ALGO_ENABLE_TRADE_POSTS=1`, Stage 5 runs `run_trade_posts_stage`
-instead of the legacy `run_twitter_stage` + `run_bluesky_stage`:
-
-- Iterates today's significant non-hold decisions (notional ≥ `$100`).
-- Posts one tweet per decision to Twitter + Bluesky, each linking to
-  `/trade/<id>/` and (if present) `/thesis/<id>/` on the public dashboard.
-- Caps at 5 posts per session.
-- Quiet-day fallback: if no postable decisions, posts a mini-recap on
-  trading days only.
-- `ALGO_TRADE_POST_DRY_RUN=1` logs generated post bodies and skips both
-  platform posts and the DB audit row.
-
-The legacy recap path (twitter.py / bluesky.py orchestrators) stays
-intact while the new pipeline is being validated; a follow-up plan will
-delete it after one week of clean prod runs.
-
-### Weekly social posts
-
-Two cron-triggered posts every Friday afternoon, separate from the daily
-session:
-
-- `python -m v2.social_weekly mistakes` — posts "what didn't work" with a
-  link to `/mistakes/` on the public dashboard. Surfaces the worst recent
-  closed loser or a recently retired rule.
-- `python -m v2.social_weekly attribution` — posts the signal-attribution
-  roundup with a link to `/attribution/`. Names 1–2 best/worst signal
-  types.
-
-Both:
-- Self-skip on weekends and NYSE holidays.
-- Idempotent on retries via `posted_tweet_exists(today, type_label, platform)`.
-- Skip with a non-error log when the underlying data is empty (no losers
-  this week / not enough attribution samples yet).
-- Honor `ALGO_TRADE_POST_DRY_RUN=1`.
-
-The dashboard publishes `/mistakes/` and `/attribution/` permalinks on every
-Stage 6 run, so the linked pages are always fresh against the previous daily
-session's data.
+The Twitter/Bluesky/entertainment/premarket/weekly stack and its
+"Mr. Krabs from SpongeBob, running Bikini Bottom Capital" persona were
+removed 2026-05-15. The `tweets` table is retained for historical data;
+no new rows are written. If you find vestigial references in `docs/`
+historical plan/spec docs, leave them — they document the project's
+prior identity.
 
 ### Key v2 Modules
 
@@ -177,7 +141,7 @@ docker compose exec trading python -m v2.session --stage strategy
 docker compose exec trading python -m v2.learn
 
 # View public dashboard
-# Published via GitHub Pages by stage 6
+# Published via Cloudflare Pages by stage 5
 ```
 
 ## Environment Variables
@@ -193,6 +157,5 @@ Required in `.env`:
 Optional knobs (read at module import — container restart required after changing):
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
-- `ALGO_ENABLE_TRADE_POSTS`, `ALGO_TRADE_POST_DRY_RUN` — covered in the live-trade pipeline section above.
 
 **Audit:** the audit runs as a Claude Code `/loop 24h` session driven by `docs/audit-playbook.md`. It files Jira tickets via the Atlassian MCP (no `JIRA_*` env vars required). See spec `docs/superpowers/specs/2026-05-12-audit-loop-mcp-design.md`.

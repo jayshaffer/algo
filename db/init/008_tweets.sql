@@ -1,4 +1,4 @@
--- 008_tweets.sql: Tweet log for Bikini Bottom Capital
+-- 008_tweets.sql: Historical tweet log (social pipeline retired 2026-05-15; table retained for past data)
 
 CREATE TABLE IF NOT EXISTS tweets (
     id SERIAL PRIMARY KEY,

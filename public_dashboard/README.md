@@ -1,4 +1,4 @@
-# Bikini Bottom Capital - Public Dashboard
+# Pinchy - Public Dashboard
 
 Static site deployed to Cloudflare Pages that displays portfolio performance, holdings, recent trades, and active theses.
 
@@ -10,7 +10,7 @@ The static assets (`styles.css`, `app.js`), the server-rendered HTML pages (home
 
 ### 1. Create a Cloudflare Pages project
 
-Go to the Cloudflare dashboard → **Pages** → **Create a project** → **Direct Upload**. Name it (e.g., `bikini-bottom-capital`).
+Go to the Cloudflare dashboard → **Pages** → **Create a project** → **Direct Upload**. Name it (e.g., `pinchy`).
 
 ### 2. Create an API token
 
@@ -23,13 +23,13 @@ Add these to your `.env`:
 ```bash
 CLOUDFLARE_ACCOUNT_ID=your_account_id        # from Cloudflare dashboard
 CLOUDFLARE_API_TOKEN=your_api_token           # the token you just created
-CLOUDFLARE_PAGES_PROJECT=bikini-bottom-capital # the project name from step 1
-DASHBOARD_URL=https://bikini-bottom-capital.pages.dev  # public URL (appended to social posts)
+CLOUDFLARE_PAGES_PROJECT=pinchy               # the project name from step 1
+DASHBOARD_URL=https://pinchy.pages.dev        # public URL
 ```
 
 ### 4. Run a session
 
-The dashboard publishes as Stage 6 of the session pipeline:
+The dashboard publishes as Stage 5 of the session pipeline:
 
 ```bash
 docker compose exec trading python -m v2.session

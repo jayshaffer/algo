@@ -47,7 +47,7 @@ _NAV_ITEMS = (
 
 def _render_nav(active_nav: str) -> str:
     parts = ['<nav class="site-nav"><div class="container">']
-    parts.append('<span class="logo">⌬ Bikini Bottom Capital</span>')
+    parts.append('<span class="logo">⌬ Pinchy</span>')
     parts.append('<button class="hamburger" aria-label="Menu">☰</button>')
     parts.append('<div class="links">')
     for key, href, label in _NAV_ITEMS:
@@ -71,7 +71,7 @@ _PAGE_SHELL_TEMPLATE = Template("""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>$title — Bikini Bottom Capital</title>
+<title>$title — Pinchy</title>
 $meta_block
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>" />
 <link rel="stylesheet" href="/styles.css" />
@@ -145,7 +145,7 @@ def _fmt_pct(value: Decimal | int | float | None) -> str:
 
 def render_homepage_meta(summary: dict, base_url: str) -> str:
     """Return the OG/Twitter card meta block for the homepage."""
-    title = "Bikini Bottom Capital"
+    title = "Pinchy"
     daily_pnl = summary.get("daily_pnl") or 0
     daily_pct = summary.get("daily_pnl_pct") or 0
     portfolio = summary.get("portfolio_value") or 0
@@ -593,7 +593,7 @@ def _render_homepage_hero(summary: dict, theses: list[dict],
 
     intro_html = (
         '<p class="intro">'
-        'Bikini Bottom Capital is a real Alpaca brokerage account operated '
+        'Pinchy is a real Alpaca brokerage account operated '
         'end-to-end by Claude &mdash; which also wrote every line of the code '
         'running it. After every market close, the agent reviews the '
         'day&rsquo;s news, updates its trade theses, places orders, and '
@@ -748,7 +748,7 @@ def render_homepage(*, summary: dict, theses: list[dict],
     )
 
     return _render_page_shell(
-        title="Bikini Bottom Capital",
+        title="Pinchy",
         description=description,
         active_nav="home",
         content=content,

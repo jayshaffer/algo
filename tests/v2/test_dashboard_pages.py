@@ -508,7 +508,7 @@ class TestRenderPageShell:
     def test_emits_doctype_and_title(self):
         html = self._shell()
         assert html.startswith("<!DOCTYPE html>")
-        assert "<title>Test Title — Bikini Bottom Capital</title>" in html
+        assert "<title>Test Title — Pinchy</title>" in html
 
     def test_includes_og_meta(self):
         html = self._shell()
@@ -626,7 +626,7 @@ class TestRenderHomepage:
     def test_renders_intro_blurb_explaining_what_this_is(self):
         html = render_homepage(**self._data())
         assert 'class="intro"' in html
-        assert "Bikini Bottom Capital is a real Alpaca brokerage account" in html
+        assert "Pinchy is a real Alpaca brokerage account" in html
 
     def test_omits_chips_when_no_active_theses(self):
         html = render_homepage(**self._data(theses=[]))
