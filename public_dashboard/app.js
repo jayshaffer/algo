@@ -89,6 +89,11 @@ function latestSnapshotDate(snapshots) {
 function cutoffDate(anchorDate, days) {
   // anchorDate is a YYYY-MM-DD string. Subtract `days` calendar days
   // and return another YYYY-MM-DD string. Filtering uses `>= cutoff`.
+  //
+  // All UTC (the "T00:00:00Z" suffix and the getUTCDate/setUTCDate pair)
+  // to keep date-only arithmetic timezone-free — never simplify to
+  // new Date(anchorDate) or get/setDate(), which would shift by a day
+  // for users west of UTC.
   var d = new Date(anchorDate + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10);
@@ -402,9 +407,6 @@ function renderBenchmark(snapshots, benchmark, decisions) {
     return;
   }
 
-  canvas.style.display = "";
-  if (emptyMsg) emptyMsg.style.display = "none";
-
   var labels = snapshots.map(function (s) { return s.date; });
   var portfolioReturns = computeTWR(snapshots);
 
@@ -420,6 +422,10 @@ function renderBenchmark(snapshots, benchmark, decisions) {
     if (emptyMsg) emptyMsg.style.display = "block";
     return;
   }
+
+  // Recovery: data IS renderable, so undo any prior empty-state hiding.
+  canvas.style.display = "";
+  if (emptyMsg) emptyMsg.style.display = "none";
 
   var spyReturns = labels.map(function (date) {
     var close = spyMap[date];
