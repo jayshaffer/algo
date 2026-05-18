@@ -156,6 +156,56 @@ class TestToolProposeRule:
         assert "Created rule" in result
 
     @patch("v2.strategy.insert_strategy_rule")
+    def test_rejects_invalid_confidence(self, mock_insert):
+        from v2.strategy import tool_propose_rule
+
+        result = tool_propose_rule(
+            rule_text="Favor earnings signals",
+            category="news_signal:earnings",
+            direction="preference",
+            confidence=1.5,
+            supporting_evidence="62% win rate",
+        )
+
+        assert "confidence" in result
+        mock_insert.assert_not_called()
+
+    @patch("v2.strategy.insert_strategy_rule")
+    def test_rejects_empty_evidence(self, mock_insert):
+        from v2.strategy import tool_propose_rule
+
+        result = tool_propose_rule(
+            rule_text="Favor earnings signals",
+            category="news_signal:earnings",
+            direction="preference",
+            confidence=0.7,
+            supporting_evidence="",
+        )
+
+        assert "supporting_evidence" in result
+        mock_insert.assert_not_called()
+
+    @patch("v2.strategy.get_active_strategy_rules")
+    @patch("v2.strategy.insert_strategy_rule")
+    def test_rejects_exact_duplicate_active_rule(self, mock_insert, mock_active):
+        from v2.strategy import tool_propose_rule
+
+        mock_active.return_value = [
+            {"id": 9, "rule_text": "Favor earnings signals"},
+        ]
+
+        result = tool_propose_rule(
+            rule_text=" favor   earnings signals ",
+            category="news_signal:earnings",
+            direction="preference",
+            confidence=0.7,
+            supporting_evidence="62% win rate",
+        )
+
+        assert "already covers" in result
+        mock_insert.assert_not_called()
+
+    @patch("v2.strategy.insert_strategy_rule")
     def test_proposal_session_cap(self, mock_insert):
         """T2.6: per-session proposal cap mirrors the retirement cap so the
         rule table can only grow at a measured rate from either side.

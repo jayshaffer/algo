@@ -14,6 +14,7 @@ from functools import partial
 from .attribution import get_attribution_summary
 from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
+    get_active_strategy_rules,
     get_current_strategy_state,
     get_recent_decisions,
     insert_strategy_memo,
@@ -50,6 +51,7 @@ def _utc_date(dt: datetime) -> date:
 # dwarf the slow retirement rate. Mirror the retirement cap so the rule
 # population can only churn at a measured rate from either side.
 MAX_PROPOSALS_PER_SESSION = 3
+MIN_RULE_EVIDENCE_CHARS = 2
 
 # Per-session counters. Stored in ContextVars so concurrent strategy
 # reflections (e.g. paper + prod sharing one process) don't stomp each
@@ -203,6 +205,37 @@ def tool_propose_rule(
     supporting_evidence: str,
 ) -> str:
     """Propose a new strategy rule."""
+    rule_text = (rule_text or "").strip()
+    category = (category or "").strip()
+    direction = (direction or "").strip()
+    supporting_evidence = (supporting_evidence or "").strip()
+
+    if not rule_text:
+        return "Error: rule_text is required"
+    if not category:
+        return "Error: category is required"
+    if direction not in {"constraint", "preference"}:
+        return "Error: direction must be 'constraint' or 'preference'"
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        return "Error: confidence must be numeric"
+    if confidence < 0 or confidence > 1:
+        return "Error: confidence must be between 0.0 and 1.0"
+    if len(supporting_evidence) < MIN_RULE_EVIDENCE_CHARS:
+        return "Error: supporting_evidence is required"
+
+    try:
+        active_rules = get_active_strategy_rules()
+    except Exception as e:
+        logger.warning("Could not load active rules for duplicate check: %s", e)
+        active_rules = []
+    normalized = " ".join(rule_text.lower().split())
+    for existing in active_rules:
+        existing_text = " ".join((existing.get("rule_text") or "").lower().split())
+        if existing_text == normalized:
+            return f"Error: active rule already covers this pattern (ID: {existing['id']})"
+
     # T2.6: same per-session cap pattern as retirements.
     proposals = _get_session_proposals()
     if len(proposals) >= MAX_PROPOSALS_PER_SESSION:
