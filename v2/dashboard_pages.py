@@ -854,11 +854,35 @@ def _render_memo_block(memo: dict | None) -> str:
     )
 
 
+def _render_range_control() -> str:
+    """Toolbar above the three-chart grid. Client JS reads data-range
+    and re-renders the charts with a filtered slice of the snapshots
+    JSON. Default active button = 1W, kept in sync with
+    DEFAULT_RANGE_DAYS in public_dashboard/app.js."""
+    buttons = [
+        ("7", "1W", True),
+        ("30", "1M", False),
+        ("365", "1Y", False),
+        ("all", "All", False),
+    ]
+    parts = ['<div class="range-control" role="group" aria-label="Time range">']
+    for data_range, label, active in buttons:
+        cls = "range-btn is-active" if active else "range-btn"
+        pressed = "true" if active else "false"
+        parts.append(
+            f'<button type="button" data-range="{data_range}" '
+            f'class="{cls}" aria-pressed="{pressed}">{label}</button>'
+        )
+    parts.append('</div>')
+    return "".join(parts)
+
+
 def _render_homepage_charts() -> str:
     return (
         '<section class="section front-charts">'
         '<div class="head"><h2>Performance</h2>'
         '<a class="more" href="/performance/">Full view →</a></div>'
+        + _render_range_control() +
         '<div class="chart-grid">'
         '<div class="chart-panel primary">'
         '<div class="chart-title">Equity curve</div>'
@@ -997,6 +1021,9 @@ def render_performance_page(*, summary: dict, performance: dict,
     )
 
     charts = (
+        '<section class="section range-section">'
+        + _render_range_control() +
+        '</section>'
         '<section class="section">'
         '<div class="head"><h2>Equity curve</h2></div>'
         '<p class="section-subtitle">Account value over time. '

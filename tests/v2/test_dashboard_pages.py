@@ -796,6 +796,30 @@ class TestRenderHomepage:
         assert ("x" * 120 + "…") in html
         assert ("x" * 121) not in html
 
+    def test_renders_range_control_with_four_buttons(self):
+        html = render_homepage(**self._data())
+        assert 'class="range-control"' in html
+        assert 'role="group"' in html
+        assert 'aria-label="Time range"' in html
+        assert 'data-range="7"' in html
+        assert 'data-range="30"' in html
+        assert 'data-range="365"' in html
+        assert 'data-range="all"' in html
+        assert ">1W</button>" in html
+        assert ">1M</button>" in html
+        assert ">1Y</button>" in html
+        assert ">All</button>" in html
+
+    def test_range_control_defaults_to_1w_active(self):
+        html = render_homepage(**self._data())
+        # The 1W button is the active one. It should carry both the
+        # is-active class and aria-pressed=true; the other three should
+        # carry aria-pressed=false.
+        assert 'data-range="7" class="range-btn is-active" aria-pressed="true"' in html
+        assert 'data-range="30" class="range-btn" aria-pressed="false"' in html
+        assert 'data-range="365" class="range-btn" aria-pressed="false"' in html
+        assert 'data-range="all" class="range-btn" aria-pressed="false"' in html
+
 
 from v2.dashboard_pages import render_performance_page
 
@@ -856,6 +880,19 @@ class TestRenderPerformancePage:
     def test_loads_chart_js(self):
         html = render_performance_page(**self._data())
         assert "chart.js" in html.lower() or "Chart.js" in html
+
+    def test_renders_range_control_with_four_buttons(self):
+        html = render_performance_page(**self._data())
+        assert 'class="range-control"' in html
+        assert 'data-range="7"' in html
+        assert 'data-range="30"' in html
+        assert 'data-range="365"' in html
+        assert 'data-range="all"' in html
+
+    def test_range_control_defaults_to_1w_active(self):
+        html = render_performance_page(**self._data())
+        assert 'data-range="7" class="range-btn is-active" aria-pressed="true"' in html
+        assert 'data-range="all" class="range-btn" aria-pressed="false"' in html
 
 
 from v2.dashboard_pages import render_activity_page, render_strategy_page
