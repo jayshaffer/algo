@@ -286,9 +286,8 @@ class TestGetTradingDecisions:
 
         with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
              patch("v2.agent._call_with_retry", return_value=mock_response), \
-             patch("v2.agent.record_event") as mock_record:
-            with pytest.raises(ValueError, match="schema validation"):
-                get_trading_decisions(executor_input, session_id=42)
+             patch("v2.agent.record_event") as mock_record, pytest.raises(ValueError, match="schema validation"):
+            get_trading_decisions(executor_input, session_id=42)
 
         payload = mock_record.call_args.kwargs["payload"]
         assert payload["parse_succeeded"] is False
@@ -313,9 +312,8 @@ class TestGetTradingDecisions:
         )
 
         with patch("v2.agent.get_claude_client", return_value=MagicMock()), \
-             patch("v2.agent._call_with_retry", return_value=mock_response):
-            with pytest.raises(ValueError, match="intent_type invalid"):
-                get_trading_decisions(executor_input)
+             patch("v2.agent._call_with_retry", return_value=mock_response), pytest.raises(ValueError, match="intent_type invalid"):
+            get_trading_decisions(executor_input)
 
     def test_raises_on_max_tokens(self):
         mock_response = MagicMock()
