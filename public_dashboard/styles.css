@@ -523,3 +523,42 @@ footer .attribution { font-size: 0.75rem; margin-top: 0.25rem; }
   .reasoning-cell { max-width: 300px; }
   footer { padding: 1.5rem 0; margin-top: 1.25rem; }
 }
+
+/* === Chart range filter === */
+
+.range-control {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 0 0.9rem 0;
+  flex-wrap: wrap;
+}
+
+.range-btn {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--bg-card-alt);
+  padding: 0.3rem 0.7rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+
+.range-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.range-btn.is-active {
+  color: var(--bg-deep);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Performance page wraps the range control in its own section; tighten
+   the section's padding so the toolbar doesn't look adrift. */
+.range-section {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
