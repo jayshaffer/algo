@@ -7,6 +7,7 @@ caller (v2/dashboard_publish.py) gathers data and passes it in.
 from decimal import Decimal
 from html import escape as _esc
 from string import Template
+from urllib.parse import quote
 
 _META_BLOCK_TEMPLATE = Template(
     '<meta property="og:title" content="$title" />\n'
@@ -38,17 +39,18 @@ def _render_meta_block(*, title: str, description: str, og_image: str,
 
 _NAV_ITEMS = (
     ("home", "/", "Home"),
+    ("strategy", "/strategy/", "Strategy"),
     ("performance", "/performance/", "Performance"),
     ("activity", "/activity/", "Activity"),
-    ("changelog", "/changelog/", "Changelog"),
     ("learning", "/learning/", "Learning"),
+    ("changelog", "/changelog/", "Changelog"),
     ("how-it-works", "/how-it-works/", "How it works"),
 )
 
 
 def _render_nav(active_nav: str) -> str:
     parts = ['<nav class="site-nav"><div class="container">']
-    parts.append('<span class="logo">⌬ Pinchy</span>')
+    parts.append('<a class="logo" href="/">⌬ Pinchy</a>')
     parts.append('<button class="hamburger" aria-label="Menu">☰</button>')
     parts.append('<div class="links">')
     for key, href, label in _NAV_ITEMS:
@@ -81,6 +83,7 @@ $head_extra
 <body data-page="$active_nav">
 $nav
 <main class="container">
+$breadcrumbs
 $content
 </main>
 $footer
@@ -94,7 +97,9 @@ def _render_page_shell(*, title: str, description: str, active_nav: str,
                        content: str, og_image: str, page_url: str,
                        og_type: str = "website",
                        head_extra: str = "",
-                       data_page: str | None = None) -> str:
+                       data_page: str | None = None,
+                       breadcrumbs: list[tuple[str, str | None]] | None = None,
+                       back_href: str | None = None) -> str:
     """Wrap page content in the shared <html> + nav + footer scaffolding.
 
     `data_page` overrides what's emitted as `<body data-page="…">`. Defaults
@@ -108,15 +113,40 @@ def _render_page_shell(*, title: str, description: str, active_nav: str,
         page_url=page_url,
         og_type=og_type,
     )
+    breadcrumbs_html = _render_breadcrumbs(breadcrumbs, back_href)
     return _PAGE_SHELL_TEMPLATE.substitute(
         title=_esc(title),
         meta_block=meta_block,
         head_extra=head_extra,
         active_nav=_esc(data_page or active_nav),
         nav=_render_nav(active_nav),
+        breadcrumbs=breadcrumbs_html,
         content=content,
         footer=_FOOTER_HTML,
     )
+
+
+def _render_breadcrumbs(
+    breadcrumbs: list[tuple[str, str | None]] | None,
+    back_href: str | None,
+) -> str:
+    if not breadcrumbs and not back_href:
+        return ""
+
+    current_title = ""
+    if breadcrumbs:
+        current_title = breadcrumbs[-1][0]
+
+    parts = ['<div class="breadcrumbs-bar drilldown-header">']
+    if back_href:
+        parts.append(
+            f'<button class="back-button" type="button" aria-label="Go back" '
+            f'data-back-fallback="{_esc(back_href)}">←</button>'
+        )
+    if current_title:
+        parts.append(f'<h1 class="drilldown-title">{_esc(current_title)}</h1>')
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _fmt_money(value: Decimal | int | float | None) -> str:
@@ -128,6 +158,10 @@ def _fmt_money(value: Decimal | int | float | None) -> str:
 def _truncate(s: str, n: int) -> str:
     s = s or ""
     return s if len(s) <= n else s[:n] + "…"
+
+
+def _ticker_href(ticker: str | None) -> str:
+    return f"/ticker/{quote(str(ticker or '').upper(), safe='')}/"
 
 
 def _fmt_signed_pct(value) -> str:
@@ -231,7 +265,7 @@ def _render_signal_refs_section(refs: list[dict] | None) -> str:
             meta_html = f' <span class="signal-meta">({meta})</span>' if meta else ""
             ticker_html = f"<strong>{ticker}</strong> " if ticker else ""
             items.append(f"<li>{ticker_html}{headline}{meta_html}</li>")
-        parts.append('<h4>News</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+        parts.append('<h4>News</h4><ul class="signal-refs bounded-list">' + "".join(items) + "</ul>")
 
     if macro:
         items = []
@@ -252,7 +286,7 @@ def _render_signal_refs_section(refs: list[dict] | None) -> str:
             )
             meta_html = f' <span class="signal-meta">({meta})</span>' if meta else ""
             items.append(f"<li>{headline}{meta_html}</li>")
-        parts.append('<h4>Macro</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+        parts.append('<h4>Macro</h4><ul class="signal-refs bounded-list">' + "".join(items) + "</ul>")
 
     if theses:
         items = []
@@ -267,7 +301,7 @@ def _render_signal_refs_section(refs: list[dict] | None) -> str:
             items.append(
                 f'<li><a href="/thesis/{tid}/">{prefix}{label}</a></li>'
             )
-        parts.append('<h4>Theses</h4><ul class="signal-refs">' + "".join(items) + "</ul>")
+        parts.append('<h4>Theses</h4><ul class="signal-refs bounded-list">' + "".join(items) + "</ul>")
 
     return "".join(parts)
 
@@ -324,7 +358,7 @@ def render_trade_page(decision: dict, thesis: dict | None,
         f'<h2>{action_caps} {ticker_esc}</h2>'
         f'<p class="trade-summary">{qty_display} shares at {price_display} on {trade_date}</p>'
         f'<h3>Reasoning</h3>'
-        f'<p>{_esc(str(decision.get("reasoning") or ""))}</p>'
+        f'<p class="long-text">{_esc(str(decision.get("reasoning") or ""))}</p>'
         f'{thesis_section}{outcome_section}{signal_refs_section}'
         f'</section>'
     )
@@ -337,6 +371,13 @@ def render_trade_page(decision: dict, thesis: dict | None,
         og_image=f"{base}/og/trade/{decision_id}.png",
         page_url=f"{base}/trade/{decision_id}/",
         og_type="article",
+        breadcrumbs=[
+            ("Home", "/"),
+            ("Activity", "/activity/"),
+            (raw_ticker, _ticker_href(raw_ticker)),
+            (f"Trade {decision_id}", None),
+        ],
+        back_href=_ticker_href(raw_ticker),
     )
 
 
@@ -371,7 +412,7 @@ def _render_decisions_section(decisions: list[dict]) -> str:
             f'<li><a href="/trade/{did}/">{trade_date} '
             f'{action_upper} {_esc(str(qty))} @ {price}</a></li>'
         )
-    return "<h3>Related decisions</h3><ul>" + "".join(rows) + "</ul>"
+    return '<h3>Related decisions</h3><ul class="related-decisions bounded-list">' + "".join(rows) + "</ul>"
 
 
 def render_thesis_page(thesis: dict, decisions: list[dict],
@@ -397,7 +438,7 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
         f'<section class="section">'
         f'<h2>{ticker_esc} — {direction_esc} thesis</h2>'
         f'<p class="thesis-meta">Confidence: {confidence_esc} · Status: {status_esc}</p>'
-        f'<h3>Thesis</h3><p>{thesis_text_esc}</p>'
+        f'<h3>Thesis</h3><p class="long-text">{thesis_text_esc}</p>'
         f'{_render_triggers_section(thesis)}'
         f'{_render_signal_refs_section(signal_refs)}'
         f'{_render_decisions_section(decisions)}'
@@ -407,11 +448,108 @@ def render_thesis_page(thesis: dict, decisions: list[dict],
     return _render_page_shell(
         title=title_raw,
         description=description_raw,
-        active_nav="activity",
+        active_nav="strategy",
         content=content,
         og_image=f"{base}/og/thesis/{thesis_id}.png",
         page_url=f"{base}/thesis/{thesis_id}/",
         og_type="article",
+        breadcrumbs=[
+            ("Home", "/"),
+            ("Strategy", "/strategy/"),
+            (raw_ticker, _ticker_href(raw_ticker)),
+            (f"Thesis {thesis_id}", None),
+        ],
+        back_href="/strategy/",
+    )
+
+
+def render_ticker_page(*, ticker: str, decisions: list[dict],
+                       theses: list[dict], position: dict | None,
+                       base_url: str) -> str:
+    """Return an aggregate page for everything known about one ticker."""
+    base = base_url.rstrip("/")
+    ticker_esc = _esc(ticker)
+
+    if position:
+        pos_body = (
+            '<div class="stat-row">'
+            + _stat("Shares", _esc(str(position.get("shares") or 0)))
+            + _stat("Avg cost", _fmt_money(position.get("avg_cost")))
+            + '</div>'
+        )
+    else:
+        pos_body = '<p class="empty-state">No open position.</p>'
+
+    if theses:
+        thesis_rows = []
+        for t in theses[:20]:
+            tid = int(t["id"])
+            direction = _esc(str(t.get("direction") or ""))
+            confidence = _esc(str(t.get("confidence") or ""))
+            body = _esc(_truncate(str(t.get("thesis") or ""), 220))
+            thesis_rows.append(
+                f'<a class="card thesis-summary" href="/thesis/{tid}/">'
+                f'<div class="lbl">{direction} · {confidence}</div>'
+                f'<p>{body}</p></a>'
+            )
+        theses_body = f'<div class="card-grid strategy-theses-grid">{"".join(thesis_rows)}</div>'
+    else:
+        theses_body = '<p class="empty-state">No theses for this ticker.</p>'
+
+    if decisions:
+        rows = []
+        for d in decisions[:50]:
+            did = int(d["id"])
+            action = (str(d.get("action") or "")).lower()
+            badge_cls = (
+                f"badge badge-{action}" if action in ("buy", "sell", "hold") else "badge"
+            )
+            qty = _esc(str(d.get("quantity") or 0))
+            price = _fmt_money(d.get("price") or 0)
+            decision_date = _esc(str(d.get("date") or ""))
+            reasoning = _esc(_truncate(str(d.get("reasoning") or ""), 180))
+            rows.append(
+                f'<a class="decision-row" href="/trade/{did}/">'
+                f'<span class="decision-main"><span class="{badge_cls}">'
+                f'{action.upper() or "—"}</span><span class="decision-date">'
+                f'{decision_date}</span></span>'
+                f'<span class="decision-metrics"><span>{qty} sh</span>'
+                f'<span>{price}</span></span>'
+                f'<span class="decision-reason">{reasoning}</span></a>'
+            )
+        decisions_body = f'<div class="decision-list ticker-decisions">{"".join(rows)}</div>'
+    else:
+        decisions_body = '<p class="empty-state">No decisions for this ticker.</p>'
+
+    content = (
+        '<section class="hero">'
+        '<p class="tag">Ticker drill-down</p>'
+        f'<h1>{ticker_esc}</h1>'
+        '<p class="intro">Position, theses, and decisions grouped by ticker.</p>'
+        '</section>'
+        '<section class="section"><div class="head"><h2>Position</h2></div>'
+        f'{pos_body}</section>'
+        '<section class="section"><div class="head"><h2>Theses</h2></div>'
+        f'{theses_body}</section>'
+        '<section class="section"><div class="head"><h2>Decisions</h2>'
+        '<a class="more" href="/activity/#decisions">All decisions →</a></div>'
+        f'{decisions_body}</section>'
+    )
+
+    return _render_page_shell(
+        title=f"{ticker} ticker",
+        description=f"Ticker drill-down for {ticker}.",
+        active_nav="activity",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}{_ticker_href(ticker)}",
+        og_type="article",
+        breadcrumbs=[
+            ("Home", "/"),
+            ("Activity", "/activity/"),
+            (ticker, None),
+        ],
+        back_href="/activity/",
     )
 
 
@@ -428,7 +566,7 @@ def _render_loser_row(d: dict) -> str:
         if hasattr(d["date"], "isoformat")
         else _esc(str(d["date"]))
     )
-    reasoning = _esc(str(d.get("reasoning") or ""))
+    reasoning = _esc(_truncate(str(d.get("reasoning") or ""), 220))
     return (
         f'<li class="loser-row">'
         f'<a href="/trade/{did}/"><strong>{action_caps} {ticker}</strong></a>'
@@ -440,8 +578,8 @@ def _render_loser_row(d: dict) -> str:
 
 
 def _render_rule_row(r: dict) -> str:
-    text = _esc(str(r.get("rule_text") or ""))
-    reason = _esc(str(r.get("retirement_reason") or ""))
+    text = _esc(_truncate(str(r.get("rule_text") or ""), 300))
+    reason = _esc(_truncate(str(r.get("retirement_reason") or ""), 220))
     retired_at = r.get("retired_at")
     if hasattr(retired_at, "isoformat"):
         retired_at = retired_at.isoformat()
@@ -493,6 +631,8 @@ def render_mistakes_page(closed_losers: list[dict], retired_rules: list[dict],
         og_image=f"{base}/og/mistakes.png",
         page_url=f"{base}/mistakes/",
         og_type="article",
+        breadcrumbs=[("Home", "/"), ("Learning", "/learning/"), ("Mistakes", None)],
+        back_href="/learning/",
     )
 
 
@@ -559,6 +699,8 @@ def render_attribution_page(attribution: list[dict], base_url: str) -> str:
         og_image=f"{base}/og/attribution.png",
         page_url=f"{base}/attribution/",
         og_type="article",
+        breadcrumbs=[("Home", "/"), ("Learning", "/learning/"), ("Attribution", None)],
+        back_href="/learning/",
     )
 
 
@@ -584,21 +726,10 @@ def _render_homepage_hero(summary: dict, theses: list[dict],
     day_n = summary.get("day_number") or 0
     last_updated = _esc(str(summary.get("last_updated") or ""))
 
-    chips_html = ""
-    if theses:
-        chip_items = "".join(_hero_chip(t) for t in theses[:3])
-        chips_html = (
-            f'<div class="label">Currently betting on</div>'
-            f'<div class="chips">{chip_items}</div>'
-        )
-
     intro_html = (
         '<p class="intro">'
-        'Pinchy is a real Alpaca brokerage account operated '
-        'end-to-end by Claude &mdash; which also wrote every line of the code '
-        'running it. After every market close, the agent reviews the '
-        'day&rsquo;s news, updates its trade theses, places orders, and '
-        'publishes every decision, mistake, and lesson here.'
+        'A live AI-managed brokerage account, with performance, memos, '
+        'and decisions published after each trading session.'
         '</p>'
     )
 
@@ -609,41 +740,57 @@ def _render_homepage_hero(summary: dict, theses: list[dict],
         f'<span class="strip {daily_class}">'
         f' {daily} today · {total} all time · {vs_spy} vs S&amp;P</span></h1>'
         f'{intro_html}'
-        f'{chips_html}'
         f'{sparkline_svg}'
         f'</section>'
     )
 
 
-def _render_today_move(today_move: dict | None) -> str:
-    if not today_move:
+def _render_latest_decisions(decisions: list[dict] | None) -> str:
+    if not decisions:
         return (
             '<section class="section"><div class="head">'
-            '<h2>Today\'s move</h2></div>'
+            '<h2>Latest decisions</h2></div>'
             '<p class="empty-state">'
-            'No new positions in the last 5 sessions — '
+            'No decisions published yet — '
             '<a href="/activity/">see the full log →</a>'
             '</p></section>'
         )
-    did = int(today_move["id"])
-    action = (today_move.get("action") or "").lower()
-    badge_cls = f"badge badge-{action}" if action in ("buy", "sell", "hold") else "badge"
-    ticker = _esc(today_move.get("ticker") or "")
-    notional = _fmt_money(today_move.get("notional"))
-    pct = float(today_move.get("pct_of_portfolio") or 0)
-    reasoning = _esc(_truncate(today_move.get("reasoning") or "", 150))
+
+    rows = []
+    for d in decisions[:25]:
+        action = (d.get("action") or "").lower()
+        badge_cls = (
+            f"badge badge-{action}" if action in ("buy", "sell", "hold") else "badge"
+        )
+        ticker_raw = d.get("ticker") or ""
+        ticker = _esc(ticker_raw)
+        quantity = d.get("quantity")
+        qty = "—" if quantity is None else _esc(str(quantity))
+        price = _fmt_money(d.get("price"))
+        decision_date = _esc(str(d.get("date") or ""))
+        reasoning = _esc(_truncate(d.get("reasoning") or "", 120))
+        rows.append(
+            f'<a class="decision-row" href="{_ticker_href(ticker_raw)}">'
+            f'<span class="decision-main">'
+            f'<span class="{badge_cls}">{action.upper() or "—"}</span>'
+            f'<span class="ticker">{ticker}</span>'
+            f'<span class="decision-date">{decision_date}</span>'
+            f'</span>'
+            f'<span class="decision-metrics">'
+            f'<span>{qty} sh</span>'
+            f'<span>{price}</span>'
+            f'</span>'
+            f'<span class="decision-reason">{reasoning}</span>'
+            f'</a>'
+        )
+
     return (
         f'<section class="section"><div class="head">'
-        f'<h2>Today\'s move</h2>'
+        f'<h2>Latest decisions</h2>'
         f'<a class="more" href="/activity/#decisions">All decisions →</a>'
         f'</div>'
-        f'<a class="move-card" href="/trade/{did}/">'
-        f'<div class="head">'
-        f'<span class="{badge_cls}">{action.upper()}</span> '
-        f'<span class="ticker">{ticker}</span> · {notional} · {pct:.1f}% of portfolio'
-        f'</div>'
-        f'<p class="reasoning">{reasoning}</p>'
-        f'</a></section>'
+        f'<div class="decision-list">{"".join(rows)}</div>'
+        f'</section>'
     )
 
 
@@ -698,12 +845,84 @@ def _render_memo_block(memo: dict | None) -> str:
     return (
         '<section class="section"><div class="head">'
         '<h2>From today\'s session memo</h2>'
-        '<a class="more" href="/activity/#memos">All memos →</a>'
+        '<a class="more" href="/strategy/#memos">All memos →</a>'
         '</div>'
         f'<blockquote class="memo-block">'
         f'<div class="meta">{session_date}</div>'
         f'{body}</blockquote>'
         '</section>'
+    )
+
+
+def _render_range_control() -> str:
+    """Toolbar above the three-chart grid. Client JS reads data-range
+    and re-renders the charts with a filtered slice of the snapshots
+    JSON. Default active button = 1W, kept in sync with
+    DEFAULT_RANGE_DAYS in public_dashboard/app.js."""
+    buttons = [
+        ("7", "1W", True),
+        ("30", "1M", False),
+        ("365", "1Y", False),
+        ("all", "All", False),
+    ]
+    parts = ['<div class="range-control" role="group" aria-label="Time range">']
+    for data_range, label, active in buttons:
+        cls = "range-btn is-active" if active else "range-btn"
+        pressed = "true" if active else "false"
+        parts.append(
+            f'<button type="button" data-range="{data_range}" '
+            f'class="{cls}" aria-pressed="{pressed}">{label}</button>'
+        )
+    parts.append('</div>')
+    return "".join(parts)
+
+
+def _render_homepage_charts() -> str:
+    range_html = _render_range_control()
+    return (
+        '<section class="section front-charts">'
+        '<div class="head"><h2>Performance</h2>'
+        '<a class="more" href="/performance/">Full view →</a></div>'
+        f'{range_html}'
+        '<div class="chart-grid">'
+        '<div class="chart-panel primary">'
+        '<div class="chart-title">Equity curve</div>'
+        '<div class="chart-wrap"><canvas id="equity-chart"></canvas></div>'
+        '<p class="empty-state" id="chart-empty" style="display:none;">No snapshot data yet</p>'
+        '</div>'
+        '<div class="chart-panel">'
+        '<div class="chart-title">Cumulative P&amp;L</div>'
+        '<div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>'
+        '<p class="empty-state" id="pnl-empty" style="display:none;">No snapshot data yet</p>'
+        '</div>'
+        '<div class="chart-panel">'
+        '<div class="chart-title">vs S&amp;P 500</div>'
+        '<div class="chart-wrap"><canvas id="benchmark-chart"></canvas></div>'
+        '<p class="empty-state" id="benchmark-empty" style="display:none;">No benchmark data yet</p>'
+        '</div>'
+        '</div></section>'
+    )
+
+
+def _render_strategy_memo_focus(memo: dict | None) -> str:
+    memo_html = '<p class="empty-state">No memo published for the latest session yet.</p>'
+    link_html = ""
+    if memo:
+        mid = int(memo["id"])
+        memo_body = _esc(_truncate(memo.get("content") or "", 360))
+        memo_date = _esc(str(memo.get("session_date") or "Latest memo"))
+        link_html = f'<a class="more" href="/memo/{mid}/">Full memo →</a>'
+        memo_html = (
+            f'<blockquote class="memo-block memo-feature">'
+            f'<div class="meta">{memo_date}</div>{memo_body}</blockquote>'
+        )
+
+    return (
+        '<section class="section memo-focus">'
+        '<div class="focus-main">'
+        f'<div class="head"><h2>Latest memo</h2>{link_html}</div>'
+        f'{memo_html}'
+        '</div></section>'
     )
 
 
@@ -730,7 +949,8 @@ def render_homepage(*, summary: dict, theses: list[dict],
                     sparkline_svg: str, today_move: dict | None,
                     attribution_top: dict | None, worst_loser: dict | None,
                     memo: dict | None, how_it_works_state: dict,
-                    base_url: str) -> str:
+                    base_url: str, performance: dict | None = None,
+                    decisions: list[dict] | None = None) -> str:
     """Render the curated landing homepage."""
     base = base_url.rstrip("/")
     daily_pnl = summary.get("daily_pnl") or 0
@@ -742,9 +962,9 @@ def render_homepage(*, summary: dict, theses: list[dict],
 
     content = (
         _render_homepage_hero(summary, theses, sparkline_svg)
-        + _render_today_move(today_move)
+        + _render_homepage_charts()
+        + _render_latest_decisions(decisions or ([today_move] if today_move else []))
         + _render_recent_learnings(attribution_top, worst_loser)
-        + _render_memo_block(memo)
         + _render_methodology_strip(how_it_works_state)
     )
 
@@ -755,6 +975,7 @@ def render_homepage(*, summary: dict, theses: list[dict],
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/",
+        head_extra=_CHART_JS_CDN,
     )
 
 
@@ -800,7 +1021,9 @@ def render_performance_page(*, summary: dict, performance: dict,
         + '</div></section>'
     )
 
+    range_html = _render_range_control()
     charts = (
+        f'<section class="section range-section">{range_html}</section>'
         '<section class="section">'
         '<div class="head"><h2>Equity curve</h2></div>'
         '<p class="section-subtitle">Account value over time. '
@@ -831,6 +1054,8 @@ def render_performance_page(*, summary: dict, performance: dict,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/performance/",
         head_extra=_CHART_JS_CDN,
+        breadcrumbs=[("Home", "/"), ("Performance", None)],
+        back_href="/",
     )
 
 
@@ -843,17 +1068,115 @@ def _render_memos_section(memos: list[dict]) -> str:
         )
     items = []
     for m in memos[:10]:
-        body = _esc(m.get("content") or "")
+        mid = int(m["id"])
+        body = _esc(_truncate(m.get("content") or "", 180))
         d = _esc(str(m.get("session_date") or ""))
         items.append(
-            f'<blockquote class="memo-block">'
-            f'<div class="meta">{d}</div>{body}</blockquote>'
+            f'<a class="memo-row" href="/memo/{mid}/">'
+            f'<span class="memo-row-date">{d}</span>'
+            f'<span class="memo-row-body">{body}</span>'
+            f'</a>'
         )
     return (
         '<section class="section" id="memos">'
         '<div class="head"><h2>Recent memos</h2></div>'
+        '<div class="memo-list">'
         + "".join(items)
-        + '</section>'
+        + '</div></section>'
+    )
+
+
+def _render_strategy_theses_section(theses: list[dict]) -> str:
+    if not theses:
+        body = '<p class="empty-state">No active theses.</p>'
+    else:
+        cards = []
+        for t in theses:
+            tid = int(t["id"])
+            ticker = _esc(t.get("ticker") or "")
+            thesis = _esc(_truncate(t.get("thesis") or "", 240))
+            direction = _esc(t.get("direction") or "")
+            confidence = _esc(str(t.get("confidence") or ""))
+            meta = " · ".join(bit for bit in (direction, confidence) if bit)
+            meta_html = f'<p class="thesis-meta">{meta}</p>' if meta else ""
+            cards.append(
+                f'<a class="card thesis-summary" href="/thesis/{tid}/">'
+                f'<div class="lbl">Active thesis</div>'
+                f'<h3><span class="ticker">{ticker}</span></h3>'
+                f'{meta_html}<p>{thesis}</p></a>'
+            )
+        body = f'<div class="card-grid strategy-theses-grid">{"".join(cards)}</div>'
+    return (
+        '<section class="section" id="theses">'
+        '<div class="head"><h2>Active theses</h2></div>'
+        f'{body}</section>'
+    )
+
+
+def render_strategy_page(*, theses: list[dict], memos: list[dict],
+                         base_url: str) -> str:
+    base = base_url.rstrip("/")
+    latest = memos[0] if memos else None
+
+    content = (
+        '<section class="hero">'
+        '<p class="tag">Strategy state</p>'
+        '<h1>Strategy</h1>'
+        '<p class="intro">Active theses and session memos from the trading agent.</p>'
+        '</section>'
+        + _render_strategy_theses_section(theses)
+        + _render_strategy_memo_focus(latest)
+        + _render_memos_section(memos[1:] if latest else memos)
+    )
+
+    return _render_page_shell(
+        title="Strategy",
+        description="Active theses and recent strategy reflection memos.",
+        active_nav="strategy",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/strategy/",
+        breadcrumbs=[("Home", "/"), ("Strategy", None)],
+        back_href="/",
+    )
+
+
+def render_memo_page(*, memo: dict, base_url: str) -> str:
+    """Return the full HTML page for one strategy memo."""
+    base = base_url.rstrip("/")
+    memo_id = int(memo["id"])
+    session_date = _esc(str(memo.get("session_date") or ""))
+    memo_type = _esc(str(memo.get("memo_type") or "reflection"))
+    body = _esc(str(memo.get("content") or ""))
+    title = f"Memo {session_date}" if session_date else f"Memo #{memo_id}"
+
+    content = (
+        '<section class="hero">'
+        '<p class="tag">Strategy memo</p>'
+        f'<h1>{_esc(title)}</h1>'
+        f'<p class="intro">{memo_type}</p>'
+        '</section>'
+        '<section class="section">'
+        '<div class="head"><h2>Full memo</h2>'
+        '<a class="more" href="/strategy/#memos">All memos →</a></div>'
+        f'<article class="memo-detail long-text">{body}</article>'
+        '</section>'
+    )
+
+    return _render_page_shell(
+        title=title,
+        description=f"Strategy memo from {session_date}.",
+        active_nav="strategy",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/memo/{memo_id}/",
+        og_type="article",
+        breadcrumbs=[
+            ("Home", "/"),
+            ("Strategy", "/strategy/"),
+            (title, None),
+        ],
+        back_href="/strategy/",
     )
 
 
@@ -870,14 +1193,6 @@ def render_activity_page(*, base_url: str, memos: list[dict]) -> str:
         'No open positions</p></section>'
     )
 
-    theses = (
-        '<section class="section" id="theses">'
-        '<div class="head"><h2>Active theses</h2></div>'
-        '<div id="theses-list"></div>'
-        '<p class="empty-state" id="theses-empty" style="display:none;">'
-        'No active theses</p></section>'
-    )
-
     decisions = (
         '<section class="section" id="decisions">'
         '<div class="head"><h2>Decisions log</h2></div>'
@@ -889,15 +1204,17 @@ def render_activity_page(*, base_url: str, memos: list[dict]) -> str:
         'No decisions yet</p></section>'
     )
 
-    content = holdings + theses + decisions + _render_memos_section(memos)
+    content = holdings + decisions
 
     return _render_page_shell(
         title="Activity",
-        description="Holdings, active theses, decisions log, and recent memos.",
+        description="Holdings and decisions log.",
         active_nav="activity",
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/activity/",
+        breadcrumbs=[("Home", "/"), ("Activity", None)],
+        back_href="/",
     )
 
 
@@ -994,6 +1311,8 @@ def render_changelog_page(*, entries: list[dict], base_url: str) -> str:
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/changelog/",
+        breadcrumbs=[("Home", "/"), ("Changelog", None)],
+        back_href="/",
     )
 
 
@@ -1050,6 +1369,8 @@ def render_learning_hub(*, attribution_top3: list[dict],
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/learning/",
+        breadcrumbs=[("Home", "/"), ("Learning", None)],
+        back_href="/",
     )
 
 
@@ -1084,7 +1405,12 @@ def render_how_it_works_hub(*, child_state: dict, base_url: str) -> str:
             )
 
     content = (
-        '<section class="hero"><h1>How this thing works</h1></section>'
+        '<section class="hero"><h1>How this thing works</h1>'
+        '<p class="intro">Pinchy is a real Alpaca brokerage account operated '
+        'end-to-end by Claude, which also wrote every line of the code running it. '
+        'After every market close, the agent reviews the day&rsquo;s news, updates '
+        'its trade theses, places orders, and publishes every decision, mistake, '
+        'and lesson here.</p></section>'
         f'<section class="section"><div class="card-grid">{"".join(cards)}</div></section>'
     )
 
@@ -1095,4 +1421,6 @@ def render_how_it_works_hub(*, child_state: dict, base_url: str) -> str:
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/how-it-works/",
+        breadcrumbs=[("Home", "/"), ("How it works", None)],
+        back_href="/",
     )

@@ -12,6 +12,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from urllib.parse import quote
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -33,9 +34,12 @@ from .dashboard_pages import (
     render_homepage,
     render_how_it_works_hub,
     render_learning_hub,
+    render_memo_page,
     render_mistakes_page,
     render_performance_page,
+    render_strategy_page,
     render_thesis_page,
+    render_ticker_page,
     render_trade_page,
 )
 from .database.connection import get_cursor
@@ -738,6 +742,46 @@ def gather_thesis_detail(cur, thesis_id: int) -> dict | None:
     }
 
 
+def gather_ticker_detail(cur, ticker: str) -> dict:
+    """Return aggregate public detail for a ticker page."""
+    cur.execute(
+        """
+        SELECT id, date, ticker, action, quantity, price, reasoning,
+               outcome_7d, outcome_30d
+        FROM decisions
+        WHERE ticker = %s
+        ORDER BY date DESC, id DESC
+        """,
+        (ticker,),
+    )
+    decisions = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT id, ticker, direction, confidence, thesis,
+               entry_trigger, exit_trigger, status
+        FROM theses
+        WHERE ticker = %s
+        ORDER BY created_at DESC NULLS LAST, id DESC
+        """,
+        (ticker,),
+    )
+    theses = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT ticker, shares, avg_cost FROM positions WHERE ticker = %s",
+        (ticker,),
+    )
+    pos_row = cur.fetchone()
+
+    return {
+        "ticker": ticker,
+        "decisions": decisions,
+        "theses": theses,
+        "position": dict(pos_row) if pos_row else None,
+    }
+
+
 def gather_all_pages_data(cur) -> dict:
     """Return ID lists for every decision and thesis we need to emit pages for.
 
@@ -749,7 +793,11 @@ def gather_all_pages_data(cur) -> dict:
     decision_ids = [r["id"] for r in cur.fetchall()]
     cur.execute("SELECT id FROM theses ORDER BY id")
     thesis_ids = [r["id"] for r in cur.fetchall()]
-    return {"decision_ids": decision_ids, "thesis_ids": thesis_ids}
+    return {
+        "decision_ids": decision_ids,
+        "thesis_ids": thesis_ids,
+        "ticker_symbols": [],
+    }
 
 
 def emit_home_og_image(summary: dict, deploy_dir: str) -> None:
@@ -823,19 +871,28 @@ def emit_static_pages(data: dict, deploy_dir: str, base_url: str) -> None:
 
 
 def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
-                      deploy_dir: str, base_url: str) -> dict:
+                      deploy_dir: str, base_url: str,
+                      ticker_symbols: list[str] | None = None) -> dict:
     """Render per-trade and per-thesis HTML pages into deploy_dir.
 
     Returns a stats dict: {trades_written, theses_written, failed}.
     Per-page failures are isolated: one bad render doesn't abort the run.
     """
-    stats = {"trades_written": 0, "theses_written": 0, "failed": 0}
+    stats = {
+        "trades_written": 0,
+        "theses_written": 0,
+        "tickers_written": 0,
+        "failed": 0,
+    }
+    collected_tickers = set(ticker_symbols or [])
 
     for did in decision_ids:
         try:
             detail = gather_trade_detail(cur, did)
             if detail is None:
                 continue
+            if detail["decision"].get("ticker"):
+                collected_tickers.add(detail["decision"]["ticker"])
             html = render_trade_page(
                 decision=detail["decision"],
                 thesis=detail["thesis"],
@@ -857,6 +914,8 @@ def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
             detail = gather_thesis_detail(cur, tid)
             if detail is None:
                 continue
+            if detail["thesis"].get("ticker"):
+                collected_tickers.add(detail["thesis"]["ticker"])
             html = render_thesis_page(
                 thesis=detail["thesis"],
                 decisions=detail["decisions"],
@@ -871,6 +930,27 @@ def emit_detail_pages(cur, decision_ids: list[int], thesis_ids: list[int],
             stats["theses_written"] += 1
         except Exception:
             logger.warning("Failed to render thesis page %s", tid, exc_info=True)
+            stats["failed"] += 1
+
+    for ticker in sorted(collected_tickers):
+        try:
+            detail = gather_ticker_detail(cur, ticker)
+            html = render_ticker_page(
+                ticker=detail["ticker"],
+                decisions=detail["decisions"],
+                theses=detail["theses"],
+                position=detail["position"],
+                base_url=base_url,
+            )
+            page_dir = os.path.join(
+                deploy_dir, "ticker", quote(str(ticker).upper(), safe="")
+            )
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+            stats["tickers_written"] += 1
+        except Exception:
+            logger.warning("Failed to render ticker page %s", ticker, exc_info=True)
             stats["failed"] += 1
 
     return stats
@@ -1422,8 +1502,11 @@ def _select_today_move(decisions: list[dict],
             continue
         return {
             "id": d["id"],
+            "date": d.get("date"),
             "ticker": d.get("ticker"),
             "action": action,
+            "quantity": d.get("quantity"),
+            "price": d.get("price"),
             "notional": notional,
             "pct_of_portfolio": (notional / pv * 100.0) if pv > 0 else 0.0,
             "reasoning": d.get("reasoning"),
@@ -1478,6 +1561,8 @@ def emit_homepage(data: dict, deploy_dir: str, base_url: str) -> None:
         memo=memo,
         how_it_works_state=how_it_works,
         base_url=base_url,
+        performance=data.get("performance") or {},
+        decisions=data.get("decisions") or [],
     )
     with open(os.path.join(deploy_dir, "index.html"), "w") as f:
         f.write(html)
@@ -1492,6 +1577,8 @@ def emit_new_pages(data: dict, deploy_dir: str, base_url: str) -> None:
     mistakes = data.get("mistakes") or {}
 
     pages = (
+        ("strategy", render_strategy_page(
+            theses=data.get("theses") or [], memos=memos, base_url=base_url)),
         ("performance", render_performance_page(
             summary=summary, performance=performance, base_url=base_url)),
         ("activity", render_activity_page(
@@ -1512,6 +1599,17 @@ def emit_new_pages(data: dict, deploy_dir: str, base_url: str) -> None:
         os.makedirs(page_dir, exist_ok=True)
         with open(os.path.join(page_dir, "index.html"), "w") as f:
             f.write(html)
+
+    for memo in memos:
+        try:
+            memo_id = int(memo["id"])
+            html = render_memo_page(memo=memo, base_url=base_url)
+            page_dir = os.path.join(deploy_dir, "memo", str(memo_id))
+            os.makedirs(page_dir, exist_ok=True)
+            with open(os.path.join(page_dir, "index.html"), "w") as f:
+                f.write(html)
+        except Exception:
+            logger.warning("Failed to render memo page %s", memo.get("id"), exc_info=True)
 
 
 def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
@@ -1545,6 +1643,7 @@ def assemble_deploy_dir(data: dict, deploy_dir: str, assets_dir: str,
                 thesis_ids=pages.get("thesis_ids", []),
                 deploy_dir=deploy_dir,
                 base_url=base_url,
+                ticker_symbols=pages.get("ticker_symbols", []),
             )
             og_stats = emit_og_images(
                 cur,

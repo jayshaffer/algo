@@ -1429,6 +1429,7 @@ class TestGatherAllPagesData:
 
         assert result["decision_ids"] == [1, 42, 99]
         assert result["thesis_ids"] == [7, 8]
+        assert result["ticker_symbols"] == []
 
     def test_includes_closed_theses_not_just_active(self, mock_db):
         mock_db.fetchall.side_effect = [
@@ -1442,7 +1443,7 @@ class TestGatherAllPagesData:
     def test_empty_db_returns_empty_lists(self, mock_db):
         mock_db.fetchall.side_effect = [[], []]
         result = gather_all_pages_data(mock_db)
-        assert result == {"decision_ids": [], "thesis_ids": []}
+        assert result == {"decision_ids": [], "thesis_ids": [], "ticker_symbols": []}
 
 
 class TestEmitOgImages:
@@ -1553,20 +1554,33 @@ class TestEmitDetailPages:
         with _patch("v2.dashboard_publish.gather_trade_detail",
                     side_effect=lambda cur, did: self._stub_trade_detail(did)), \
              _patch("v2.dashboard_publish.gather_thesis_detail",
-                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)):
+                    side_effect=lambda cur, tid: self._stub_thesis_detail(tid)), \
+             _patch("v2.dashboard_publish.gather_ticker_detail",
+                    return_value={
+                        "ticker": "NVDA",
+                        "decisions": [{"id": 1, "date": date(2026, 5, 4),
+                                       "action": "buy", "quantity": 1,
+                                       "price": Decimal("100"),
+                                       "reasoning": "x"}],
+                        "theses": [],
+                        "position": None,
+                    }):
             stats = emit_detail_pages(
                 mock_db,
                 decision_ids=[1, 2],
                 thesis_ids=[7],
                 deploy_dir=str(tmp_path),
                 base_url="https://example.com",
+                ticker_symbols=["NVDA"],
             )
 
         assert (tmp_path / "trade" / "1" / "index.html").is_file()
         assert (tmp_path / "trade" / "2" / "index.html").is_file()
         assert (tmp_path / "thesis" / "7" / "index.html").is_file()
+        assert (tmp_path / "ticker" / "NVDA" / "index.html").is_file()
         assert stats["trades_written"] == 2
         assert stats["theses_written"] == 1
+        assert stats["tickers_written"] == 1
         assert stats["failed"] == 0
 
     def test_isolates_per_page_failures(self, mock_db, tmp_path):
@@ -1687,11 +1701,30 @@ class TestAssembleDeployDirNewPages:
         assemble_deploy_dir(data, str(deploy), str(assets),
                             base_url="https://example.com")
 
-        for path in ("performance/index.html", "activity/index.html",
+        for path in ("strategy/index.html", "performance/index.html", "activity/index.html",
                      "changelog/index.html", "learning/index.html",
                      "how-it-works/index.html"):
             assert (deploy / path).exists(), f"missing: {path}"
         assert "Add changelog" in (deploy / "changelog" / "index.html").read_text()
+
+    def test_memo_detail_pages_emitted(self, tmp_path):
+        from v2.dashboard_publish import assemble_deploy_dir
+
+        assets = self._assets(tmp_path)
+        deploy = tmp_path / "deploy"
+        data = self._minimal_data()
+        data["memos"] = [{
+            "id": 22,
+            "session_date": "2026-05-04",
+            "memo_type": "reflection",
+            "content": "Full memo content",
+        }]
+        assemble_deploy_dir(data, str(deploy), str(assets),
+                            base_url="https://example.com")
+
+        memo_page = deploy / "memo" / "22" / "index.html"
+        assert memo_page.exists()
+        assert "Full memo content" in memo_page.read_text()
 
     def test_how_it_works_marks_unready_children(self, tmp_path):
         from v2.dashboard_publish import assemble_deploy_dir
