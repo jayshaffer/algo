@@ -66,6 +66,76 @@ async function fetchJSON(file) {
   return resp.json();
 }
 
+// === Chart range filter state ===
+
+var DEFAULT_RANGE_DAYS = 7;
+
+var perfData = { snapshots: null, benchmark: null, decisions: null };
+var chartInstances = {};  // canvasId -> Chart instance
+
+function destroyCharts() {
+  Object.keys(chartInstances).forEach(function (id) {
+    try { chartInstances[id].destroy(); } catch (e) { /* already gone */ }
+  });
+  chartInstances = {};
+}
+
+function latestSnapshotDate(snapshots) {
+  if (!snapshots || snapshots.length === 0) return null;
+  // snapshots.json is date-ordered ascending; take the last row's date.
+  return normalizeDate(snapshots[snapshots.length - 1].date);
+}
+
+function cutoffDate(anchorDate, days) {
+  // anchorDate is a YYYY-MM-DD string. Subtract `days` calendar days
+  // and return another YYYY-MM-DD string. Filtering uses `>= cutoff`.
+  var d = new Date(anchorDate + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function filterByRange(rows, dateKey, days, anchor) {
+  if (!rows) return rows;
+  if (days == null) return rows;  // "All"
+  if (!anchor) return rows;
+  var cutoff = cutoffDate(anchor, days);
+  return rows.filter(function (r) { return normalizeDate(r[dateKey]) >= cutoff; });
+}
+
+function applyRange(days) {
+  destroyCharts();
+  var snapshots = perfData.snapshots;
+  var benchmark = perfData.benchmark;
+  var decisions = perfData.decisions;
+
+  var anchor = latestSnapshotDate(snapshots);
+  var filteredSnapshots = filterByRange(snapshots, "date", days, anchor);
+  var filteredBenchmark = filterByRange(benchmark, "date", days, anchor);
+  var filteredDecisions = filterByRange(decisions, "date", days, anchor);
+
+  renderEquityCurve(filteredSnapshots, filteredDecisions);
+  renderPnlChart(filteredSnapshots, filteredDecisions);
+  renderBenchmark(filteredSnapshots, filteredBenchmark, filteredDecisions);
+
+  document.querySelectorAll(".range-btn").forEach(function (btn) {
+    var isActive = btn.getAttribute("data-range") === String(days == null ? "all" : days);
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function setupRangeControl() {
+  var control = document.querySelector(".range-control");
+  if (!control) return;
+  control.addEventListener("click", function (e) {
+    var btn = e.target.closest(".range-btn");
+    if (!btn) return;
+    var raw = btn.getAttribute("data-range");
+    var days = raw === "all" ? null : parseInt(raw, 10);
+    applyRange(days);
+  });
+}
+
 // === Hamburger toggle (all pages) ===
 function setupHamburger() {
   var btn = document.querySelector(".site-nav .hamburger");
@@ -155,6 +225,9 @@ function renderEquityCurve(snapshots, decisions) {
     return;
   }
 
+  canvas.style.display = "";
+  if (emptyMsg) emptyMsg.style.display = "none";
+
   var labels = snapshots.map(function (s) { return s.date; });
   var equityValues = snapshots.map(function (s) { return s.portfolio_value; });
   var equityByDate = {};
@@ -193,7 +266,7 @@ function renderEquityCurve(snapshots, decisions) {
 
   datasets = datasets.concat(buildDecisionMarkers(decisions, equityByDate, "Portfolio"));
 
-  new Chart(canvas, {
+  chartInstances["equity-chart"] = new Chart(canvas, {
     type: "line",
     data: { labels: labels, datasets: datasets },
     options: {
@@ -244,6 +317,9 @@ function renderPnlChart(snapshots, decisions) {
     return;
   }
 
+  canvas.style.display = "";
+  if (emptyMsg) emptyMsg.style.display = "none";
+
   var labels = snapshots.map(function (s) { return s.date; });
   var pnlValues = snapshots.map(function (s) {
     var pv = s.portfolio_value;
@@ -265,7 +341,7 @@ function renderPnlChart(snapshots, decisions) {
     borderWidth: 2,
   }].concat(buildDecisionMarkers(decisions, pnlByDate, "P&L"));
 
-  new Chart(canvas, {
+  chartInstances["pnl-chart"] = new Chart(canvas, {
     type: "line",
     data: {
       labels: labels,
@@ -326,6 +402,9 @@ function renderBenchmark(snapshots, benchmark, decisions) {
     return;
   }
 
+  canvas.style.display = "";
+  if (emptyMsg) emptyMsg.style.display = "none";
+
   var labels = snapshots.map(function (s) { return s.date; });
   var portfolioReturns = computeTWR(snapshots);
 
@@ -375,7 +454,7 @@ function renderBenchmark(snapshots, benchmark, decisions) {
     },
   ].concat(buildDecisionMarkers(decisions, returnByDate, "Return"));
 
-  new Chart(canvas, {
+  chartInstances["benchmark-chart"] = new Chart(canvas, {
     type: "line",
     data: {
       labels: labels,
@@ -501,12 +580,11 @@ function initPerformancePage() {
     fetchJSON("benchmark.json"),
     fetchJSON("decisions.json"),
   ]).then(function (parts) {
-    var snapshots = parts[0];
-    var benchmark = parts[1];
-    var decisions = parts[2];
-    renderEquityCurve(snapshots, decisions);
-    renderPnlChart(snapshots, decisions);
-    renderBenchmark(snapshots, benchmark, decisions);
+    perfData.snapshots = parts[0];
+    perfData.benchmark = parts[1];
+    perfData.decisions = parts[2];
+    setupRangeControl();
+    applyRange(DEFAULT_RANGE_DAYS);
   }).catch(function (err) {
     console.error("Failed to load performance data:", err);
   });
