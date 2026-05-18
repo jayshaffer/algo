@@ -548,7 +548,7 @@ class TestPerStageResume:
              patch("v2.session.build_attribution_constraints", return_value=""), \
              patch("v2.session.run_pipeline"), \
              patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_trading_session", return_value=MagicMock(errors=[])), \
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_dashboard_stage"):
 
