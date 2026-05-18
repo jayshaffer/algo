@@ -878,11 +878,12 @@ def _render_range_control() -> str:
 
 
 def _render_homepage_charts() -> str:
+    range_html = _render_range_control()
     return (
         '<section class="section front-charts">'
         '<div class="head"><h2>Performance</h2>'
         '<a class="more" href="/performance/">Full view →</a></div>'
-        + _render_range_control() +
+        f'{range_html}'
         '<div class="chart-grid">'
         '<div class="chart-panel primary">'
         '<div class="chart-title">Equity curve</div>'
@@ -1020,10 +1021,9 @@ def render_performance_page(*, summary: dict, performance: dict,
         + '</div></section>'
     )
 
+    range_html = _render_range_control()
     charts = (
-        '<section class="section range-section">'
-        + _render_range_control() +
-        '</section>'
+        f'<section class="section range-section">{range_html}</section>'
         '<section class="section">'
         '<div class="head"><h2>Equity curve</h2></div>'
         '<p class="section-subtitle">Account value over time. '
