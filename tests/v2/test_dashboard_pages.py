@@ -3,7 +3,13 @@
 from datetime import date
 from decimal import Decimal
 
-from v2.dashboard_pages import render_homepage_meta, render_thesis_page, render_trade_page
+from v2.dashboard_pages import (
+    render_homepage_meta,
+    render_memo_page,
+    render_thesis_page,
+    render_ticker_page,
+    render_trade_page,
+)
 
 
 class TestRenderHomepageMeta:
@@ -158,6 +164,8 @@ class TestRenderTradePage:
         )
         assert 'data-page="activity"' in html
         assert 'class="active" href="/activity/"' in html
+        assert "breadcrumbs-bar" in html
+        assert 'data-back-fallback="/ticker/NVDA/"' in html
 
     def test_signal_refs_section_renders_news_macro_thesis(self):
         from datetime import datetime
@@ -182,6 +190,7 @@ class TestRenderTradePage:
             signal_refs=refs,
         )
         assert "Cited evidence" in html
+        assert "bounded-list" in html
         assert "AI capex surge" in html
         assert "Fed pauses" in html
         assert "earnings" in html
@@ -251,6 +260,7 @@ class TestRenderThesisPage:
             base_url="https://example.com",
         )
         assert "AI capex acceleration" in html
+        assert 'class="long-text"' in html
         assert "Pullback below $440" in html
         assert "Hit $520" in html
 
@@ -279,6 +289,7 @@ class TestRenderThesisPage:
         )
         assert "/trade/42/" in html
         assert "/trade/43/" in html
+        assert "related-decisions bounded-list" in html
 
     def test_escapes_user_text(self):
         html = render_thesis_page(
@@ -318,15 +329,17 @@ class TestRenderThesisPage:
         )
         assert "$1,450.25" in html
 
-    def test_uses_page_shell_with_activity_active(self):
+    def test_uses_page_shell_with_strategy_active(self):
         html = render_thesis_page(
             thesis=self._thesis(),
             decisions=[],
             position=None,
             base_url="https://example.com",
         )
-        assert 'data-page="activity"' in html
-        assert 'class="active" href="/activity/"' in html
+        assert 'data-page="strategy"' in html
+        assert 'class="active" href="/strategy/"' in html
+        assert "breadcrumbs-bar" in html
+        assert 'data-back-fallback="/strategy/"' in html
 
     def test_signal_refs_section_appears_above_decisions(self):
         from datetime import datetime
@@ -351,6 +364,41 @@ class TestRenderThesisPage:
         assert "Datacenter capex bump" in html
         # Evidence section should land before the related-decisions section.
         assert html.index("Cited evidence") < html.index("Related decisions")
+
+
+class TestRenderTickerPage:
+    def test_aggregates_position_theses_and_decisions(self):
+        html = render_ticker_page(
+            ticker="NVDA",
+            position={"ticker": "NVDA", "shares": 12, "avg_cost": Decimal("200")},
+            theses=[{"id": 7, "direction": "long", "confidence": "high",
+                     "thesis": "AI infra demand"}],
+            decisions=[{"id": 42, "date": date(2026, 5, 4), "action": "buy",
+                        "quantity": 12, "price": Decimal("200"),
+                        "reasoning": "Earnings beat"}],
+            base_url="https://example.com",
+        )
+        assert 'data-page="activity"' in html
+        assert "breadcrumbs-bar" in html
+        assert 'data-back-fallback="/activity/"' in html
+        assert "Ticker drill-down" in html
+        assert "NVDA" in html
+        assert "Shares" in html
+        assert 'href="/thesis/7/"' in html
+        assert 'href="/trade/42/"' in html
+        assert "Earnings beat" in html
+
+    def test_empty_sections_have_placeholders(self):
+        html = render_ticker_page(
+            ticker="CASH",
+            position=None,
+            theses=[],
+            decisions=[],
+            base_url="https://example.com",
+        )
+        assert "No open position" in html
+        assert "No theses for this ticker" in html
+        assert "No decisions for this ticker" in html
 
 
 from datetime import date as _date
@@ -524,10 +572,11 @@ class TestRenderPageShell:
         html = self._shell()
         for label, href in [
             ("Home", "/"),
+            ("Strategy", "/strategy/"),
             ("Performance", "/performance/"),
             ("Activity", "/activity/"),
-            ("Changelog", "/changelog/"),
             ("Learning", "/learning/"),
+            ("Changelog", "/changelog/"),
             ("How it works", "/how-it-works/"),
         ]:
             assert f'href="{href}"' in html
@@ -550,6 +599,18 @@ class TestRenderPageShell:
     def test_content_rendered_in_main(self):
         html = self._shell(content="<p>my body</p>")
         assert "<p>my body</p>" in html
+
+    def test_renders_breadcrumbs_and_back_button(self):
+        html = self._shell(
+            breadcrumbs=[("Home", "/"), ("Current", None)],
+            back_href="/",
+        )
+        assert 'class="breadcrumbs-bar drilldown-header"' in html
+        assert 'data-back-fallback="/"' in html
+        assert 'aria-label="Go back"' in html
+        assert ">←</button>" in html
+        assert 'class="drilldown-title">Current</h1>' in html
+        assert "Breadcrumb" not in html
 
     def test_attaches_data_page_attribute(self):
         html = self._shell(active_nav="activity")
@@ -588,9 +649,25 @@ class TestRenderHomepage:
             sparkline_svg='<svg class="sparkline"></svg>',
             today_move={
                 "id": 42, "ticker": "NVDA", "action": "buy",
+                "date": date(2026, 5, 4), "quantity": 12,
+                "price": Decimal("200"),
                 "notional": Decimal("2400"), "pct_of_portfolio": Decimal("2.3"),
                 "reasoning": "Earnings beat + guidance raise. Active thesis on AI infra.",
             },
+            decisions=[
+                {
+                    "id": 42, "ticker": "NVDA", "action": "buy",
+                    "date": date(2026, 5, 4), "quantity": 12,
+                    "price": Decimal("200"),
+                    "reasoning": "Earnings beat + guidance raise. Active thesis on AI infra.",
+                },
+                {
+                    "id": 41, "ticker": "AMD", "action": "hold",
+                    "date": date(2026, 5, 3), "quantity": 0,
+                    "price": None,
+                    "reasoning": "Waiting for confirmation.",
+                },
+            ],
             attribution_top={
                 "category": "earnings_beat", "sample_size": 18,
                 "avg_outcome_30d": Decimal("3.2"),
@@ -615,41 +692,64 @@ class TestRenderHomepage:
         assert 'data-page="home"' in html
         assert 'class="active" href="/"' in html
 
-    def test_renders_hero_with_stats_and_chips(self):
+    def test_renders_hero_with_stats_without_strategy_chips(self):
         html = render_homepage(**self._data())
         assert "Day 142" in html
         assert "$104,231.00" in html
-        assert "NVDA" in html
-        assert "AMD" in html
-        assert "XOM" in html
-        assert 'href="/thesis/7/"' in html
+        assert "Currently betting on" not in html
+        assert 'href="/thesis/7/"' not in html
 
-    def test_renders_intro_blurb_explaining_what_this_is(self):
+    def test_renders_one_sentence_header_explanation(self):
         html = render_homepage(**self._data())
         assert 'class="intro"' in html
-        assert "Pinchy is a real Alpaca brokerage account" in html
+        assert "A live AI-managed brokerage account" in html
+        assert "After every market close" not in html
+
+    def test_renders_performance_charts_front_page(self):
+        html = render_homepage(**self._data())
+        assert 'class="section front-charts"' in html
+        assert 'id="equity-chart"' in html
+        assert 'id="pnl-chart"' in html
+        assert 'id="benchmark-chart"' in html
+        assert "chart.js" in html.lower() or "Chart.js" in html
 
     def test_omits_chips_when_no_active_theses(self):
         html = render_homepage(**self._data(theses=[]))
         assert "Currently betting on" not in html
 
-    def test_caps_chips_at_three(self):
+    def test_does_not_render_thesis_chips_on_homepage(self):
         many = [
             {"id": i, "ticker": f"T{i}", "thesis": "x"} for i in range(10)
         ]
         html = render_homepage(**self._data(theses=many))
-        assert html.count('class="chip"') == 3
+        assert html.count('class="chip"') == 0
 
-    def test_renders_today_move_card(self):
+    def test_renders_latest_decisions_scroll_node(self):
         html = render_homepage(**self._data())
-        assert 'href="/trade/42/"' in html
+        assert "Latest decisions" in html
+        assert "decision-list" in html
+        assert "decision-row" in html
+        assert 'href="/ticker/NVDA/"' in html
+        assert 'href="/ticker/AMD/"' in html
+        assert "AMD" in html
+        assert "12" in html
+        assert "$200.00" in html
         assert "Earnings beat + guidance raise" in html
-        assert "$2,400" in html or "$2,400.00" in html
 
-    def test_today_move_empty_falls_back_to_link(self):
-        html = render_homepage(**self._data(today_move=None))
-        assert "No new positions in the last 5 sessions" in html
+    def test_latest_decisions_empty_falls_back_to_link(self):
+        html = render_homepage(**self._data(today_move=None, decisions=[]))
+        assert "No decisions published yet" in html
         assert 'href="/activity/"' in html
+
+    def test_latest_decisions_capped_at_25(self):
+        decisions = [
+            {"id": i, "ticker": f"T{i}", "action": "buy", "date": date(2026, 5, 4)}
+            for i in range(30)
+        ]
+        html = render_homepage(**self._data(decisions=decisions))
+        assert html.count('class="decision-row"') == 25
+        assert 'href="/ticker/T24/"' in html
+        assert 'href="/ticker/T25/"' not in html
 
     def test_recent_learnings_renders_both_cards(self):
         html = render_homepage(**self._data())
@@ -664,10 +764,10 @@ class TestRenderHomepage:
         )
         assert "Recent learnings" not in html
 
-    def test_memo_block_present(self):
+    def test_memo_block_moved_off_homepage(self):
         html = render_homepage(**self._data())
-        assert "Macro chop is unresolved" in html
-        assert "memo-block" in html
+        assert "Macro chop is unresolved" not in html
+        assert "memo-block" not in html
 
     def test_memo_block_hidden_when_no_memo(self):
         html = render_homepage(**self._data(memo=None))
@@ -687,14 +787,14 @@ class TestRenderHomepage:
     def test_truncates_long_reasoning(self):
         long_reasoning = "x" * 500
         html = render_homepage(
-            **self._data(today_move={
+            **self._data(decisions=[{
                 "id": 1, "ticker": "Z", "action": "buy",
-                "notional": Decimal("100"), "pct_of_portfolio": Decimal("0.1"),
-                "reasoning": long_reasoning,
-            })
+                "date": date(2026, 5, 4), "quantity": 1,
+                "price": Decimal("100"), "reasoning": long_reasoning,
+            }])
         )
-        assert ("x" * 150 + "…") in html
-        assert ("x" * 151) not in html
+        assert ("x" * 120 + "…") in html
+        assert ("x" * 121) not in html
 
 
 from v2.dashboard_pages import render_performance_page
@@ -758,7 +858,7 @@ class TestRenderPerformancePage:
         assert "chart.js" in html.lower() or "Chart.js" in html
 
 
-from v2.dashboard_pages import render_activity_page
+from v2.dashboard_pages import render_activity_page, render_strategy_page
 
 
 class TestRenderActivityPage:
@@ -783,31 +883,79 @@ class TestRenderActivityPage:
     def test_has_all_anchored_sections(self):
         html = render_activity_page(**self._data())
         assert 'id="holdings"' in html
-        assert 'id="theses"' in html
         assert 'id="decisions"' in html
-        assert 'id="memos"' in html
 
     def test_holdings_table_skeleton(self):
         html = render_activity_page(**self._data())
         assert 'id="positions-table"' in html
         assert "Ticker" in html and "Shares" in html
 
-    def test_theses_container(self):
+    def test_strategy_content_moved_off_activity(self):
         html = render_activity_page(**self._data())
-        assert 'id="theses-list"' in html
+        assert 'id="theses-list"' not in html
+        assert 'id="memos"' not in html
 
     def test_decisions_table_skeleton(self):
         html = render_activity_page(**self._data())
         assert 'id="decisions-table"' in html
 
-    def test_memos_rendered_inline(self):
-        html = render_activity_page(**self._data())
+
+class TestRenderStrategyPage:
+    def _data(self, **overrides):
+        defaults = dict(
+            base_url="https://example.com",
+            theses=[
+                {"id": 7, "ticker": "NVDA", "direction": "long",
+                 "confidence": "high", "thesis": "AI infra demand"},
+            ],
+            memos=[
+                {"id": 1, "session_date": date(2026, 5, 4),
+                 "content": "Holding the AI book."},
+                {"id": 2, "session_date": date(2026, 5, 3),
+                 "content": "Macro chop unresolved."},
+            ],
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_uses_page_shell_with_strategy_active(self):
+        html = render_strategy_page(**self._data())
+        assert 'data-page="strategy"' in html
+        assert 'class="active" href="/strategy/"' in html
+
+    def test_renders_active_theses_and_memos(self):
+        html = render_strategy_page(**self._data())
+        assert "Active theses" in html
+        assert "NVDA" in html
+        assert "thesis-summary" in html
+        assert 'href="/thesis/7/"' in html
+        assert 'href="/memo/1/"' in html
+        assert "Latest memo" in html
         assert "Holding the AI book" in html
         assert "Macro chop unresolved" in html
 
-    def test_memos_empty_state(self):
-        html = render_activity_page(**self._data(memos=[]))
+    def test_empty_state(self):
+        html = render_strategy_page(**self._data(memos=[], theses=[]))
         assert "No memos yet" in html
+        assert "No active theses" in html
+
+
+class TestRenderMemoPage:
+    def test_renders_full_memo_on_dedicated_page(self):
+        memo = {
+            "id": 10,
+            "session_date": date(2026, 5, 4),
+            "memo_type": "reflection",
+            "content": "Full memo body " * 40,
+        }
+        html = render_memo_page(memo=memo, base_url="https://example.com")
+        assert 'data-page="strategy"' in html
+        assert 'class="active" href="/strategy/"' in html
+        assert "breadcrumbs-bar" in html
+        assert 'data-back-fallback="/strategy/"' in html
+        assert "Full memo body" in html
+        assert 'href="/strategy/#memos"' in html
+        assert "memo-detail long-text" in html
 
 
 from v2.dashboard_pages import render_changelog_page
@@ -972,6 +1120,11 @@ class TestRenderHowItWorksHub:
         assert "Methodology" in html
         assert "Model &amp; cost" in html
         assert "Tool-call trace" in html
+
+    def test_carries_longer_front_page_explanation(self):
+        html = render_how_it_works_hub(**self._data())
+        assert "Pinchy is a real Alpaca brokerage account" in html
+        assert "After every market close" in html
 
     def test_ready_children_link_to_pages(self):
         html = render_how_it_works_hub(**self._data())

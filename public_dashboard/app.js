@@ -33,6 +33,10 @@ function shortOrderId(id) {
   return id.length > 12 ? id.slice(0, 8) + "..." : id;
 }
 
+function tickerHref(ticker) {
+  return "/ticker/" + encodeURIComponent(String(ticker || "").toUpperCase()) + "/";
+}
+
 function computeTWR(snapshots) {
   if (!snapshots || snapshots.length === 0) return [];
 
@@ -72,9 +76,69 @@ function setupHamburger() {
   });
 }
 
-// === Equity / benchmark charts (Performance page) ===
+function setupBackButtons() {
+  document.querySelectorAll("[data-back-fallback]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var fallback = btn.getAttribute("data-back-fallback") || "/";
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = fallback;
+      }
+    });
+  });
+}
 
-function renderEquityCurve(snapshots) {
+// === Equity / benchmark charts ===
+
+function normalizeDate(s) {
+  if (!s) return "";
+  return String(s).slice(0, 10);
+}
+
+function buildDecisionMarkers(decisions, valueByDate, label) {
+  if (!decisions || !valueByDate) return [];
+
+  var buys = [];
+  var sells = [];
+  decisions.forEach(function (d) {
+    var action = String(d.action || "").toLowerCase();
+    if (action !== "buy" && action !== "sell") return;
+    var date = normalizeDate(d.date);
+    if (valueByDate[date] == null) return;
+    var point = {
+      x: date,
+      y: valueByDate[date],
+      ticker: d.ticker || "",
+      action: action,
+      quantity: d.quantity,
+    };
+    if (action === "buy") buys.push(point);
+    if (action === "sell") sells.push(point);
+  });
+
+  function dataset(name, points, color, pointStyle) {
+    return {
+      type: "scatter",
+      label: name,
+      data: points,
+      borderColor: color,
+      backgroundColor: color,
+      pointStyle: pointStyle,
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      showLine: false,
+      valueLabel: label,
+    };
+  }
+
+  return [
+    dataset("Buys", buys, "#3fb950", "triangle"),
+    dataset("Sells", sells, "#f85149", "rectRot"),
+  ].filter(function (d) { return d.data.length > 0; });
+}
+
+function renderEquityCurve(snapshots, decisions) {
   // Plots actual account equity (portfolio_value) in dollars over time.
   // Deposits stair-step the line up; trading P&L is the wiggle on top.
   // SPY line shows the deposit-matched shadow portfolio (spy_value_if_deposited)
@@ -93,6 +157,8 @@ function renderEquityCurve(snapshots) {
 
   var labels = snapshots.map(function (s) { return s.date; });
   var equityValues = snapshots.map(function (s) { return s.portfolio_value; });
+  var equityByDate = {};
+  snapshots.forEach(function (s) { equityByDate[normalizeDate(s.date)] = s.portfolio_value; });
   var spyValues = snapshots.map(function (s) {
     return s.spy_value_if_deposited != null ? s.spy_value_if_deposited : null;
   });
@@ -125,16 +191,23 @@ function renderEquityCurve(snapshots) {
     });
   }
 
+  datasets = datasets.concat(buildDecisionMarkers(decisions, equityByDate, "Portfolio"));
+
   new Chart(canvas, {
     type: "line",
     data: { labels: labels, datasets: datasets },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: datasets.length > 1, labels: { color: "#8b949e" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
+              if (ctx.raw && ctx.raw.action) {
+                return ctx.raw.action.toUpperCase() + " " + ctx.raw.ticker + ": " +
+                  formatCurrency(ctx.raw.y);
+              }
               return ctx.dataset.label + ": " + formatCurrency(ctx.parsed.y);
             },
           },
@@ -157,7 +230,7 @@ function renderEquityCurve(snapshots) {
   });
 }
 
-function renderPnlChart(snapshots) {
+function renderPnlChart(snapshots, decisions) {
   // Cumulative P&L in dollars: portfolio_value - cumulative_deposits.
   // Deposits add to both terms simultaneously, so the line tracks pure trading
   // gain/loss rather than the gross equity number.
@@ -178,30 +251,39 @@ function renderPnlChart(snapshots) {
     if (pv == null || dep == null) return null;
     return pv - dep;
   });
+  var pnlByDate = {};
+  snapshots.forEach(function (s, i) { pnlByDate[normalizeDate(s.date)] = pnlValues[i]; });
+  var datasets = [{
+    label: "Cumulative P&L",
+    data: pnlValues,
+    borderColor: "#58a6ff",
+    backgroundColor: "rgba(88, 166, 255, 0.08)",
+    fill: true,
+    tension: 0.3,
+    pointRadius: 0,
+    pointHitRadius: 8,
+    borderWidth: 2,
+  }].concat(buildDecisionMarkers(decisions, pnlByDate, "P&L"));
 
   new Chart(canvas, {
     type: "line",
     data: {
       labels: labels,
-      datasets: [{
-        label: "Cumulative P&L",
-        data: pnlValues,
-        borderColor: "#58a6ff",
-        backgroundColor: "rgba(88, 166, 255, 0.08)",
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        pointHitRadius: 8,
-        borderWidth: 2,
-      }],
+      datasets: datasets,
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
             label: function (ctx) {
+              if (ctx.raw && ctx.raw.action) {
+                var markerSign = ctx.raw.y >= 0 ? "+" : "−";
+                return ctx.raw.action.toUpperCase() + " " + ctx.raw.ticker + ": " +
+                  markerSign + formatCurrency(Math.abs(ctx.raw.y));
+              }
               var v = ctx.parsed.y;
               var sign = v >= 0 ? "+" : "−";
               return sign + formatCurrency(Math.abs(v));
@@ -233,7 +315,7 @@ function renderPnlChart(snapshots) {
   });
 }
 
-function renderBenchmark(snapshots, benchmark) {
+function renderBenchmark(snapshots, benchmark, decisions) {
   var canvas = document.getElementById("benchmark-chart");
   var emptyMsg = document.getElementById("benchmark-empty");
   if (!canvas) return;
@@ -265,44 +347,52 @@ function renderBenchmark(snapshots, benchmark) {
     if (close == null) return null;
     return ((close - spyBase) / spyBase) * 100;
   });
+  var returnByDate = {};
+  labels.forEach(function (date, i) { returnByDate[normalizeDate(date)] = portfolioReturns[i]; });
+  var datasets = [
+    {
+      label: "Portfolio",
+      data: portfolioReturns,
+      borderColor: "#58a6ff",
+      backgroundColor: "rgba(88, 166, 255, 0.08)",
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      pointHitRadius: 8,
+      borderWidth: 2,
+    },
+    {
+      label: "S&P 500",
+      data: spyReturns,
+      borderColor: "#8b949e",
+      borderDash: [6, 3],
+      backgroundColor: "transparent",
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      pointHitRadius: 8,
+      borderWidth: 2,
+    },
+  ].concat(buildDecisionMarkers(decisions, returnByDate, "Return"));
 
   new Chart(canvas, {
     type: "line",
     data: {
       labels: labels,
-      datasets: [
-        {
-          label: "Portfolio",
-          data: portfolioReturns,
-          borderColor: "#58a6ff",
-          backgroundColor: "rgba(88, 166, 255, 0.08)",
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          pointHitRadius: 8,
-          borderWidth: 2,
-        },
-        {
-          label: "S&P 500",
-          data: spyReturns,
-          borderColor: "#8b949e",
-          borderDash: [6, 3],
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.3,
-          pointRadius: 0,
-          pointHitRadius: 8,
-          borderWidth: 2,
-        },
-      ],
+      datasets: datasets,
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: true, labels: { color: "#8b949e" } },
         tooltip: {
           callbacks: {
             label: function (ctx) {
+              if (ctx.raw && ctx.raw.action) {
+                return ctx.raw.action.toUpperCase() + " " + ctx.raw.ticker + ": " +
+                  formatPct(ctx.raw.y);
+              }
               return ctx.dataset.label + ": " + formatPct(ctx.parsed.y);
             },
           },
@@ -363,10 +453,11 @@ function renderDecisions(decisions) {
 
   decisions.forEach(function (d) {
     var badgeClass = "badge badge-" + escapeHtml(d.action || "hold");
+    var ticker = d.ticker || "—";
     var tr = document.createElement("tr");
     tr.innerHTML =
       "<td>" + escapeHtml(d.date || "—") + "</td>" +
-      "<td><strong>" + escapeHtml(d.ticker || "—") + "</strong></td>" +
+      '<td><a href="' + tickerHref(ticker) + '"><strong>' + escapeHtml(ticker) + "</strong></a></td>" +
       '<td><span class="' + badgeClass + '">' + escapeHtml(d.action || "—") + "</span></td>" +
       '<td class="num">' + (d.quantity || "—") + "</td>" +
       '<td class="reasoning-cell">' + escapeHtml(d.reasoning || "—") + "</td>" +
@@ -408,12 +499,14 @@ function initPerformancePage() {
   Promise.all([
     fetchJSON("snapshots.json"),
     fetchJSON("benchmark.json"),
+    fetchJSON("decisions.json"),
   ]).then(function (parts) {
     var snapshots = parts[0];
     var benchmark = parts[1];
-    renderEquityCurve(snapshots);
-    renderPnlChart(snapshots);
-    renderBenchmark(snapshots, benchmark);
+    var decisions = parts[2];
+    renderEquityCurve(snapshots, decisions);
+    renderPnlChart(snapshots, decisions);
+    renderBenchmark(snapshots, benchmark, decisions);
   }).catch(function (err) {
     console.error("Failed to load performance data:", err);
   });
@@ -437,15 +530,17 @@ function initActivityPage() {
 
 document.addEventListener("DOMContentLoaded", function () {
   setupHamburger();
+  setupBackButtons();
   var page = document.body.dataset.page;
   switch (page) {
     case "performance":
+    case "home":
       initPerformancePage();
       break;
     case "activity":
       initActivityPage();
       break;
-    case "home":
+    case "strategy":
     case "learning":
     case "how-it-works":
     case "mistakes":
