@@ -1,5 +1,6 @@
 """Tests for 5-stage session orchestrator."""
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from v2.dashboard_publish import DashboardStageResult
 from v2.session import SessionResult, run_session
 from v2.strategy import StrategyReflectionResult
+from v2.trader import TradingSessionResult
 
 
 @pytest.fixture(autouse=True)
@@ -473,7 +475,6 @@ class TestSessionIdempotency:
     def test_force_creates_new_session_row_when_one_already_exists(self):
         """Per-run uniqueness: --force inserts a brand-new sessions row
         even when a completed session already exists for today."""
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=99) as mock_insert, \
@@ -485,7 +486,6 @@ class TestSessionIdempotency:
         mock_insert.assert_called_once()
 
     def test_no_force_skips_when_completed_session_exists(self):
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record") as mock_insert, \
@@ -498,7 +498,6 @@ class TestSessionIdempotency:
     def test_no_force_creates_new_session_when_prior_was_failed(self):
         """A failed prior session does not gate; a fresh run gets its own
         session row (no resume, no stage skipping)."""
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=12) as mock_insert, \
@@ -549,7 +548,7 @@ class TestPerStageResume:
              patch("v2.session.build_attribution_constraints", return_value=""), \
              patch("v2.session.run_pipeline"), \
              patch("v2.session.run_strategist_loop"), \
-             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_trading_session", return_value=MagicMock(errors=[])), \
              patch("v2.session.run_strategy_reflection"), \
              patch("v2.session.run_dashboard_stage"):
 
@@ -1324,3 +1323,37 @@ class TestSessionEndTelemetryLog:
             result = run_session(dry_run=False)
 
         assert result is not None
+
+
+class TestExecutorStageErrors:
+    def test_executor_result_errors_fail_stage(self):
+        """A returned TradingSessionResult with errors is not a successful stage."""
+        failed = TradingSessionResult(
+            timestamp=datetime(2026, 5, 15, 10, 0, 0),
+            account_snapshot_id=0,
+            positions_synced=0,
+            orders_synced=0,
+            decisions_made=0,
+            trades_executed=0,
+            trades_failed=0,
+            total_buy_value=Decimal("0"),
+            total_sell_value=Decimal("0"),
+            errors=["Market is closed -- skipped trading"],
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session", return_value=failed), \
+             patch("v2.session.insert_session_record", return_value=77), \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage") as mock_fail:
+            result = run_session(dry_run=False)
+
+        assert "Market is closed" in result.trading_error
+        completed = [c.args[1] for c in mock_complete.call_args_list]
+        failed_stages = [c.args[1] for c in mock_fail.call_args_list]
+        assert "executor" not in completed
+        assert "executor" in failed_stages
