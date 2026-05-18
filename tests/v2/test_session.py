@@ -1,5 +1,5 @@
 """Tests for 5-stage session orchestrator."""
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -475,7 +475,6 @@ class TestSessionIdempotency:
     def test_force_creates_new_session_row_when_one_already_exists(self):
         """Per-run uniqueness: --force inserts a brand-new sessions row
         even when a completed session already exists for today."""
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=99) as mock_insert, \
@@ -487,7 +486,6 @@ class TestSessionIdempotency:
         mock_insert.assert_called_once()
 
     def test_no_force_skips_when_completed_session_exists(self):
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record") as mock_insert, \
@@ -500,7 +498,6 @@ class TestSessionIdempotency:
     def test_no_force_creates_new_session_when_prior_was_failed(self):
         """A failed prior session does not gate; a fresh run gets its own
         session row (no resume, no stage skipping)."""
-        from datetime import date
 
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=12) as mock_insert, \
