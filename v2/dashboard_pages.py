@@ -40,6 +40,7 @@ _NAV_ITEMS = (
     ("home", "/", "Home"),
     ("performance", "/performance/", "Performance"),
     ("activity", "/activity/", "Activity"),
+    ("changelog", "/changelog/", "Changelog"),
     ("learning", "/learning/", "Learning"),
     ("how-it-works", "/how-it-works/", "How it works"),
 )
@@ -897,6 +898,102 @@ def render_activity_page(*, base_url: str, memos: list[dict]) -> str:
         content=content,
         og_image=f"{base}/og/home.png",
         page_url=f"{base}/activity/",
+    )
+
+
+def render_changelog_page(*, entries: list[dict], base_url: str) -> str:
+    """Return the public changelog page."""
+    base = base_url.rstrip("/")
+
+    if entries:
+        if any(entry.get("title") and entry.get("summary") for entry in entries):
+            cards = []
+            for entry in entries:
+                entry_date = _esc(str(entry.get("date") or ""))
+                title = _esc(str(entry.get("title") or "Update"))
+                summary = _esc(str(entry.get("summary") or ""))
+                bullets = "".join(
+                    f"<li>{_esc(str(b))}</li>" for b in (entry.get("bullets") or [])
+                )
+                sha_bits = []
+                for sha in entry.get("commit_shas") or []:
+                    full_sha = _esc(str(sha))
+                    sha_bits.append(f'<code title="{full_sha}">{full_sha[:7]}</code>')
+                sha_html = (
+                    f'<p class="changelog-shas">{" ".join(sha_bits)}</p>'
+                    if sha_bits else ""
+                )
+                bullet_html = f"<ul>{bullets}</ul>" if bullets else ""
+                # Raw git-derived entries carry their per-commit list under
+                # "items" rather than "bullets"; render it too so subjects
+                # appear when no LLM-curated bullets exist.
+                item_rows = []
+                for item in entry.get("items") or []:
+                    if isinstance(item, dict):
+                        short = _esc(str(item.get("short_sha") or item.get("sha") or ""))
+                        full = _esc(str(item.get("sha") or short))
+                        subj = _esc(str(item.get("subject") or ""))
+                    else:
+                        short = full = ""
+                        subj = _esc(str(item))
+                    sha_cell = f'<code title="{full}">{short}</code> ' if short else ""
+                    item_rows.append(f"<li>{sha_cell}{subj}</li>")
+                items_html = f"<ul class=\"changelog-items\">{''.join(item_rows)}</ul>" if item_rows else ""
+                cards.append(
+                    '<article class="changelog-entry">'
+                    f'<p class="changelog-date">{entry_date}</p>'
+                    f"<h2>{title}</h2>"
+                    f"<p>{summary}</p>"
+                    f"{bullet_html}{items_html}{sha_html}</article>"
+                )
+            body = "".join(cards)
+        else:
+            rows = []
+            for entry in entries:
+                entry_date = _esc(str(entry.get("date") or ""))
+                for item in entry.get("items") or []:
+                    if isinstance(item, dict):
+                        short_sha = _esc(str(item.get("short_sha") or item.get("sha") or ""))
+                        full_sha = _esc(str(item.get("sha") or short_sha))
+                        subject = _esc(str(item.get("subject") or ""))
+                    else:
+                        short_sha = ""
+                        full_sha = ""
+                        subject = _esc(str(item))
+                    sha_cell = (
+                        f'<code title="{full_sha}">{short_sha}</code>' if short_sha else "—"
+                    )
+                    rows.append(
+                        "<tr>"
+                        f"<td>{entry_date}</td>"
+                        f"<td>{sha_cell}</td>"
+                        f"<td>{subject}</td>"
+                        "</tr>"
+                    )
+            body = (
+                '<div class="table-wrap"><table class="changelog-table">'
+                "<thead><tr><th>Date</th><th>SHA</th><th>Change</th></tr></thead>"
+                f'<tbody>{"".join(rows)}</tbody></table></div>'
+            )
+    else:
+        body = '<p class="empty-state">No public updates posted yet.</p>'
+
+    content = (
+        '<section class="hero">'
+        '<p class="tag">Public build notes</p>'
+        '<h1>Changelog</h1>'
+        '<p class="intro">Notable changes to the trading agent and public dashboard.</p>'
+        '</section>'
+        f'<section class="section changelog-list">{body}</section>'
+    )
+
+    return _render_page_shell(
+        title="Changelog",
+        description="Public build notes for the Pinchy trading agent and dashboard.",
+        active_nav="changelog",
+        content=content,
+        og_image=f"{base}/og/home.png",
+        page_url=f"{base}/changelog/",
     )
 
 

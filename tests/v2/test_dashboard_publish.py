@@ -22,7 +22,19 @@ from v2.dashboard_publish import (
     gather_dashboard_data,
     gather_thesis_detail,
     gather_trade_detail,
+    generate_changelog_entries,
+    get_changelog_pointer,
+    get_current_git_sha,
+    get_recent_changelog_entries,
+    group_changelog_commits,
+    persist_changelog_pointer,
+    read_changelog_pointer,
     run_dashboard_stage,
+    store_changelog_commits,
+    store_changelog_entries,
+    summarize_changelog_commits,
+    update_changelog_pointer,
+    validate_changelog_entries,
     write_json_files,
 )
 from v2.executor import get_net_deposits
@@ -852,12 +864,34 @@ class TestWriteJsonFiles:
 
 
 class TestRunDashboardStage:
+    @patch("v2.dashboard_publish.persist_changelog_pointer")
+    @patch("v2.dashboard_publish.get_recent_changelog_entries",
+           return_value=[{"date": "2026-05-15", "title": "Change",
+                          "summary": "Readable update", "commit_shas": ["abc1234"]}])
+    @patch("v2.dashboard_publish.store_changelog_entries")
+    @patch("v2.dashboard_publish.summarize_changelog_commits",
+           return_value=[{"title": "Change", "summary": "Readable update",
+                          "bullets": [], "commit_shas": ["abc1234"]}])
+    @patch("v2.dashboard_publish.store_changelog_commits")
+    @patch("v2.dashboard_publish.fetch_changelog_commits",
+           return_value=[{"sha": "abc1234", "short_sha": "abc1234",
+                          "committed_at": "2026-05-15T00:00:00+00:00",
+                          "subject": "Change"}])
+    @patch("v2.dashboard_publish.get_changelog_pointer", return_value="oldsha")
+    @patch("v2.dashboard_publish.get_cursor")
+    @patch("v2.dashboard_publish.get_current_git_sha", return_value="newsha")
     @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
     @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_happy_path(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
+    def test_happy_path(self, mock_deposits, mock_gather, mock_assemble,
+                        mock_deploy, mock_sha, mock_cursor, mock_pointer,
+                        mock_fetch, mock_store_commits, mock_summarize,
+                        mock_store_entries, mock_recent, mock_persist):
         """Full pipeline runs and returns published=True."""
+        cur = MagicMock()
+        mock_cursor.return_value.__enter__.return_value = cur
+
         with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage(session_date=date(2025, 6, 15))
 
@@ -868,6 +902,24 @@ class TestRunDashboardStage:
         mock_gather.assert_called_once_with(date(2025, 6, 15), net_deposits=Decimal("100000"))
         mock_assemble.assert_called_once()
         mock_deploy.assert_called_once()
+        mock_sha.assert_called_once()
+        mock_pointer.assert_called_once_with(cur)
+        mock_fetch.assert_called_once_with(from_sha="oldsha", to_sha="newsha")
+        mock_store_commits.assert_called_once_with(cur, mock_fetch.return_value)
+        mock_summarize.assert_called_once_with(mock_fetch.return_value)
+        mock_store_entries.assert_called_once_with(
+            cur,
+            mock_summarize.return_value,
+            from_sha="oldsha",
+            to_sha="newsha",
+            model="claude-haiku-4-5",
+        )
+        mock_recent.assert_called_once_with(cur)
+        assert mock_assemble.call_args.args[0]["changelog"] == [
+            {"date": "2026-05-15", "title": "Change",
+             "summary": "Readable update", "commit_shas": ["abc1234"]}
+        ]
+        mock_persist.assert_called_once_with("newsha")
 
     def test_skipped_when_no_project_set(self):
         """Returns skipped=True when CLOUDFLARE_PAGES_PROJECT not set."""
@@ -892,8 +944,10 @@ class TestRunDashboardStage:
 
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
     @patch("v2.dashboard_publish.assemble_deploy_dir", side_effect=Exception("Disk full"))
+    @patch("v2.dashboard_publish.get_current_git_sha", return_value=None)
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_handles_assemble_error(self, mock_deposits, mock_assemble, mock_gather):
+    def test_handles_assemble_error(self, mock_deposits, mock_sha,
+                                    mock_assemble, mock_gather):
         """Error in assemble step is captured."""
         with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
@@ -905,8 +959,10 @@ class TestRunDashboardStage:
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
     @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.deploy_to_cloudflare", side_effect=RuntimeError("Auth failed"))
+    @patch("v2.dashboard_publish.get_current_git_sha", return_value=None)
     @patch("v2.dashboard_publish.get_net_deposits", return_value=Decimal("100000"))
-    def test_handles_deploy_error(self, mock_deposits, mock_deploy, mock_assemble, mock_gather):
+    def test_handles_deploy_error(self, mock_deposits, mock_sha, mock_deploy,
+                                  mock_assemble, mock_gather):
         """Error in deploy step is captured."""
         with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage()
@@ -918,8 +974,11 @@ class TestRunDashboardStage:
     @patch("v2.dashboard_publish.deploy_to_cloudflare", return_value=True)
     @patch("v2.dashboard_publish.assemble_deploy_dir", return_value="/tmp/deploy")
     @patch("v2.dashboard_publish.gather_dashboard_data", return_value={"summary": {}})
+    @patch("v2.dashboard_publish.get_current_git_sha", return_value=None)
     @patch("v2.dashboard_publish.get_net_deposits", side_effect=Exception("Alpaca down"))
-    def test_continues_when_net_deposits_fails(self, mock_deposits, mock_gather, mock_assemble, mock_deploy):
+    def test_continues_when_net_deposits_fails(self, mock_deposits, mock_sha,
+                                               mock_gather, mock_assemble,
+                                               mock_deploy):
         """Pipeline continues with net_deposits=None if Alpaca call fails."""
         with patch.dict(os.environ, {"CLOUDFLARE_PAGES_PROJECT": "my-dash"}):
             result = run_dashboard_stage(session_date=date(2025, 6, 15))
@@ -1614,12 +1673,25 @@ class TestAssembleDeployDirNewPages:
 
         assets = self._assets(tmp_path)
         deploy = tmp_path / "deploy"
-        assemble_deploy_dir(self._minimal_data(), str(deploy), str(assets),
+        data = self._minimal_data()
+        data["changelog"] = [{
+            "date": "2026-05-15",
+            "title": "Repository updates",
+            "summary": "1 commit published from git history.",
+            "items": [{
+                "sha": "abc1234",
+                "short_sha": "abc1234",
+                "subject": "Add changelog",
+            }],
+        }]
+        assemble_deploy_dir(data, str(deploy), str(assets),
                             base_url="https://example.com")
 
         for path in ("performance/index.html", "activity/index.html",
-                     "learning/index.html", "how-it-works/index.html"):
+                     "changelog/index.html", "learning/index.html",
+                     "how-it-works/index.html"):
             assert (deploy / path).exists(), f"missing: {path}"
+        assert "Add changelog" in (deploy / "changelog" / "index.html").read_text()
 
     def test_how_it_works_marks_unready_children(self, tmp_path):
         from v2.dashboard_publish import assemble_deploy_dir
@@ -1632,6 +1704,291 @@ class TestAssembleDeployDirNewPages:
         html = (deploy / "how-it-works" / "index.html").read_text()
         # None of /about/, /internals/, /trace/ exist in this fixture deploy.
         assert html.count('class="card disabled"') == 3
+
+
+class TestGenerateChangelogEntries:
+    @patch("v2.dashboard_publish.fetch_commit_files", return_value=["v2/dashboard_publish.py"])
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_groups_recent_git_commits_by_date(self, mock_run, mock_files):
+        mock_run.return_value.stdout = (
+            "2026-05-15T12:00:00+00:00\x1fabc1234full\x1fabc1234\x1fAdd changelog\x1f\x1e"
+            "2026-05-15T11:00:00+00:00\x1fdef5678full\x1fdef5678\x1fFix dashboard nav\x1f\x1e"
+            "2026-05-14T10:00:00+00:00\x1f999aaaafull\x1f999aaaa\x1fValidate executor response schema\x1f"
+        )
+
+        entries = generate_changelog_entries(repo_path="/repo", bootstrap_limit=3)
+
+        assert entries == [
+            {
+                "date": "2026-05-15",
+                "title": "Repository updates",
+                "summary": "2 commits published from git history.",
+                "items": [
+                    {"sha": "abc1234full", "short_sha": "abc1234",
+                     "subject": "Add changelog"},
+                    {"sha": "def5678full", "short_sha": "def5678",
+                     "subject": "Fix dashboard nav"},
+                ],
+            },
+            {
+                "date": "2026-05-14",
+                "title": "Repository updates",
+                "summary": "1 commit published from git history.",
+                "items": [
+                    {"sha": "999aaaafull", "short_sha": "999aaaa",
+                     "subject": "Validate executor response schema"},
+                ],
+            },
+        ]
+        mock_run.assert_called_once()
+        args = mock_run.call_args.args[0]
+        assert args[:4] == ["git", "-C", "/repo", "log"]
+        assert "--no-merges" in args
+        assert "-n3" in args
+        assert "HEAD" in args
+
+    @patch("v2.dashboard_publish.fetch_commit_files", return_value=[])
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_uses_sha_range_when_pointer_exists(self, mock_run, mock_files):
+        mock_run.return_value.stdout = (
+            "2026-05-15T12:00:00+00:00\x1fabc1234full\x1fabc1234\x1fAdd changelog\x1f"
+        )
+
+        entries = generate_changelog_entries(
+            repo_path="/repo",
+            from_sha="oldsha",
+            to_sha="newsha",
+        )
+
+        assert entries[0]["items"] == [
+            {"sha": "abc1234full", "short_sha": "abc1234", "subject": "Add changelog"}
+        ]
+        args = mock_run.call_args.args[0]
+        assert "oldsha..newsha" in args
+        assert not any(arg.startswith("-n") for arg in args)
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_returns_empty_list_when_pointer_matches_target(self, mock_run):
+        assert generate_changelog_entries(from_sha="same", to_sha="same") == []
+        mock_run.assert_not_called()
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_returns_empty_list_when_git_log_fails(self, mock_run):
+        mock_run.side_effect = RuntimeError("git unavailable")
+
+        assert generate_changelog_entries(repo_path="/repo") == []
+
+
+class TestChangelogPointer:
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_get_current_git_sha(self, mock_run):
+        mock_run.return_value.stdout = "abc123\n"
+
+        assert get_current_git_sha(repo_path="/repo") == "abc123"
+        mock_run.assert_called_once_with(
+            ["git", "-C", "/repo", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+
+    @patch("v2.dashboard_publish.subprocess.run")
+    def test_get_current_git_sha_returns_none_on_failure(self, mock_run):
+        mock_run.side_effect = RuntimeError("git unavailable")
+
+        assert get_current_git_sha(repo_path="/repo") is None
+
+    def test_get_changelog_pointer_reads_state_row(self):
+        cur = MagicMock()
+        cur.fetchone.return_value = {"value": "abc123"}
+
+        assert get_changelog_pointer(cur) == "abc123"
+        cur.execute.assert_called_once_with(
+            "SELECT value FROM dashboard_publish_state WHERE key = %s",
+            ("changelog_last_published_sha",),
+        )
+
+    def test_get_changelog_pointer_returns_none_when_missing(self):
+        cur = MagicMock()
+        cur.fetchone.return_value = None
+
+        assert get_changelog_pointer(cur) is None
+
+    def test_update_changelog_pointer_upserts_state_row(self):
+        cur = MagicMock()
+
+        update_changelog_pointer(cur, "abc123")
+
+        sql, params = cur.execute.call_args.args
+        assert "INSERT INTO dashboard_publish_state" in sql
+        assert "ON CONFLICT" in sql
+        assert params == ("changelog_last_published_sha", "abc123")
+
+    def test_store_changelog_commits_inserts_rows_idempotently(self):
+        cur = MagicMock()
+
+        store_changelog_commits(cur, [{
+            "sha": "abc123full",
+            "short_sha": "abc123",
+            "committed_at": "2026-05-15T12:00:00+00:00",
+            "subject": "Add changelog",
+            "body": "Body",
+            "files": ["v2/dashboard_publish.py"],
+        }])
+
+        sql, params = cur.execute.call_args.args
+        assert "INSERT INTO dashboard_changelog_commits" in sql
+        assert "ON CONFLICT (sha) DO NOTHING" in sql
+        assert params == (
+            "abc123full",
+            "abc123",
+            "2026-05-15T12:00:00+00:00",
+            "Add changelog",
+            "Body",
+            '["v2/dashboard_publish.py"]',
+        )
+
+    def test_store_changelog_entries_inserts_llm_rows(self):
+        cur = MagicMock()
+
+        store_changelog_entries(
+            cur,
+            [{"title": "Safer execution", "summary": "Validation improved.",
+              "bullets": ["Reject malformed instructions."],
+              "commit_shas": ["abc123full"]}],
+            from_sha="old",
+            to_sha="new",
+            model="model-x",
+        )
+
+        sql, params = cur.execute.call_args.args
+        assert "INSERT INTO dashboard_changelog_entries" in sql
+        assert params == (
+            "old",
+            "new",
+            "Safer execution",
+            "Validation improved.",
+            '["Reject malformed instructions."]',
+            '["abc123full"]',
+            "model-x",
+            "public_changelog_v1",
+        )
+
+    def test_get_recent_changelog_entries_reads_stored_rows(self):
+        cur = MagicMock()
+        cur.fetchall.side_effect = [[
+            {"id": 1, "created_at": datetime(2026, 5, 16, 12, 0),
+             "title": "Safer execution", "summary": "Validation improved.",
+             "bullets": ["Reject malformed instructions."],
+             "commit_shas": ["abc123full"]},
+        ]]
+
+        entries = get_recent_changelog_entries(cur, limit=10)
+
+        assert entries[0]["date"] == "2026-05-16"
+        assert entries[0]["title"] == "Safer execution"
+        assert entries[0]["commit_shas"] == ["abc123full"]
+        cur.execute.assert_called_once()
+        assert cur.execute.call_args.args[1] == (10,)
+
+    def test_get_recent_changelog_entries_falls_back_to_raw_rows(self):
+        cur = MagicMock()
+        cur.fetchall.side_effect = [[], [
+            {"sha": "abc123full", "short_sha": "abc123",
+             "committed_at": datetime(2026, 5, 15, 12, 0),
+             "subject": "Add changelog"},
+        ]]
+
+        entries = get_recent_changelog_entries(cur, limit=10)
+
+        assert entries[0]["date"] == "2026-05-15"
+        assert entries[0]["items"][0]["short_sha"] == "abc123"
+        assert cur.execute.call_count == 2
+        assert cur.execute.call_args.args[1] == (10,)
+
+    def test_group_changelog_commits_accepts_iso_strings(self):
+        entries = group_changelog_commits([{
+            "sha": "abc123full",
+            "short_sha": "abc123",
+            "committed_at": "2026-05-15T12:00:00+00:00",
+            "subject": "Add changelog",
+        }])
+
+        assert entries[0]["date"] == "2026-05-15"
+
+    def test_validate_changelog_entries_rejects_unknown_shas(self):
+        entries = validate_changelog_entries(
+            [{"title": "Good", "summary": "Useful", "bullets": ["A"],
+              "commit_shas": ["known", "unknown"]}],
+            commits=[{"sha": "known"}],
+        )
+
+        assert entries == [{
+            "title": "Good",
+            "summary": "Useful",
+            "bullets": ["A"],
+            "commit_shas": ["known"],
+        }]
+
+    def test_validate_changelog_entries_drops_entries_without_known_shas(self):
+        entries = validate_changelog_entries(
+            [{"title": "Bad", "summary": "No backing", "bullets": [],
+              "commit_shas": ["unknown"]}],
+            commits=[{"sha": "known"}],
+        )
+
+        assert entries == []
+
+    @patch("v2.dashboard_publish.get_claude_client")
+    @patch("v2.dashboard_publish._call_with_retry")
+    def test_summarize_changelog_commits_validates_json(self, mock_call, mock_client):
+        block = MagicMock()
+        block.text = json.dumps({
+            "entries": [{
+                "title": "Safer execution",
+                "summary": "Validation improved.",
+                "bullets": ["Reject malformed instructions."],
+                "commit_shas": ["abc123full"],
+            }]
+        })
+        mock_call.return_value.content = [block]
+
+        entries = summarize_changelog_commits([{
+            "sha": "abc123full",
+            "short_sha": "abc123",
+            "committed_at": "2026-05-15T12:00:00+00:00",
+            "subject": "Validate executor response schema",
+            "body": "",
+            "files": ["v2/executor.py"],
+        }])
+
+        assert entries[0]["title"] == "Safer execution"
+        assert entries[0]["commit_shas"] == ["abc123full"]
+        mock_call.assert_called_once()
+
+    @patch("v2.dashboard_publish._call_with_retry", side_effect=RuntimeError("down"))
+    def test_summarize_changelog_commits_falls_back_empty(self, mock_call):
+        assert summarize_changelog_commits([{"sha": "abc123full"}]) == []
+
+    @patch("v2.dashboard_publish.get_cursor")
+    @patch("v2.dashboard_publish.get_changelog_pointer", return_value="abc123")
+    def test_read_changelog_pointer_uses_cursor(self, mock_get_pointer, mock_cursor):
+        cur = MagicMock()
+        mock_cursor.return_value.__enter__.return_value = cur
+
+        assert read_changelog_pointer() == "abc123"
+        mock_get_pointer.assert_called_once_with(cur)
+
+    @patch("v2.dashboard_publish.get_cursor")
+    @patch("v2.dashboard_publish.update_changelog_pointer")
+    def test_persist_changelog_pointer_uses_cursor(self, mock_update, mock_cursor):
+        cur = MagicMock()
+        mock_cursor.return_value.__enter__.return_value = cur
+
+        persist_changelog_pointer("abc123")
+
+        mock_update.assert_called_once_with(cur, "abc123")
 
 
 class TestEmitStaticPages:
