@@ -1139,7 +1139,9 @@ def fetch_changelog_commits(repo_path: str | None = None,
 
     commits: list[dict] = []
     for raw in result.stdout.split("\x1e"):
-        raw = raw.strip()
+        # Strip only newlines — str.strip() would eat the trailing \x1f
+        # that delimits an empty body and break the field count below.
+        raw = raw.strip("\n")
         if not raw:
             continue
         parts = raw.split("\x1f", 4)

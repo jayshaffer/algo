@@ -924,12 +924,27 @@ def render_changelog_page(*, entries: list[dict], base_url: str) -> str:
                     if sha_bits else ""
                 )
                 bullet_html = f"<ul>{bullets}</ul>" if bullets else ""
+                # Raw git-derived entries carry their per-commit list under
+                # "items" rather than "bullets"; render it too so subjects
+                # appear when no LLM-curated bullets exist.
+                item_rows = []
+                for item in entry.get("items") or []:
+                    if isinstance(item, dict):
+                        short = _esc(str(item.get("short_sha") or item.get("sha") or ""))
+                        full = _esc(str(item.get("sha") or short))
+                        subj = _esc(str(item.get("subject") or ""))
+                    else:
+                        short = full = ""
+                        subj = _esc(str(item))
+                    sha_cell = f'<code title="{full}">{short}</code> ' if short else ""
+                    item_rows.append(f"<li>{sha_cell}{subj}</li>")
+                items_html = f"<ul class=\"changelog-items\">{''.join(item_rows)}</ul>" if item_rows else ""
                 cards.append(
                     '<article class="changelog-entry">'
                     f'<p class="changelog-date">{entry_date}</p>'
                     f"<h2>{title}</h2>"
                     f"<p>{summary}</p>"
-                    f"{bullet_html}{sha_html}</article>"
+                    f"{bullet_html}{items_html}{sha_html}</article>"
                 )
             body = "".join(cards)
         else:

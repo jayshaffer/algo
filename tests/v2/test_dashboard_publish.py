@@ -912,7 +912,7 @@ class TestRunDashboardStage:
             mock_summarize.return_value,
             from_sha="oldsha",
             to_sha="newsha",
-            model="claude-3-5-haiku-latest",
+            model="claude-haiku-4-5",
         )
         mock_recent.assert_called_once_with(cur)
         assert mock_assemble.call_args.args[0]["changelog"] == [
