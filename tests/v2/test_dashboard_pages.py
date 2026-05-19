@@ -848,9 +848,7 @@ class TestRenderHomepage:
         """The brush is decorative — screen-reader users get the
         preset buttons. Verify it doesn't pollute the a11y tree."""
         html = render_homepage(**self._data())
-        # match attribute order-independently
-        assert 'aria-hidden="true"' in html
-        assert 'class="range-brush"' in html
+        assert '<div class="range-brush" data-role="range-brush" aria-hidden="true">' in html
 
 
 from v2.dashboard_pages import render_performance_page
@@ -936,9 +934,10 @@ class TestRenderPerformancePage:
         assert '<svg class="range-brush-svg"' in html
 
     def test_range_brush_is_aria_hidden(self):
+        """The brush is decorative — screen-reader users get the
+        preset buttons. Verify it doesn't pollute the a11y tree."""
         html = render_performance_page(**self._data())
-        assert 'aria-hidden="true"' in html
-        assert 'class="range-brush"' in html
+        assert '<div class="range-brush" data-role="range-brush" aria-hidden="true">' in html
 
 
 from v2.dashboard_pages import render_activity_page, render_strategy_page
