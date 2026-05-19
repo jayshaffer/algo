@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trading.agent import AgentResponse, TradingDecision
-from trading.classifier import TickerSignal
 from trading.news import NewsItem
 
 # ---------------------------------------------------------------------------
@@ -97,43 +96,6 @@ def mock_db(mock_cursor):
 
 
 # ---------------------------------------------------------------------------
-# Ollama / LLM fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_embed():
-    """Mock ollama embed to return a fixed 768-dim vector."""
-    vec = [0.1] * 768
-    with patch("trading.ollama.embed", return_value=vec) as m:
-        m.return_vec = vec
-        yield m
-
-
-@pytest.fixture
-def mock_embed_batch():
-    """Mock ollama embed_batch to return fixed vectors."""
-    def _embed_batch(texts, model="nomic-embed-text"):
-        return [[0.1] * 768 for _ in texts]
-
-    with patch("trading.ollama.embed_batch", side_effect=_embed_batch) as m:
-        yield m
-
-
-@pytest.fixture
-def mock_chat():
-    """Mock ollama chat to return a fixed response."""
-    with patch("trading.ollama.chat", return_value="mock response") as m:
-        yield m
-
-
-@pytest.fixture
-def mock_chat_json():
-    """Mock ollama chat_json to return a fixed dict."""
-    with patch("trading.ollama.chat_json", return_value={}) as m:
-        yield m
-
-
-# ---------------------------------------------------------------------------
 # Alpaca fixtures
 # ---------------------------------------------------------------------------
 
@@ -172,12 +134,6 @@ def alpaca_env(monkeypatch):
 def db_env(monkeypatch):
     """Set database environment variable."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
-
-
-@pytest.fixture
-def ollama_env(monkeypatch):
-    """Set Ollama environment variable."""
-    monkeypatch.setenv("OLLAMA_URL", "http://localhost:11434")
 
 
 @pytest.fixture
@@ -231,20 +187,6 @@ def make_agent_response(**kwargs):
     }
     defaults.update(kwargs)
     return AgentResponse(**defaults)
-
-
-def make_ticker_signal(**kwargs):
-    """Create a TickerSignal with sensible defaults."""
-    defaults = {
-        "ticker": "AAPL",
-        "headline": "AAPL beats Q3 earnings",
-        "category": "earnings",
-        "sentiment": "bullish",
-        "confidence": "high",
-        "published_at": datetime(2025, 1, 15, 10, 0, 0),
-    }
-    defaults.update(kwargs)
-    return TickerSignal(**defaults)
 
 
 def make_position_row(**kwargs):

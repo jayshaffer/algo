@@ -17,8 +17,6 @@ services:
   trading-paper:
     build: .
     depends_on:
-      ollama:
-        condition: service_started
       db-paper:
         condition: service_healthy
     env_file:
