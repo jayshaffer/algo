@@ -961,11 +961,11 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
   FROM executor_text
   WHERE response_text IS NOT NULL
     AND COALESCE(stop_reason, '') != 'max_tokens'
-    AND ltrim(response_text) NOT LIKE '{%';
+    AND regexp_replace(ltrim(response_text), '^```(json)?[[:space:]]*', '', 'i') NOT LIKE '{%';
   ```
 - **finding_when:** "rows returned"
-- **body_template:** "The executor's response text (assembled from response_content text blocks) does not start with `{{`, indicating the model went off-format — refused, replied in prose, or returned something the parser cannot consume. `max_tokens`-truncated rows are excluded (those are tracked by `EXECUTOR_TRUNCATION_RATE`). Affected (id, session, stop_reason): {rows}. Look at the `/llm-call/<id>` page on the local dashboard to see what the model actually said."
-- **suggested_fix:** "Inspect each affected row's full response via `/llm-call/<id>` on the local dashboard. If the executor is replying in prose, tighten the prompt in `v2/agent.py::TRADING_SYSTEM_PROMPT` to insist on JSON-only output. If it's a refusal pattern (e.g., the executor balking at sector-cap signals), either teach the executor to emit a structured `hold` decision instead, or revisit the upstream input shape so the refusal is no longer prompted. This check complements `EXECUTOR_PARSE_FAILURE_RATE` (which looks at the post-parse telemetry); this one looks at the raw assistant text."
+- **body_template:** "The executor's response text (assembled from response_content text blocks) does not start with `{{` after stripping a leading markdown code fence (`` ``` `` or `` ```json ``), indicating the model went off-format — refused, replied in prose, or returned something the parser cannot consume. The parser in `v2/agent.py` already strips these fences before `json.loads`, so they are not counted as drift. `max_tokens`-truncated rows are excluded (those are tracked by `EXECUTOR_TRUNCATION_RATE`). Affected (id, session, stop_reason): {rows}. Look at the `/llm-call/<id>` page on the local dashboard to see what the model actually said."
+- **suggested_fix:** "Inspect each affected row's full response via `/llm-call/<id>` on the local dashboard. If the executor is replying in prose, tighten the prompt in `v2/agent.py::TRADING_SYSTEM_PROMPT` to insist on JSON-only output. If it's a refusal pattern (e.g., the executor balking at sector-cap signals), either teach the executor to emit a structured `hold` decision instead, or revisit the upstream input shape so the refusal is no longer prompted. This check complements `EXECUTOR_PARSE_FAILURE_RATE` (which looks at the post-parse telemetry); this one looks at the raw assistant text. If the parser in `v2/agent.py` grows additional wrapper-stripping (e.g., a new prefix the model emits), update the `regexp_replace` here to match — the check should only fire on shapes the parser truly cannot consume."
 
 ### LLM_CONTEXT_MISSING_ROWS_FOR_PURPOSE
 
