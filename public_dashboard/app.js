@@ -168,6 +168,11 @@ var brush = {
   rightHit: null,
   width: 0,           // measured pixel width of the svg
   domain: null,       // { first: "YYYY-MM-DD", last: "YYYY-MM-DD" }
+  dragging: null,        // null | "left" | "right" | "bar"
+  dragBarStartFrac: 0,
+  dragBarWidthFrac: 0,
+  dragPointerStartFrac: 0,
+  pendingFrame: null,
 };
 
 var SVG_NS = "http://www.w3.org/2000/svg";
@@ -263,6 +268,10 @@ function initBrush() {
   brush.rightHit = right.hit;
 
   renderBrushOverview();
+  brush.svg.addEventListener("pointerdown", brushPointerDown);
+  brush.svg.addEventListener("pointermove", brushPointerMove);
+  brush.svg.addEventListener("pointerup", brushPointerUp);
+  brush.svg.addEventListener("pointercancel", brushPointerUp);
   window.addEventListener("resize", function () {
     // No DOM measurement needed — viewBox is 0..100 so the SVG scales.
     // Kept as a hook in case future code needs pixel measurements.
@@ -283,6 +292,101 @@ function updateBrushPosition(start, end) {
   brush.leftHit.setAttribute("x", String(leftFrac - halfHit));
   brush.rightHandle.setAttribute("x", String(rightFrac - halfVis));
   brush.rightHit.setAttribute("x", String(rightFrac - halfHit));
+}
+
+function pointerXToFraction(clientX) {
+  // Convert a pointer's clientX to a fraction (0..1) of the brush width
+  // using the live bounding rect (resilient to scroll, resize, zoom).
+  if (!brush.el) return 0;
+  var rect = brush.el.getBoundingClientRect();
+  if (rect.width === 0) return 0;
+  var f = (clientX - rect.left) / rect.width;
+  return Math.max(0, Math.min(1, f));
+}
+
+function currentRangeFractions() {
+  // Read current bar position back from the DOM — single source of truth
+  // during a drag.
+  var leftFrac = parseFloat(brush.bar.getAttribute("x") || "0") / 100;
+  var widthFrac = parseFloat(brush.bar.getAttribute("width") || "0") / 100;
+  return { leftFrac: leftFrac, rightFrac: leftFrac + widthFrac };
+}
+
+function scheduleBrushApply(start, end) {
+  // rAF-throttle: at most one applyRange per animation frame.
+  if (brush.pendingFrame != null) return;
+  brush.pendingFrame = requestAnimationFrame(function () {
+    brush.pendingFrame = null;
+    applyRange({ start: start, end: end, preset: null });
+  });
+}
+
+function brushPointerDown(e) {
+  if (!brush.svg) return;
+  var target = e.target;
+  var role = target && target.getAttribute && target.getAttribute("data-role");
+  var frac = pointerXToFraction(e.clientX);
+  var cur = currentRangeFractions();
+
+  if (role === "left-hit" || role === "left-handle") {
+    brush.dragging = "left";
+  } else if (role === "right-hit" || role === "right-handle") {
+    brush.dragging = "right";
+  } else if (role === "bar") {
+    brush.dragging = "bar";
+    brush.dragBarStartFrac = cur.leftFrac;
+    brush.dragBarWidthFrac = cur.rightFrac - cur.leftFrac;
+    brush.dragPointerStartFrac = frac;
+  } else {
+    // Clicked empty area: jump the nearest endpoint to the cursor.
+    var distLeft = Math.abs(frac - cur.leftFrac);
+    var distRight = Math.abs(frac - cur.rightFrac);
+    if (distLeft < distRight) {
+      var newStart = fractionToDate(Math.min(frac, cur.rightFrac));
+      var endDate = fractionToDate(cur.rightFrac);
+      scheduleBrushApply(newStart, endDate);
+    } else {
+      var startDate = fractionToDate(cur.leftFrac);
+      var newEnd = fractionToDate(Math.max(frac, cur.leftFrac));
+      scheduleBrushApply(startDate, newEnd);
+    }
+    return;
+  }
+  e.preventDefault();
+  // Capture future move/up events so the drag continues even if the
+  // cursor leaves the strip.
+  try { brush.svg.setPointerCapture(e.pointerId); } catch (err) { /* old browsers */ }
+}
+
+function brushPointerMove(e) {
+  if (!brush.dragging) return;
+  var frac = pointerXToFraction(e.clientX);
+  var cur = currentRangeFractions();
+  var newStart = brush.domain.first;
+  var newEnd = brush.domain.last;
+
+  if (brush.dragging === "left") {
+    newStart = fractionToDate(Math.min(frac, cur.rightFrac));
+    newEnd = fractionToDate(cur.rightFrac);
+  } else if (brush.dragging === "right") {
+    newStart = fractionToDate(cur.leftFrac);
+    newEnd = fractionToDate(Math.max(frac, cur.leftFrac));
+  } else if (brush.dragging === "bar") {
+    var delta = frac - brush.dragPointerStartFrac;
+    var newLeft = brush.dragBarStartFrac + delta;
+    var width = brush.dragBarWidthFrac;
+    // Clamp so the window stays inside [0, 1].
+    newLeft = Math.max(0, Math.min(1 - width, newLeft));
+    newStart = fractionToDate(newLeft);
+    newEnd = fractionToDate(newLeft + width);
+  }
+  scheduleBrushApply(newStart, newEnd);
+}
+
+function brushPointerUp(e) {
+  if (!brush.dragging) return;
+  brush.dragging = null;
+  try { brush.svg.releasePointerCapture(e.pointerId); } catch (err) { /* ok */ }
 }
 
 function setupRangeControl() {
