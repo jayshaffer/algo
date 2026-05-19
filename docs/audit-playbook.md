@@ -640,9 +640,9 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
     AND occurred_at > now() - interval '7 days'
   GROUP BY 1;
   ```
-- **finding_when:** ">= 3 distinct ideation sessions in last 7d AND any tool in EXPECTED_IDEATION_TOOLS (`get_portfolio_state`, `get_active_theses`, `get_news_signals`, `get_signal_attribution`, `get_recent_playbooks`, `write_playbook`) has zero invocations"
+- **finding_when:** ">= 3 distinct ideation sessions in last 7d AND any tool in EXPECTED_IDEATION_TOOLS (`get_news_signals`, `get_recent_playbooks`, `write_playbook`) has zero invocations"
 - **body_template:** "One or more tools in the expected ideation toolset went unused across the last 7 days of ideation sessions. Either prompt drift dropped them or the loop is silently skipping them - both are regressions. Missing: {missing_tools}. Observed counts: {observed_counts}."
-- **suggested_fix:** "In `v2/ideation_claude.py`, confirm each tool in `EXPECTED_IDEATION_TOOLS` (`get_portfolio_state`, `get_active_theses`, `get_news_signals`, `get_signal_attribution`, `get_recent_playbooks`, `write_playbook`) is still registered and referenced in the strategist prompt. Check for recent commits that may have dropped a tool definition."
+- **suggested_fix:** "In `v2/ideation_claude.py`, confirm each tool in `EXPECTED_IDEATION_TOOLS` (`get_news_signals`, `get_recent_playbooks`, `write_playbook`) is still registered and referenced in the strategist prompt. Check for recent commits that may have dropped a tool definition. Note: `get_portfolio_state`, `get_active_theses`, and `get_signal_attribution` are deliberately NOT in EXPECTED_IDEATION_TOOLS — they are pre-seeded into the strategist's initial context by `_build_pre_seeded_context()` in `v2/ideation_claude.py` rather than exposed as LLM-callable tools, so they will never appear as `tool_invocation` events even when wired correctly."
 
 ### EXECUTOR_TRUNCATION_RATE
 
