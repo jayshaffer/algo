@@ -334,41 +334,6 @@ def compute_performance_stats(*, snapshots: list[dict],
     }
 
 
-def render_sparkline_svg(snapshots: list[dict]) -> str:
-    """Render the last 90 days of equity as an inline SVG polyline.
-
-    Returns "" when fewer than 7 snapshots are supplied — the homepage
-    template hides the sparkline in that case.
-    """
-    if not snapshots or len(snapshots) < 7:
-        return ""
-
-    series = [float(s["value"]) for s in snapshots[-90:]]
-    n = len(series)
-    lo, hi = min(series), max(series)
-    span = hi - lo if hi > lo else 1.0
-    flat = (hi == lo)
-
-    width, height, pad_y = 400.0, 60.0, 5.0
-    plot_h = height - 2 * pad_y
-
-    points = []
-    for i, v in enumerate(series):
-        x = (i / (n - 1)) * width if n > 1 else width / 2
-        if flat:
-            y = height / 2
-        else:
-            y = pad_y + (1.0 - (v - lo) / span) * plot_h
-        points.append(f"{x:.1f},{y:.1f}")
-
-    return (
-        f'<svg class="sparkline" viewBox="0 0 400 60" '
-        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
-        f'<polyline points="{" ".join(points)}" />'
-        f'</svg>'
-    )
-
-
 def gather_dashboard_data(session_date: date, net_deposits: Decimal | None = None) -> dict:
     """Gather all dashboard data in a single DB connection.
 
@@ -1534,12 +1499,6 @@ def _select_latest_memo(memos: list[dict]) -> dict | None:
 def emit_homepage(data: dict, deploy_dir: str, base_url: str) -> None:
     """Render and write index.html — replaces the old static index.html copy."""
     summary = data.get("summary") or {}
-    snapshots = data.get("snapshots") or []
-    sparkline_input = [
-        {"value": s.get("twr_value", s.get("portfolio_value", s.get("value")))}
-        for s in snapshots
-    ]
-    sparkline = render_sparkline_svg(sparkline_input)
     today_move = _select_today_move(
         data.get("decisions") or [],
         portfolio_value=summary.get("portfolio_value"),
@@ -1554,7 +1513,6 @@ def emit_homepage(data: dict, deploy_dir: str, base_url: str) -> None:
     html = render_homepage(
         summary=summary,
         theses=theses,
-        sparkline_svg=sparkline,
         today_move=today_move,
         attribution_top=attribution_top,
         worst_loser=worst_loser,

@@ -70,7 +70,13 @@ async function fetchJSON(file) {
 
 var DEFAULT_RANGE_DAYS = 7;
 
-var perfData = { snapshots: null, benchmark: null, decisions: null };
+var perfData = {
+  snapshots: null,
+  benchmark: null,
+  decisions: null,
+  rangeStart: null,  // YYYY-MM-DD — inclusive lower bound
+  rangeEnd: null,    // YYYY-MM-DD — inclusive upper bound
+};
 var chartInstances = {};  // canvasId -> Chart instance
 
 function destroyCharts() {
@@ -86,9 +92,14 @@ function latestSnapshotDate(snapshots) {
   return normalizeDate(snapshots[snapshots.length - 1].date);
 }
 
+function firstSnapshotDate(snapshots) {
+  if (!snapshots || snapshots.length === 0) return null;
+  return normalizeDate(snapshots[0].date);
+}
+
 function cutoffDate(anchorDate, days) {
   // anchorDate is a YYYY-MM-DD string. Subtract `days` calendar days
-  // and return another YYYY-MM-DD string. Filtering uses `>= cutoff`.
+  // and return another YYYY-MM-DD string.
   //
   // All UTC (the "T00:00:00Z" suffix and the getUTCDate/setUTCDate pair)
   // to keep date-only arithmetic timezone-free — never simplify to
@@ -99,34 +110,283 @@ function cutoffDate(anchorDate, days) {
   return d.toISOString().slice(0, 10);
 }
 
-function filterByRange(rows, dateKey, days, anchor) {
+function filterByDateWindow(rows, dateKey, start, end) {
+  // start/end inclusive; both required. Used by applyRange.
   if (!rows) return rows;
-  if (days == null) return rows;  // "All"
-  if (!anchor) return rows;
-  var cutoff = cutoffDate(anchor, days);
-  return rows.filter(function (r) { return normalizeDate(r[dateKey]) >= cutoff; });
+  if (!start || !end) return rows;
+  return rows.filter(function (r) {
+    var d = normalizeDate(r[dateKey]);
+    return d >= start && d <= end;
+  });
 }
 
-function applyRange(days) {
-  destroyCharts();
-  var snapshots = perfData.snapshots;
-  var benchmark = perfData.benchmark;
-  var decisions = perfData.decisions;
+function presetToWindow(preset) {
+  // preset: "7" | "30" | "365" | "all". Returns { start, end, preset }.
+  var anchor = latestSnapshotDate(perfData.snapshots);
+  if (!anchor) return { start: null, end: null, preset: preset };
+  if (preset === "all") {
+    return { start: firstSnapshotDate(perfData.snapshots), end: anchor, preset: "all" };
+  }
+  var days = parseInt(preset, 10);
+  return { start: cutoffDate(anchor, days), end: anchor, preset: preset };
+}
 
-  var anchor = latestSnapshotDate(snapshots);
-  var filteredSnapshots = filterByRange(snapshots, "date", days, anchor);
-  var filteredBenchmark = filterByRange(benchmark, "date", days, anchor);
-  var filteredDecisions = filterByRange(decisions, "date", days, anchor);
-
-  renderEquityCurve(filteredSnapshots, filteredDecisions);
-  renderPnlChart(filteredSnapshots, filteredDecisions);
-  renderBenchmark(filteredSnapshots, filteredBenchmark, filteredDecisions);
-
+function updatePresetActiveState(preset) {
+  // preset === null when the user dragged the brush — clear all highlights.
   document.querySelectorAll(".range-btn").forEach(function (btn) {
-    var isActive = btn.getAttribute("data-range") === String(days == null ? "all" : days);
+    var isActive = preset != null && btn.getAttribute("data-range") === String(preset);
     btn.classList.toggle("is-active", isActive);
     btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
+}
+
+function applyRange(spec) {
+  // spec: { start: YYYY-MM-DD, end: YYYY-MM-DD, preset: "7"|"30"|"365"|"all"|null }
+  perfData.rangeStart = spec.start;
+  perfData.rangeEnd = spec.end;
+  destroyCharts();
+  var filteredSnapshots = filterByDateWindow(perfData.snapshots, "date", spec.start, spec.end);
+  var filteredBenchmark = filterByDateWindow(perfData.benchmark, "date", spec.start, spec.end);
+  var filteredDecisions = filterByDateWindow(perfData.decisions, "date", spec.start, spec.end);
+  renderEquityCurve(filteredSnapshots, filteredDecisions);
+  renderPnlChart(filteredSnapshots, filteredDecisions);
+  renderBenchmark(filteredSnapshots, filteredBenchmark, filteredDecisions);
+  updatePresetActiveState(spec.preset);
+  updateBrushPosition(spec.start, spec.end);
+}
+
+// === Brush strip ===
+
+var brush = {
+  el: null,           // .range-brush element
+  svg: null,          // child <svg>
+  overviewPath: null, // <path> showing the full timeline polyline
+  bar: null,          // <rect> highlighting the selected window
+  leftHandle: null,   // <rect> at the left edge
+  rightHandle: null,  // <rect> at the right edge
+  leftHit: null,      // wider invisible <rect> for easier grabbing
+  rightHit: null,
+  width: 0,           // measured pixel width of the svg
+  domain: null,       // { first: "YYYY-MM-DD", last: "YYYY-MM-DD" }
+  dragging: null,        // null | "left" | "right" | "bar"
+  dragBarStartFrac: 0,
+  dragBarWidthFrac: 0,
+  dragPointerStartFrac: 0,
+  pendingFrame: null,
+};
+
+var SVG_NS = "http://www.w3.org/2000/svg";
+var BRUSH_HANDLE_WIDTH = 6;
+var BRUSH_HANDLE_HIT_WIDTH = 18;
+
+function dateToFraction(date) {
+  // Linear interpolation between brush.domain.first (0) and .last (1).
+  if (!brush.domain) return 0;
+  var first = new Date(brush.domain.first + "T00:00:00Z").getTime();
+  var last = new Date(brush.domain.last + "T00:00:00Z").getTime();
+  var d = new Date(date + "T00:00:00Z").getTime();
+  if (last === first) return 0;
+  var f = (d - first) / (last - first);
+  return Math.max(0, Math.min(1, f));
+}
+
+function fractionToDate(fraction) {
+  if (!brush.domain) return null;
+  var first = new Date(brush.domain.first + "T00:00:00Z").getTime();
+  var last = new Date(brush.domain.last + "T00:00:00Z").getTime();
+  var t = first + (last - first) * Math.max(0, Math.min(1, fraction));
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+function renderBrushOverview() {
+  // One polyline of portfolio_value across all snapshots, normalized
+  // into the SVG's 0..100 y-coordinate space (preserveAspectRatio:none
+  // stretches to the strip height).
+  var snapshots = perfData.snapshots;
+  if (!snapshots || snapshots.length === 0) return;
+  var values = snapshots.map(function (s) { return s.portfolio_value; });
+  var min = Math.min.apply(null, values);
+  var max = Math.max.apply(null, values);
+  var range = max - min || 1;
+  var pts = snapshots.map(function (s) {
+    var x = dateToFraction(normalizeDate(s.date)) * 100;
+    var y = 100 - ((s.portfolio_value - min) / range) * 80 - 10;  // 10% padding top/bottom
+    return x.toFixed(2) + "," + y.toFixed(2);
+  });
+  brush.overviewPath.setAttribute("d", "M " + pts.join(" L "));
+}
+
+function initBrush() {
+  brush.el = document.querySelector(".range-brush");
+  if (!brush.el) return;  // no brush container (e.g. activity page)
+  if (!perfData.snapshots || perfData.snapshots.length === 0) return;
+
+  brush.svg = brush.el.querySelector(".range-brush-svg");
+  brush.svg.setAttribute("viewBox", "0 0 100 100");
+  brush.domain = {
+    first: firstSnapshotDate(perfData.snapshots),
+    last: latestSnapshotDate(perfData.snapshots),
+  };
+
+  // Build SVG children in z-order (back to front).
+  brush.overviewPath = document.createElementNS(SVG_NS, "path");
+  brush.overviewPath.setAttribute("class", "range-brush-overview");
+  brush.overviewPath.setAttribute("vector-effect", "non-scaling-stroke");
+  brush.svg.appendChild(brush.overviewPath);
+
+  brush.bar = document.createElementNS(SVG_NS, "rect");
+  brush.bar.setAttribute("class", "range-brush-bar");
+  brush.bar.setAttribute("y", "0");
+  brush.bar.setAttribute("height", "100");
+  brush.bar.setAttribute("data-role", "bar");
+  brush.svg.appendChild(brush.bar);
+
+  function makeHandle(role, visibleClass, hitClass) {
+    var visible = document.createElementNS(SVG_NS, "rect");
+    visible.setAttribute("class", visibleClass);
+    visible.setAttribute("y", "0");
+    visible.setAttribute("height", "100");
+    visible.setAttribute("width", String(BRUSH_HANDLE_WIDTH / 2));
+    visible.setAttribute("data-role", role + "-handle");
+    brush.svg.appendChild(visible);
+
+    var hit = document.createElementNS(SVG_NS, "rect");
+    hit.setAttribute("class", hitClass);
+    hit.setAttribute("y", "0");
+    hit.setAttribute("height", "100");
+    hit.setAttribute("width", String(BRUSH_HANDLE_HIT_WIDTH / 2));
+    hit.setAttribute("data-role", role + "-hit");
+    brush.svg.appendChild(hit);
+    return { visible: visible, hit: hit };
+  }
+
+  var left = makeHandle("left", "range-brush-handle", "range-brush-handle-hit");
+  brush.leftHandle = left.visible;
+  brush.leftHit = left.hit;
+  var right = makeHandle("right", "range-brush-handle", "range-brush-handle-hit");
+  brush.rightHandle = right.visible;
+  brush.rightHit = right.hit;
+
+  renderBrushOverview();
+  brush.svg.addEventListener("pointerdown", brushPointerDown);
+  brush.svg.addEventListener("pointermove", brushPointerMove);
+  brush.svg.addEventListener("pointerup", brushPointerUp);
+  brush.svg.addEventListener("pointercancel", brushPointerUp);
+  window.addEventListener("resize", function () {
+    // No DOM measurement needed — viewBox is 0..100 so the SVG scales.
+    // Kept as a hook in case future code needs pixel measurements.
+  });
+}
+
+function updateBrushPosition(start, end) {
+  // Move handles and bar to reflect the current window. No-op if the
+  // brush hasn't been initialized (e.g. on the activity page).
+  if (!brush.svg || !brush.domain || !start || !end) return;
+  var leftFrac = dateToFraction(start) * 100;
+  var rightFrac = dateToFraction(end) * 100;
+  brush.bar.setAttribute("x", String(leftFrac));
+  brush.bar.setAttribute("width", String(Math.max(0, rightFrac - leftFrac)));
+  var halfVis = BRUSH_HANDLE_WIDTH / 2 / 2;
+  var halfHit = BRUSH_HANDLE_HIT_WIDTH / 2 / 2;
+  brush.leftHandle.setAttribute("x", String(leftFrac - halfVis));
+  brush.leftHit.setAttribute("x", String(leftFrac - halfHit));
+  brush.rightHandle.setAttribute("x", String(rightFrac - halfVis));
+  brush.rightHit.setAttribute("x", String(rightFrac - halfHit));
+}
+
+function pointerXToFraction(clientX) {
+  // Convert a pointer's clientX to a fraction (0..1) of the brush width
+  // using the live bounding rect (resilient to scroll, resize, zoom).
+  if (!brush.el) return 0;
+  var rect = brush.el.getBoundingClientRect();
+  if (rect.width === 0) return 0;
+  var f = (clientX - rect.left) / rect.width;
+  return Math.max(0, Math.min(1, f));
+}
+
+function currentRangeFractions() {
+  // Read current bar position back from the DOM — single source of truth
+  // during a drag.
+  var leftFrac = parseFloat(brush.bar.getAttribute("x") || "0") / 100;
+  var widthFrac = parseFloat(brush.bar.getAttribute("width") || "0") / 100;
+  return { leftFrac: leftFrac, rightFrac: leftFrac + widthFrac };
+}
+
+function scheduleBrushApply(start, end) {
+  // rAF-throttle: at most one applyRange per animation frame.
+  if (brush.pendingFrame != null) return;
+  brush.pendingFrame = requestAnimationFrame(function () {
+    brush.pendingFrame = null;
+    applyRange({ start: start, end: end, preset: null });
+  });
+}
+
+function brushPointerDown(e) {
+  if (!brush.svg) return;
+  var target = e.target;
+  var role = target && target.getAttribute && target.getAttribute("data-role");
+  var frac = pointerXToFraction(e.clientX);
+  var cur = currentRangeFractions();
+
+  if (role === "left-hit" || role === "left-handle") {
+    brush.dragging = "left";
+  } else if (role === "right-hit" || role === "right-handle") {
+    brush.dragging = "right";
+  } else if (role === "bar") {
+    brush.dragging = "bar";
+    brush.dragBarStartFrac = cur.leftFrac;
+    brush.dragBarWidthFrac = cur.rightFrac - cur.leftFrac;
+    brush.dragPointerStartFrac = frac;
+  } else {
+    // Clicked empty area: jump the nearest endpoint to the cursor.
+    var distLeft = Math.abs(frac - cur.leftFrac);
+    var distRight = Math.abs(frac - cur.rightFrac);
+    if (distLeft < distRight) {
+      var newStart = fractionToDate(Math.min(frac, cur.rightFrac));
+      var endDate = fractionToDate(cur.rightFrac);
+      scheduleBrushApply(newStart, endDate);
+    } else {
+      var startDate = fractionToDate(cur.leftFrac);
+      var newEnd = fractionToDate(Math.max(frac, cur.leftFrac));
+      scheduleBrushApply(startDate, newEnd);
+    }
+    return;
+  }
+  e.preventDefault();
+  // Capture future move/up events so the drag continues even if the
+  // cursor leaves the strip.
+  try { brush.svg.setPointerCapture(e.pointerId); } catch (err) { /* old browsers */ }
+}
+
+function brushPointerMove(e) {
+  if (!brush.dragging) return;
+  var frac = pointerXToFraction(e.clientX);
+  var cur = currentRangeFractions();
+  var newStart = brush.domain.first;
+  var newEnd = brush.domain.last;
+
+  if (brush.dragging === "left") {
+    newStart = fractionToDate(Math.min(frac, cur.rightFrac));
+    newEnd = fractionToDate(cur.rightFrac);
+  } else if (brush.dragging === "right") {
+    newStart = fractionToDate(cur.leftFrac);
+    newEnd = fractionToDate(Math.max(frac, cur.leftFrac));
+  } else if (brush.dragging === "bar") {
+    var delta = frac - brush.dragPointerStartFrac;
+    var newLeft = brush.dragBarStartFrac + delta;
+    var width = brush.dragBarWidthFrac;
+    // Clamp so the window stays inside [0, 1].
+    newLeft = Math.max(0, Math.min(1 - width, newLeft));
+    newStart = fractionToDate(newLeft);
+    newEnd = fractionToDate(newLeft + width);
+  }
+  scheduleBrushApply(newStart, newEnd);
+}
+
+function brushPointerUp(e) {
+  if (!brush.dragging) return;
+  brush.dragging = null;
+  try { brush.svg.releasePointerCapture(e.pointerId); } catch (err) { /* ok */ }
 }
 
 function setupRangeControl() {
@@ -136,8 +396,7 @@ function setupRangeControl() {
     var btn = e.target.closest(".range-btn");
     if (!btn) return;
     var raw = btn.getAttribute("data-range");
-    var days = raw === "all" ? null : parseInt(raw, 10);
-    applyRange(days);
+    applyRange(presetToWindow(raw));
   });
 }
 
@@ -590,7 +849,8 @@ function initPerformancePage() {
     perfData.benchmark = parts[1];
     perfData.decisions = parts[2];
     setupRangeControl();
-    applyRange(DEFAULT_RANGE_DAYS);
+    initBrush();
+    applyRange(presetToWindow(String(DEFAULT_RANGE_DAYS)));
   }).catch(function (err) {
     console.error("Failed to load performance data:", err);
   });
