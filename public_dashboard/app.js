@@ -70,7 +70,13 @@ async function fetchJSON(file) {
 
 var DEFAULT_RANGE_DAYS = 7;
 
-var perfData = { snapshots: null, benchmark: null, decisions: null };
+var perfData = {
+  snapshots: null,
+  benchmark: null,
+  decisions: null,
+  rangeStart: null,  // YYYY-MM-DD — inclusive lower bound
+  rangeEnd: null,    // YYYY-MM-DD — inclusive upper bound
+};
 var chartInstances = {};  // canvasId -> Chart instance
 
 function destroyCharts() {
@@ -86,9 +92,14 @@ function latestSnapshotDate(snapshots) {
   return normalizeDate(snapshots[snapshots.length - 1].date);
 }
 
+function firstSnapshotDate(snapshots) {
+  if (!snapshots || snapshots.length === 0) return null;
+  return normalizeDate(snapshots[0].date);
+}
+
 function cutoffDate(anchorDate, days) {
   // anchorDate is a YYYY-MM-DD string. Subtract `days` calendar days
-  // and return another YYYY-MM-DD string. Filtering uses `>= cutoff`.
+  // and return another YYYY-MM-DD string.
   //
   // All UTC (the "T00:00:00Z" suffix and the getUTCDate/setUTCDate pair)
   // to keep date-only arithmetic timezone-free — never simplify to
@@ -99,35 +110,55 @@ function cutoffDate(anchorDate, days) {
   return d.toISOString().slice(0, 10);
 }
 
-function filterByRange(rows, dateKey, days, anchor) {
+function filterByDateWindow(rows, dateKey, start, end) {
+  // start/end inclusive; both required. Used by applyRange.
   if (!rows) return rows;
-  if (days == null) return rows;  // "All"
-  if (!anchor) return rows;
-  var cutoff = cutoffDate(anchor, days);
-  return rows.filter(function (r) { return normalizeDate(r[dateKey]) >= cutoff; });
+  if (!start || !end) return rows;
+  return rows.filter(function (r) {
+    var d = normalizeDate(r[dateKey]);
+    return d >= start && d <= end;
+  });
 }
 
-function applyRange(days) {
-  destroyCharts();
-  var snapshots = perfData.snapshots;
-  var benchmark = perfData.benchmark;
-  var decisions = perfData.decisions;
+function presetToWindow(preset) {
+  // preset: "7" | "30" | "365" | "all". Returns { start, end, preset }.
+  var anchor = latestSnapshotDate(perfData.snapshots);
+  if (!anchor) return { start: null, end: null, preset: preset };
+  if (preset === "all") {
+    return { start: firstSnapshotDate(perfData.snapshots), end: anchor, preset: "all" };
+  }
+  var days = parseInt(preset, 10);
+  return { start: cutoffDate(anchor, days), end: anchor, preset: preset };
+}
 
-  var anchor = latestSnapshotDate(snapshots);
-  var filteredSnapshots = filterByRange(snapshots, "date", days, anchor);
-  var filteredBenchmark = filterByRange(benchmark, "date", days, anchor);
-  var filteredDecisions = filterByRange(decisions, "date", days, anchor);
-
-  renderEquityCurve(filteredSnapshots, filteredDecisions);
-  renderPnlChart(filteredSnapshots, filteredDecisions);
-  renderBenchmark(filteredSnapshots, filteredBenchmark, filteredDecisions);
-
+function updatePresetActiveState(preset) {
+  // preset === null when the user dragged the brush — clear all highlights.
   document.querySelectorAll(".range-btn").forEach(function (btn) {
-    var isActive = btn.getAttribute("data-range") === String(days == null ? "all" : days);
+    var isActive = preset != null && btn.getAttribute("data-range") === String(preset);
     btn.classList.toggle("is-active", isActive);
     btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 }
+
+function applyRange(spec) {
+  // spec: { start: YYYY-MM-DD, end: YYYY-MM-DD, preset: "7"|"30"|"365"|"all"|null }
+  perfData.rangeStart = spec.start;
+  perfData.rangeEnd = spec.end;
+  destroyCharts();
+  var filteredSnapshots = filterByDateWindow(perfData.snapshots, "date", spec.start, spec.end);
+  var filteredBenchmark = filterByDateWindow(perfData.benchmark, "date", spec.start, spec.end);
+  var filteredDecisions = filterByDateWindow(perfData.decisions, "date", spec.start, spec.end);
+  renderEquityCurve(filteredSnapshots, filteredDecisions);
+  renderPnlChart(filteredSnapshots, filteredDecisions);
+  renderBenchmark(filteredSnapshots, filteredBenchmark, filteredDecisions);
+  updatePresetActiveState(spec.preset);
+  updateBrushPosition(spec.start, spec.end);
+}
+
+// Brush stub — filled in by Task 4. Defined here so applyRange can call
+// it during this refactor without crashing.
+function updateBrushPosition(_start, _end) { /* Task 4 */ }
+function initBrush() { /* Task 4 */ }
 
 function setupRangeControl() {
   var control = document.querySelector(".range-control");
@@ -136,8 +167,7 @@ function setupRangeControl() {
     var btn = e.target.closest(".range-btn");
     if (!btn) return;
     var raw = btn.getAttribute("data-range");
-    var days = raw === "all" ? null : parseInt(raw, 10);
-    applyRange(days);
+    applyRange(presetToWindow(raw));
   });
 }
 
@@ -590,7 +620,8 @@ function initPerformancePage() {
     perfData.benchmark = parts[1];
     perfData.decisions = parts[2];
     setupRangeControl();
-    applyRange(DEFAULT_RANGE_DAYS);
+    initBrush();
+    applyRange(presetToWindow(String(DEFAULT_RANGE_DAYS)));
   }).catch(function (err) {
     console.error("Failed to load performance data:", err);
   });
