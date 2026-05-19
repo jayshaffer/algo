@@ -129,6 +129,44 @@ The `$POSTGRES_USER` and `$POSTGRES_DB` come from `.env` and `.env.paper`; they'
 - **body_template:** "Decisions older than 30 trading days have NULL outcome_30d or benchmark_30d. Auto-fix invokes `backfill_decision_outcomes` for each. Affected decision_ids: {decision_ids}. Note: severity escalates to critical when count > 25 (warn otherwise); fix path is the same."
 - **suggested_fix:** "For each decision_id in the finding, run `docker compose exec -T trading python -m v2.backfill --decision-id <ID>`. If this recurs frequently, promote to a Taskfile target."
 
+### INVALID_DECISION_RATE
+
+- **env:** prod
+- **severity:** warn
+- **category:** quality
+- **worktype:** code
+- **topic_slug:** invalid-decision-rate
+- **title_template:** "{invalid} of {total} decision(s) in last 14d resolved to action='invalid'"
+- **sql:**
+  ```sql
+  WITH bucketed AS (
+    SELECT
+      id,
+      action,
+      CASE
+        WHEN reasoning ~ '\[SKIPPED: intent .* resolved to 0 shares' THEN 'zero_shares'
+        WHEN reasoning ~ '\[REJECTED: no price available\]'           THEN 'no_price'
+        WHEN action = 'invalid'                                        THEN 'other'
+        ELSE NULL
+      END AS bucket
+    FROM decisions
+    WHERE date > now()::date - 14
+  )
+  SELECT
+    COUNT(*)                                            AS total,
+    COUNT(*) FILTER (WHERE action='invalid')            AS invalid,
+    COUNT(*) FILTER (WHERE bucket='zero_shares')        AS zero_shares,
+    COUNT(*) FILTER (WHERE bucket='no_price')           AS no_price,
+    COUNT(*) FILTER (WHERE bucket='other')              AS other_invalid,
+    COALESCE(array_to_string(
+      array_agg(id ORDER BY id) FILTER (WHERE action='invalid'),
+      ','), '')                                          AS invalid_ids
+  FROM bucketed;
+  ```
+- **finding_when:** "total >= 10 AND invalid/total >= 0.10"
+- **body_template:** "Executor reached a final answer but the runtime couldn't translate it into an order, leaving decisions with action='invalid'. These burn a full executor pass without producing an order, signal_attribution sample, or learning loop signal. total={total}, invalid={invalid}, rate={rate}. Bucketed by reasoning prefix: zero_shares={zero_shares} (intent resolved to 0 shares against the held position), no_price={no_price} (no price available for execution), other={other_invalid}. Affected invalid_ids: {invalid_ids}. Escalates to critical when invalid/total >= 0.25 (warn otherwise). ALGO-13 and ALGO-14 covered prior shapes; this check exists so future shapes route through the standard lifecycle instead of staying silent."
+- **suggested_fix:** "Group the offending decisions by bucket and triage. For `zero_shares` cases, the strategist is emitting exit/add intents that resolve to zero given the current held quantity — either tighten the playbook write path in `v2/tools.py::tool_write_playbook` to validate magnitudes against the live held position before persisting (see ALGO-18 precedent), or have the executor short-circuit to `hold` on resolution-to-zero in `v2/trader.py`. For `no_price` cases, the executor lacks a tradable price at decision time — confirm the upstream price plumbing in `v2/context.py` is populated for every ticker in the playbook before the executor runs. For `other` cases, inspect the raw `reasoning` of the affected ids to identify the new failure shape and add a bucket regex above."
+
 ### INVALID_ATTRIBUTION_CATEGORY
 
 - **env:** both
