@@ -544,6 +544,30 @@ def update_playbook_action_status(action_id: int, status: str):
         cur.execute("UPDATE playbook_actions SET status = %s WHERE id = %s", (status, action_id))
 
 
+def expire_stale_playbook_actions(today) -> int:
+    """Mark pending playbook_actions from playbooks dated before `today` as 'expired'.
+
+    Closes a lifecycle hole: prior-day pending actions had no transition path
+    (executor only updates status on submit/reject/fail, strategist only wipes
+    today's actions). Idempotent — running twice is a no-op.
+
+    Returns the number of rows updated.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_actions
+               SET status = 'expired'
+             WHERE status = 'pending'
+               AND playbook_id IN (
+                   SELECT id FROM playbooks WHERE date < %s
+               )
+            """,
+            (today,),
+        )
+        return cur.rowcount
+
+
 def get_pending_playbook_actions(playbook_id: int) -> list[dict]:
     """Get pending (not yet executed) actions for a playbook."""
     with get_cursor() as cur:
