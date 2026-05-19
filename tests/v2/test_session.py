@@ -1357,3 +1357,59 @@ class TestExecutorStageErrors:
         failed_stages = [c.args[1] for c in mock_fail.call_args_list]
         assert "executor" not in completed
         assert "executor" in failed_stages
+
+
+class TestPlaybookActionExpiry:
+    def test_sweep_runs_before_any_stage(self):
+        """Stale pending playbook_actions should be expired before stages dispatch."""
+        call_order = []
+
+        with patch("v2.session.expire_stale_playbook_actions") as mock_expire, \
+             patch("v2.session.run_backfill") as mock_backfill, \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop") as mock_strat, \
+             patch("v2.session.run_trading_session") as mock_trade:
+
+            mock_expire.side_effect = lambda *a, **kw: call_order.append("expire") or 0
+            mock_backfill.side_effect = lambda **kw: call_order.append("backfill")
+            mock_pipeline.side_effect = lambda **kw: call_order.append("pipeline")
+            mock_strat.side_effect = lambda **kw: call_order.append("strategist")
+            mock_trade.side_effect = lambda **kw: call_order.append("trader")
+
+            run_session(dry_run=False)
+
+        assert call_order, "no stages ran"
+        assert call_order[0] == "expire", f"expire must run first, got {call_order}"
+
+    def test_sweep_receives_market_date(self):
+        """Sweep should be called with the same canonical date used elsewhere."""
+        market_date = date(2026, 5, 19)
+        with patch("v2.session.current_market_date", return_value=market_date), \
+             patch("v2.session.expire_stale_playbook_actions") as mock_expire, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"):
+
+            run_session(dry_run=False)
+
+        mock_expire.assert_called_once_with(market_date)
+
+    def test_sweep_failure_does_not_block_session(self):
+        """If the sweep itself raises, the session still runs (data-hygiene only)."""
+        with patch("v2.session.expire_stale_playbook_actions", side_effect=Exception("DB blip")), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session") as mock_trade:
+
+            result = run_session(dry_run=False)
+
+        assert mock_trade.called, "trader stage should still run after sweep failure"
+        assert result.idempotent_skip is None
