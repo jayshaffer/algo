@@ -155,10 +155,135 @@ function applyRange(spec) {
   updateBrushPosition(spec.start, spec.end);
 }
 
-// Brush stub — filled in by Task 4. Defined here so applyRange can call
-// it during this refactor without crashing.
-function updateBrushPosition(_start, _end) { /* Task 4 */ }
-function initBrush() { /* Task 4 */ }
+// === Brush strip ===
+
+var brush = {
+  el: null,           // .range-brush element
+  svg: null,          // child <svg>
+  overviewPath: null, // <path> showing the full timeline polyline
+  bar: null,          // <rect> highlighting the selected window
+  leftHandle: null,   // <rect> at the left edge
+  rightHandle: null,  // <rect> at the right edge
+  leftHit: null,      // wider invisible <rect> for easier grabbing
+  rightHit: null,
+  width: 0,           // measured pixel width of the svg
+  domain: null,       // { first: "YYYY-MM-DD", last: "YYYY-MM-DD" }
+};
+
+var SVG_NS = "http://www.w3.org/2000/svg";
+var BRUSH_HANDLE_WIDTH = 6;
+var BRUSH_HANDLE_HIT_WIDTH = 18;
+
+function dateToFraction(date) {
+  // Linear interpolation between brush.domain.first (0) and .last (1).
+  if (!brush.domain) return 0;
+  var first = new Date(brush.domain.first + "T00:00:00Z").getTime();
+  var last = new Date(brush.domain.last + "T00:00:00Z").getTime();
+  var d = new Date(date + "T00:00:00Z").getTime();
+  if (last === first) return 0;
+  var f = (d - first) / (last - first);
+  return Math.max(0, Math.min(1, f));
+}
+
+function fractionToDate(fraction) {
+  if (!brush.domain) return null;
+  var first = new Date(brush.domain.first + "T00:00:00Z").getTime();
+  var last = new Date(brush.domain.last + "T00:00:00Z").getTime();
+  var t = first + (last - first) * Math.max(0, Math.min(1, fraction));
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+function renderBrushOverview() {
+  // One polyline of portfolio_value across all snapshots, normalized
+  // into the SVG's 0..100 y-coordinate space (preserveAspectRatio:none
+  // stretches to the strip height).
+  var snapshots = perfData.snapshots;
+  if (!snapshots || snapshots.length === 0) return;
+  var values = snapshots.map(function (s) { return s.portfolio_value; });
+  var min = Math.min.apply(null, values);
+  var max = Math.max.apply(null, values);
+  var range = max - min || 1;
+  var pts = snapshots.map(function (s) {
+    var x = dateToFraction(normalizeDate(s.date)) * 100;
+    var y = 100 - ((s.portfolio_value - min) / range) * 80 - 10;  // 10% padding top/bottom
+    return x.toFixed(2) + "," + y.toFixed(2);
+  });
+  brush.overviewPath.setAttribute("d", "M " + pts.join(" L "));
+}
+
+function initBrush() {
+  brush.el = document.querySelector(".range-brush");
+  if (!brush.el) return;  // no brush container (e.g. activity page)
+  if (!perfData.snapshots || perfData.snapshots.length === 0) return;
+
+  brush.svg = brush.el.querySelector(".range-brush-svg");
+  brush.svg.setAttribute("viewBox", "0 0 100 100");
+  brush.domain = {
+    first: firstSnapshotDate(perfData.snapshots),
+    last: latestSnapshotDate(perfData.snapshots),
+  };
+
+  // Build SVG children in z-order (back to front).
+  brush.overviewPath = document.createElementNS(SVG_NS, "path");
+  brush.overviewPath.setAttribute("class", "range-brush-overview");
+  brush.overviewPath.setAttribute("vector-effect", "non-scaling-stroke");
+  brush.svg.appendChild(brush.overviewPath);
+
+  brush.bar = document.createElementNS(SVG_NS, "rect");
+  brush.bar.setAttribute("class", "range-brush-bar");
+  brush.bar.setAttribute("y", "0");
+  brush.bar.setAttribute("height", "100");
+  brush.bar.setAttribute("data-role", "bar");
+  brush.svg.appendChild(brush.bar);
+
+  function makeHandle(role, visibleClass, hitClass) {
+    var visible = document.createElementNS(SVG_NS, "rect");
+    visible.setAttribute("class", visibleClass);
+    visible.setAttribute("y", "0");
+    visible.setAttribute("height", "100");
+    visible.setAttribute("width", String(BRUSH_HANDLE_WIDTH / 2));
+    visible.setAttribute("data-role", role + "-handle");
+    brush.svg.appendChild(visible);
+
+    var hit = document.createElementNS(SVG_NS, "rect");
+    hit.setAttribute("class", hitClass);
+    hit.setAttribute("y", "0");
+    hit.setAttribute("height", "100");
+    hit.setAttribute("width", String(BRUSH_HANDLE_HIT_WIDTH / 2));
+    hit.setAttribute("data-role", role + "-hit");
+    brush.svg.appendChild(hit);
+    return { visible: visible, hit: hit };
+  }
+
+  var left = makeHandle("left", "range-brush-handle", "range-brush-handle-hit");
+  brush.leftHandle = left.visible;
+  brush.leftHit = left.hit;
+  var right = makeHandle("right", "range-brush-handle", "range-brush-handle-hit");
+  brush.rightHandle = right.visible;
+  brush.rightHit = right.hit;
+
+  renderBrushOverview();
+  window.addEventListener("resize", function () {
+    // No DOM measurement needed — viewBox is 0..100 so the SVG scales.
+    // Kept as a hook in case future code needs pixel measurements.
+  });
+}
+
+function updateBrushPosition(start, end) {
+  // Move handles and bar to reflect the current window. No-op if the
+  // brush hasn't been initialized (e.g. on the activity page).
+  if (!brush.svg || !brush.domain || !start || !end) return;
+  var leftFrac = dateToFraction(start) * 100;
+  var rightFrac = dateToFraction(end) * 100;
+  brush.bar.setAttribute("x", String(leftFrac));
+  brush.bar.setAttribute("width", String(Math.max(0, rightFrac - leftFrac)));
+  var halfVis = BRUSH_HANDLE_WIDTH / 2 / 2;
+  var halfHit = BRUSH_HANDLE_HIT_WIDTH / 2 / 2;
+  brush.leftHandle.setAttribute("x", String(leftFrac - halfVis));
+  brush.leftHit.setAttribute("x", String(leftFrac - halfHit));
+  brush.rightHandle.setAttribute("x", String(rightFrac - halfVis));
+  brush.rightHit.setAttribute("x", String(rightFrac - halfHit));
+}
 
 function setupRangeControl() {
   var control = document.querySelector(".range-control");
