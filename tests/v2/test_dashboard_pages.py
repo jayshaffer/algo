@@ -484,6 +484,18 @@ class TestRenderMistakesPage:
         assert 'data-page="mistakes"' in html
         assert 'class="active" href="/learning/"' in html
 
+    def test_does_not_render_range_brush(self):
+        """The brush only belongs where the three performance charts
+        live. Mistakes has retrospective tables, not charts."""
+        from v2.dashboard_pages import render_mistakes_page
+
+        html = render_mistakes_page(
+            closed_losers=self._losers(2),
+            retired_rules=self._retired(1),
+            base_url="https://example.com",
+        )
+        assert 'range-brush' not in html
+
 
 class TestRenderAttributionPage:
     def _attribution(self):
@@ -535,6 +547,17 @@ class TestRenderAttributionPage:
         )
         assert 'data-page="attribution"' in html
         assert 'class="active" href="/learning/"' in html
+
+    def test_does_not_render_range_brush(self):
+        """The brush only belongs where the three performance charts
+        live. Attribution has a signal-type table, not charts."""
+        from v2.dashboard_pages import render_attribution_page
+
+        html = render_attribution_page(
+            attribution=self._attribution(),
+            base_url="https://example.com",
+        )
+        assert 'range-brush' not in html
 
 
 from v2.dashboard_pages import _render_page_shell
