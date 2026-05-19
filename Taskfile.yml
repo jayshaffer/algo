@@ -27,15 +27,9 @@ tasks:
       - docker compose logs -f {{.CLI_ARGS}}
 
   docker:stop:session:
-    desc: Stop session services (trading, ollama); leave db + dashboard running
+    desc: Stop session services (trading); leave db + dashboard running
     cmds:
-      - docker compose stop trading ollama
-
-  setup:ollama:
-    desc: Pull Ollama models (run after first docker:up)
-    deps: [docker:up]
-    cmds:
-      - bash scripts/setup-ollama.sh
+      - docker compose stop trading
 
   # ---------------------------------------------------------------------------
   # Trading workflows
@@ -93,6 +87,12 @@ tasks:
     deps: [docker:up]
     cmds:
       - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
+
+  dashboard:publish:
+    desc: Publish the public dashboard to Cloudflare Pages (stage 5 only)
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -c "from v2.dashboard_publish import run_dashboard_stage; r = run_dashboard_stage(); print(r); raise SystemExit(0 if r.published or r.skipped else 1)"
 
   # ---------------------------------------------------------------------------
   # Paper trading
