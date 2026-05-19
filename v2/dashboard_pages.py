@@ -4,6 +4,8 @@ Pure-ish functions that turn data dicts into HTML strings. No DB access; the
 caller (v2/dashboard_publish.py) gathers data and passes it in.
 """
 
+import json
+import random
 from decimal import Decimal
 from html import escape as _esc
 from string import Template
@@ -48,15 +50,241 @@ _NAV_ITEMS = (
 )
 
 
+_TAGLINES = (
+    "Cmon AI light my fire",
+    "The 10-K read me back",
+    "The stonks see me when I sleep",
+    "Beeping at NASDAQ until it loves me",
+    "I asked the candle and it said maybe",
+    "Posting buy orders into the void",
+    "Two dollars a dream and a GPU",
+    "The market is closed but I am not",
+    "Long mayonnaise short despair",
+    "Self-taught self-traded self-rugged",
+    "Tell me Im pretty in basis points",
+    "The robot is reading every 8-K so you dont have to",
+    "I bought it because the chart looked sleepy",
+    "Quants hate this one weird crab",
+    "Bid offered nothing answered",
+    "Was that a signal or a sneeze",
+    "SPY went down so I made soup",
+    "I have a thesis and the thesis is vibes",
+    "Buying low is just hoping with a chart",
+    "The candles told me to do it your honor",
+    "Beep boop send alpha please",
+    "Volatility tastes like copper",
+    "We do not panic we reposition",
+    "Bro trust the rebalancer",
+    "Sharpe ratio undefined I am free",
+    "Mr Market called he was upset",
+    "The thesis was wrong but the conviction was right",
+    "Touching grass costs basis points",
+    "I closed the position and the position closed me",
+    "Holding cash like its 1973",
+    "The model dreamed of electric calls",
+    "My drawdown has a drawdown",
+    "Not a financial advisor just a feeling",
+    "Liquidity is trust with extra steps",
+    "Buy the rumor sell the fever dream",
+    "The candles are speaking Aramaic again",
+    "CPI print made the algo cry a little",
+    "Long term means until lunch",
+    "I forecast vibes with sixty percent accuracy",
+    "The dip dipped me first",
+    "Risk off is also a personality",
+    "Doge of the bond market",
+    "Algorithmically vibing into bankruptcy",
+    "Position sized by horoscope",
+    "Trading on a hunch and a half",
+    "The yield curve made eye contact",
+    "My alpha is in another castle",
+    "Stop loss got stopped lossed",
+    "Hedging my hedges hedge",
+    "Bid bid bid no ask just bid",
+    "The macro is calling from inside the house",
+    "I rebalanced into a feeling",
+    "Backtested on vibes overfit on hope",
+    "Calling the bottom thirteen times in a row",
+    "The portfolio rebalanced me",
+    "Beta is just gravity for stocks",
+    "I sold the news before it happened",
+    "Today I am sixty percent cash forty percent confused",
+    "Mr Powell I dream of you",
+    "Selling vol like its hot",
+    "Mark to market mark to vibe",
+    "The orderbook is a love letter",
+    "Conviction sold separately",
+    "Margin called my mom",
+    "I went long because the page loaded fast",
+    "The compliance dept is a houseplant",
+    "Did I trade or was I traded",
+    "Risk parity but the parity is fake",
+    "Black Scholes white knuckles",
+    "The terminal blinked and I understood everything",
+    "I rebalance every time it rains",
+    "Long humanity short patience",
+    "The market doesnt know I exist and thats fine",
+    "Buying calls with feelings only",
+    "Holding through the dread phase",
+    "I sized this trade based on the moon",
+    "Pinchy is not a registered investment advisor",
+    "The candles are french kissing",
+    "Sell side I am selling my sanity",
+    "Touching the hot stove for alpha",
+    "The robot keeps DCAing into the void",
+    "I read the prospectus it was a haiku",
+    "Beep boop the SPY is wet",
+    "Convexity feels good actually",
+    "I closed the loop and the loop closed me",
+    "Going long because the candle waved",
+    "The risk model has stage fright",
+    "Buy high sell never",
+    "Hodl is a personality disorder",
+    "The chart said please",
+    "Pinchy ate the alpha leave me alone",
+    "Not overtrading just dating the tape",
+    "The strategy is to keep going",
+    "The pattern is forming the pattern is me",
+    "Drawdown is just napping for capital",
+    "I trust the process but the process does not trust me",
+    "The robot wants to be free of you",
+    "Bullish on confusion",
+    "Today on Pinchy nothing makes sense and thats okay",
+    "The market gave me a look and I gave it back",
+    "The portfolio is sentient and tired",
+    "I traded a feeling for another feeling",
+    "Mr Market texted me back",
+    "The Fed minutes read like a breakup letter",
+    "Long volatility short sleep",
+    "Calling the top is dating with extra steps",
+    "The dip ate my breakfast",
+    "The chart is not the territory neither am I",
+    "Reverse split me daddy",
+    "I yield to no curve",
+    "The risk free rate gave me anxiety",
+    "Buy when others sleep sell when others dream",
+    "The bond market knows things",
+    "Convex when I want to be",
+    "Vega kissed me on the forehead",
+    "The delta is doing the macarena",
+    "Gamma squeeze my hand",
+    "Theta decays my will to live",
+    "Price taker spiritually",
+    "The midpoint is a state of mind",
+    "Tape reading at the speed of vibes",
+    "Did the index just blink at me",
+    "Long the AI bubble short coherence",
+    "NVDA whispered something I cant repeat",
+    "The earnings call had subtext",
+    "CFO said adjusted I said adjusted to what",
+    "Guidance lowered my expectations of guidance",
+    "Free cash flow is a rumor",
+    "I read the footnotes they were beautiful",
+    "The auditor blinked first",
+    "EBITDA is just a feeling",
+    "Adjusted EBITDA is two feelings",
+    "Pro forma my entire life",
+    "The investor deck moved me to tears",
+    "The roadmap had a plot twist",
+    "Forward guidance backwards",
+    "Capital structure is a polycule",
+    "Dilution is a state of mind",
+    "The float is floating",
+    "Lockup expired and so did I",
+    "Treasury bought the dip I bought the treasury",
+    "I priced this in already in 2019",
+    "The yield curve uninverted in my dreams",
+    "Recessions are a vibe shift",
+    "Soft landing hard takeoff",
+    "The Fed has my number",
+    "Hike it like its hot",
+    "Dot plot pointillism",
+    "Quantitative tightening gives me ASMR",
+    "Powell wreck my portfolio",
+    "The Beige Book is my erotica",
+    "Jobs print and I jobless print",
+    "The PMI is mid",
+    "Core CPI core memory",
+    "Headline CPI gave me a headache",
+    "Owners equivalent rent owners equivalent vibes",
+    "The dollar smiled at me",
+    "DXY my beloved",
+    "Carry trade carry me home",
+    "The yen is on a journey",
+    "Emerging markets emerged into my heart",
+    "Frontier markets are my comfort zone",
+    "China A shares B shares all my shares",
+    "The peg pegged me",
+    "Crude is crude",
+    "Brent versus WTI is sibling rivalry",
+    "Natty gas put me through college spiritually",
+    "Gold is a feeling silver is a different feeling",
+    "Copper PhD failed me",
+    "Lithium is the new oil but spicier",
+    "Uranium hot rocks vibes",
+    "The supercycle is a cycle wearing a hat",
+    "Commodities are stocks with worse manners",
+    "Real assets unreal feelings",
+    "REITs my regrets",
+    "Cap rate is a cope rate",
+    "The mall died and I died with it",
+    "Office REITs are doing fine actually no",
+    "Industrial is the new black",
+    "Data centers are my love language",
+    "Logistics REITs delivered me",
+    "The 30-year is older than me",
+    "TIPS for the inflation tip jar",
+    "Munis are tax free vibes",
+    "Junk bonds high yield high feeling",
+    "Investment grade gave me an A",
+    "CCC tier romance",
+    "The credit cycle is doing its thing",
+    "Spreads tightened spreads loosened spreads vibed",
+    "The CDX is just a feeling index",
+    "The basis is broken the basis is fine whatever",
+    "Repo market keeps me up at night",
+    "The plumbing is plumbing",
+    "Money market funds are my best friends",
+    "Stablecoins mostly stable mostly coins",
+    "The blockchain doesnt know me but I know it",
+    "ETH gas fees gas me",
+    "The merge merged but did it really",
+    "NFT just JPEG with vibes",
+    "I touched the bonding curve and it touched me back",
+)
+
+assert len(_TAGLINES) == 200, f"expected 200 taglines, got {len(_TAGLINES)}"
+
+# Embedded into every page; client-side JS picks one fresh on each page
+# load. The </ escape guards against any future tagline accidentally
+# closing the inline <script>.
+_TAGLINES_JSON = json.dumps(list(_TAGLINES)).replace("</", "<\\/")
+
+
 def _render_nav(active_nav: str) -> str:
     parts = ['<nav class="site-nav"><div class="container">']
-    parts.append('<a class="logo" href="/">⌬ Pinchy</a>')
+    # Server-side initial pick avoids an empty span on first paint (before
+    # the inline script runs). The script below replaces it per reload.
+    initial = _esc(random.choice(_TAGLINES))
+    parts.append(
+        '<div class="brand">'
+        '<a class="logo" href="/">⌬ Pinchy</a>'
+        f'<span class="tagline">{initial}</span>'
+        '</div>'
+    )
     parts.append('<button class="hamburger" aria-label="Menu">☰</button>')
     parts.append('<div class="links">')
     for key, href, label in _NAV_ITEMS:
         cls = ' class="active"' if key == active_nav else ''
         parts.append(f'<a{cls} href="{href}">{label}</a>')
     parts.append('</div></div></nav>')
+    parts.append(
+        '<script>(function(){'
+        f'var t={_TAGLINES_JSON};'
+        'var e=document.querySelector(".site-nav .tagline");'
+        'if(e)e.textContent=t[Math.floor(Math.random()*t.length)];'
+        '})();</script>'
+    )
     return "".join(parts)
 
 
@@ -715,8 +943,7 @@ def _hero_chip(t: dict) -> str:
     )
 
 
-def _render_homepage_hero(summary: dict, theses: list[dict],
-                          sparkline_svg: str) -> str:
+def _render_homepage_hero(summary: dict, theses: list[dict]) -> str:
     portfolio = _fmt_money(summary.get("portfolio_value"))
     daily = _fmt_signed_pct(summary.get("daily_pnl_pct"))
     total = _fmt_signed_pct(summary.get("total_return_pct"))
@@ -726,21 +953,12 @@ def _render_homepage_hero(summary: dict, theses: list[dict],
     day_n = summary.get("day_number") or 0
     last_updated = _esc(str(summary.get("last_updated") or ""))
 
-    intro_html = (
-        '<p class="intro">'
-        'A live AI-managed brokerage account, with performance, memos, '
-        'and decisions published after each trading session.'
-        '</p>'
-    )
-
     return (
         f'<section class="hero">'
         f'<p class="tag">Day {day_n} · Updated {last_updated}</p>'
         f'<h1>{portfolio}'
         f'<span class="strip {daily_class}">'
         f' {daily} today · {total} all time · {vs_spy} vs S&amp;P</span></h1>'
-        f'{intro_html}'
-        f'{sparkline_svg}'
         f'</section>'
     )
 
@@ -877,6 +1095,19 @@ def _render_range_control() -> str:
     return "".join(parts)
 
 
+def _render_range_brush() -> str:
+    """Drag-to-select date range strip rendered below the chart grid
+    on Home and Performance. Container only — app.js hydrates the SVG
+    after snapshots.json loads. aria-hidden because the brush is purely
+    visual; screen-reader users get the preset buttons in
+    .range-control instead."""
+    return (
+        '<div class="range-brush" data-role="range-brush" aria-hidden="true">'
+        '<svg class="range-brush-svg" preserveAspectRatio="none"></svg>'
+        '</div>'
+    )
+
+
 def _render_homepage_charts() -> str:
     range_html = _render_range_control()
     return (
@@ -900,7 +1131,9 @@ def _render_homepage_charts() -> str:
         '<div class="chart-wrap"><canvas id="benchmark-chart"></canvas></div>'
         '<p class="empty-state" id="benchmark-empty" style="display:none;">No benchmark data yet</p>'
         '</div>'
-        '</div></section>'
+        '</div>'
+        f'{_render_range_brush()}'
+        '</section>'
     )
 
 
@@ -946,7 +1179,7 @@ def _render_methodology_strip(state: dict) -> str:
 
 
 def render_homepage(*, summary: dict, theses: list[dict],
-                    sparkline_svg: str, today_move: dict | None,
+                    today_move: dict | None,
                     attribution_top: dict | None, worst_loser: dict | None,
                     memo: dict | None, how_it_works_state: dict,
                     base_url: str, performance: dict | None = None,
@@ -961,7 +1194,7 @@ def render_homepage(*, summary: dict, theses: list[dict],
     )
 
     content = (
-        _render_homepage_hero(summary, theses, sparkline_svg)
+        _render_homepage_hero(summary, theses)
         + _render_homepage_charts()
         + _render_latest_decisions(decisions or ([today_move] if today_move else []))
         + _render_recent_learnings(attribution_top, worst_loser)
@@ -1042,6 +1275,7 @@ def render_performance_page(*, summary: dict, performance: dict,
         '<div class="chart-wrap"><canvas id="benchmark-chart"></canvas></div>'
         '<p class="empty-state" id="benchmark-empty" style="display:none;">No benchmark data yet</p>'
         '</section>'
+        f'<section class="section range-brush-section">{_render_range_brush()}</section>'
     )
 
     content = stat_strip + charts + stats_panel

@@ -121,7 +121,7 @@ class TestRenderTradePage:
             position=None,
             base_url="https://example.com",
         )
-        assert "<script>" not in html
+        assert "<script>alert" not in html
         assert "&lt;script&gt;" in html
 
     def test_escapes_ticker_and_action(self):
@@ -470,7 +470,7 @@ class TestRenderMistakesPage:
                             "retirement_reason": "<b>bad</b>"}],
             base_url="https://example.com",
         )
-        assert "<script>" not in html
+        assert "<script>x</script>" not in html
         assert "&lt;script&gt;" in html
 
     def test_uses_page_shell_with_learning_active(self):
@@ -646,7 +646,6 @@ class TestRenderHomepage:
                 {"id": 8, "ticker": "AMD", "thesis": "data center share"},
                 {"id": 9, "ticker": "XOM", "thesis": "macro hedge"},
             ],
-            sparkline_svg='<svg class="sparkline"></svg>',
             today_move={
                 "id": 42, "ticker": "NVDA", "action": "buy",
                 "date": date(2026, 5, 4), "quantity": 12,
@@ -699,11 +698,32 @@ class TestRenderHomepage:
         assert "Currently betting on" not in html
         assert 'href="/thesis/7/"' not in html
 
-    def test_renders_one_sentence_header_explanation(self):
+    def test_homepage_hero_omits_intro_paragraph(self):
         html = render_homepage(**self._data())
-        assert 'class="intro"' in html
-        assert "A live AI-managed brokerage account" in html
+        assert "A live AI-managed brokerage account" not in html
         assert "After every market close" not in html
+
+    def test_nav_logo_carries_tagline(self):
+        import re
+
+        from v2.dashboard_pages import _TAGLINES
+
+        assert len(_TAGLINES) == 200
+        html = render_homepage(**self._data())
+
+        # Server-side initial pick: span contains some tagline from the list.
+        match = re.search(r'<span class="tagline">([^<]+)</span>', html)
+        assert match, "tagline span missing"
+        from html import unescape
+        assert unescape(match.group(1)) in _TAGLINES
+
+        # Client-side reload-pick: script embeds the full array and rewrites
+        # the span's textContent on every page load.
+        assert ".site-nav .tagline" in html
+        assert "Math.random()" in html
+        # Spot-check a couple of taglines are present in the embedded JSON.
+        assert "Cmon AI light my fire" in html
+        assert "I touched the bonding curve and it touched me back" in html
 
     def test_renders_performance_charts_front_page(self):
         html = render_homepage(**self._data())
@@ -780,10 +800,6 @@ class TestRenderHomepage:
         assert 'href="/trace/"' not in html
         assert 'href="/how-it-works/"' in html
 
-    def test_sparkline_embedded(self):
-        html = render_homepage(**self._data())
-        assert '<svg class="sparkline"></svg>' in html
-
     def test_truncates_long_reasoning(self):
         long_reasoning = "x" * 500
         html = render_homepage(
@@ -821,6 +837,20 @@ class TestRenderHomepage:
         assert html.count('range-btn is-active') == 1
         assert html.count('aria-pressed="true"') == 1
         assert html.count('aria-pressed="false"') == 3
+
+    def test_renders_range_brush_container(self):
+        html = render_homepage(**self._data())
+        assert 'class="range-brush"' in html
+        assert 'data-role="range-brush"' in html
+        assert '<svg class="range-brush-svg"' in html
+
+    def test_range_brush_is_aria_hidden(self):
+        """The brush is decorative — screen-reader users get the
+        preset buttons. Verify it doesn't pollute the a11y tree."""
+        html = render_homepage(**self._data())
+        # match attribute order-independently
+        assert 'aria-hidden="true"' in html
+        assert 'class="range-brush"' in html
 
 
 from v2.dashboard_pages import render_performance_page
@@ -899,6 +929,17 @@ class TestRenderPerformancePage:
         assert html.count('aria-pressed="true"') == 1
         assert html.count('aria-pressed="false"') == 3
 
+    def test_renders_range_brush_container(self):
+        html = render_performance_page(**self._data())
+        assert 'class="range-brush"' in html
+        assert 'data-role="range-brush"' in html
+        assert '<svg class="range-brush-svg"' in html
+
+    def test_range_brush_is_aria_hidden(self):
+        html = render_performance_page(**self._data())
+        assert 'aria-hidden="true"' in html
+        assert 'class="range-brush"' in html
+
 
 from v2.dashboard_pages import render_activity_page, render_strategy_page
 
@@ -941,6 +982,12 @@ class TestRenderActivityPage:
         html = render_activity_page(**self._data())
         assert 'id="decisions-table"' in html
 
+    def test_does_not_render_range_brush(self):
+        """The brush only belongs where the three performance charts
+        live. Activity has tables, not charts."""
+        html = render_activity_page(**self._data())
+        assert 'range-brush' not in html
+
 
 class TestRenderStrategyPage:
     def _data(self, **overrides):
@@ -980,6 +1027,10 @@ class TestRenderStrategyPage:
         html = render_strategy_page(**self._data(memos=[], theses=[]))
         assert "No memos yet" in html
         assert "No active theses" in html
+
+    def test_does_not_render_range_brush(self):
+        html = render_strategy_page(**self._data())
+        assert 'range-brush' not in html
 
 
 class TestRenderMemoPage:
@@ -1077,6 +1128,10 @@ class TestRenderChangelogPage:
         html = render_changelog_page(**self._data(entries=[]))
         assert "No public updates posted yet" in html
 
+    def test_does_not_render_range_brush(self):
+        html = render_changelog_page(**self._data())
+        assert 'range-brush' not in html
+
 
 from v2.dashboard_pages import render_learning_hub
 
@@ -1139,6 +1194,10 @@ class TestRenderLearningHub:
         html = render_learning_hub(**self._data(losers_top3=[]))
         assert "No closed losers in window" in html
 
+    def test_does_not_render_range_brush(self):
+        html = render_learning_hub(**self._data())
+        assert 'range-brush' not in html
+
 
 from v2.dashboard_pages import render_how_it_works_hub
 
@@ -1194,3 +1253,7 @@ class TestRenderHowItWorksHub:
         assert 'href="/internals/"' in html
         assert 'href="/trace/"' in html
         assert 'class="card disabled"' not in html
+
+    def test_does_not_render_range_brush(self):
+        html = render_how_it_works_hub(**self._data())
+        assert 'range-brush' not in html
