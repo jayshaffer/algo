@@ -612,6 +612,29 @@ class TestPlaybookActionStatus:
         result = get_pending_playbook_actions(playbook_id=99)
         assert result == []
 
+    def test_expire_stale_playbook_actions_runs_update(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import expire_stale_playbook_actions
+        mock_cursor.rowcount = 7
+        result = expire_stale_playbook_actions(_date(2026, 5, 19))
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "UPDATE playbook_actions" in sql
+        assert "status = 'expired'" in sql
+        assert "status = 'pending'" in sql
+        assert "date < %s" in sql
+        assert params == (_date(2026, 5, 19),)
+        assert result == 7
+
+    def test_expire_stale_playbook_actions_zero_rows(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import expire_stale_playbook_actions
+        mock_cursor.rowcount = 0
+        result = expire_stale_playbook_actions(_date(2026, 5, 19))
+        assert result == 0
+
 
 class TestSignalAttribution:
     def test_upsert_signal_attribution(self, mock_db, mock_cursor):

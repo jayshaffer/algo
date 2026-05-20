@@ -29,6 +29,7 @@ from .database.trading_db import (
     close_orphan_running_stages,
     complete_session,
     complete_session_stage,
+    expire_stale_playbook_actions,
     fail_session,
     fail_session_stage,
     get_current_strategy_state,
@@ -495,6 +496,13 @@ def run_session(
         skipped_dashboard=skip_dashboard,
     )
     today = current_market_date()
+
+    try:
+        expired = expire_stale_playbook_actions(today)
+        if expired:
+            logger.info("Expired %d stale pending playbook_actions from prior days", expired)
+    except Exception as e:
+        logger.warning("expire_stale_playbook_actions failed (non-fatal): %s", e)
 
     session_id, completed_stages, early_error = _check_and_record_session(force, today)
     if early_error:
