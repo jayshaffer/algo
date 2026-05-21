@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .claude_client import AgentPurpose, _call_with_retry, get_claude_client
+from .tickers import resolve_ticker as _validate_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -44,51 +45,9 @@ def _validate_category(value: str, allowed: frozenset, context: str) -> str | No
     return None
 
 
-# P3.40: ticker validation. Haiku occasionally emits hallucinated tickers
-# (group acronyms like FAANG/MAANG/MAGS, generic acronyms like ETF/CEO/AI,
-# or `$TSLA`-prefixed strings). Without filtering, these become rows in
-# news_signals and pollute attribution.
-_TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
-_TICKER_BLOCKLIST = frozenset({
-    # group/category acronyms — never tradable tickers
-    "FAANG", "MAANG", "MAGS", "MAG", "FAAMG", "BATX", "BAT",
-    # generic non-equity acronyms commonly mentioned in news.
-    # NOTE: ADP (Automatic Data Processing) and ETN (Eaton Corp) are real
-    # S&P 500 tickers that share names with macro indicators / instrument
-    # classes — leaving them out matches the BE/ON/GO tradeoff above.
-    "ETF", "IPO", "SPAC", "REIT", "MLP",
-    "CEO", "CFO", "CTO", "COO", "CIO", "CMO", "CISO",
-    "SEC", "FDA", "FTC", "DOJ", "FBI", "CIA", "NSA", "EPA", "IRS",
-    "GDP", "CPI", "PPI", "PCE", "PMI", "ISM",
-    "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "CNY",
-    # platform/sector buzzwords (lowercase tradable equivalents may exist
-    # — block only when LLM emits them as if they were tickers)
-    "ESG", "DEI",
-})
-
-
-def _validate_ticker(raw: str) -> str | None:
-    """Return a cleaned ticker string, or None if `raw` is not a plausible
-    equity ticker. Catches the common hallucinations: $-prefixed strings,
-    group acronyms (FAANG), and overly-long alphanumeric soup. Real tickers
-    that happen to look like English stop-words (BE, ON, SO, GO) are NOT
-    blocked — without an Alpaca-asset allowlist we can't disambiguate, and
-    blocking them would cost real signal."""
-    if not isinstance(raw, str):
-        return None
-    # Strip trailing sentence punctuation copied from prose (e.g. "AAPL.", "NVDA,").
-    # Class-share tickers like "BRK.A" are unaffected because their dot is followed
-    # by a letter, not by end-of-string.
-    cleaned = raw.strip().lstrip("$").rstrip(".,;:!?").upper()
-    if not cleaned:
-        return None
-    if not _TICKER_RE.match(cleaned):
-        logger.warning("classifier: rejecting non-ticker-shaped string %r", raw)
-        return None
-    if cleaned in _TICKER_BLOCKLIST:
-        logger.warning("classifier: rejecting hallucinated/acronym ticker %r", raw)
-        return None
-    return cleaned
+# Ticker validation lives in v2.tickers (shared with v2.tools). The classifier
+# imports it as _validate_ticker for backward compatibility with call sites
+# and tests below.
 
 
 def _sanitize_headline(headline: str) -> str:

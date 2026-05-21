@@ -39,17 +39,25 @@ def reset_session():
     logger.info("Session state reset")
 
 
-def _norm_ticker(ticker: str | None) -> str | None:
-    """T1.3: canonicalize an LLM-emitted ticker (uppercase, strip whitespace).
+from .tickers import resolve_ticker as _norm_ticker  # noqa: E402
 
-    The strategist has been observed emitting "aapl" or " AAPL "; without
-    normalization, downstream lookups (DB filters, position dicts, sector map)
-    miss. None passes through so optional-filter handlers stay None.
-    """
-    if ticker is None:
-        return None
-    cleaned = ticker.strip().upper()
-    return cleaned or None
+
+def _resolve_required_ticker(raw: str | None) -> tuple[str | None, str | None]:
+    """Resolve a ticker that the tool requires (create_thesis, adopt_thesis,
+    playbook actions). Returns (ticker, error_message). If `raw` is non-empty
+    but resolution drops it (unknown shape, blocked acronym), the error message
+    explains the rejection so the strategist sees the failure in its loop and
+    can reissue with the real ticker."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, "Error: ticker is required."
+    resolved = _norm_ticker(raw)
+    if resolved is None:
+        return None, (
+            f"Error: ticker {raw!r} is not a recognized equity symbol "
+            f"(group acronym, non-equity abbreviation, or malformed). "
+            f"Use the actual Alpaca-tradable symbol."
+        )
+    return resolved, None
 
 
 # --- Tool Handlers ---
@@ -149,7 +157,9 @@ def tool_create_thesis(
     decision. Use tool_adopt_thesis instead for theses created from already-held
     orphan positions.
     """
-    ticker = _norm_ticker(ticker) or ""
+    ticker, err = _resolve_required_ticker(ticker)
+    if err:
+        return err
     logger.info(f"Creating thesis for {ticker} ({direction})")
 
     # Check for duplicates
@@ -213,7 +223,9 @@ def tool_adopt_thesis(
     Unlike create_thesis, this REQUIRES the ticker to already be in the portfolio.
     Used to bring orphan positions under thesis management.
     """
-    ticker = _norm_ticker(ticker) or ""
+    ticker, err = _resolve_required_ticker(ticker)
+    if err:
+        return err
     logger.info(f"Adopting thesis for existing position {ticker} ({direction})")
 
     existing = get_active_theses(ticker=ticker)
@@ -497,11 +509,16 @@ def tool_write_playbook(
 
     # T1.3: normalize ticker on every action so persisted playbook rows are
     # canonical TICKER, not "aapl"/"AAPL "/etc. Mutates in place so the
-    # downstream insert sees the cleaned values too.
+    # downstream insert sees the cleaned values too. Hallucinated tickers
+    # (group acronyms, company-name-instead-of-symbol) are rejected at
+    # write-time so the strategist sees the failure inside its tool loop
+    # rather than producing a playbook that fails at executor pricing.
     for action in priority_actions:
-        norm = _norm_ticker(action.get("ticker"))
-        if norm:
-            action["ticker"] = norm
+        raw = action.get("ticker")
+        resolved, err = _resolve_required_ticker(raw)
+        if err:
+            return f"Error in priority_actions: {err.removeprefix('Error: ')}"
+        action["ticker"] = resolved
 
     # Validate no conflicting actions (buy + sell same ticker)
     # AND no duplicate (ticker, action) pairs. T1.6: a playbook with two buys

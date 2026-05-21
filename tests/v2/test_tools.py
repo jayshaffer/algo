@@ -160,6 +160,37 @@ class TestWritePlaybook:
         assert actions[0]["ticker"] == "AAPL"
         assert actions[1]["ticker"] == "MSFT"
 
+    def test_remaps_company_name_in_action(self, mock_db, mock_cursor):
+        """Playbook action with ticker='CARLSMED' is remapped to CARL before
+        persistence, so executor pricing hits the real symbol."""
+        mock_cursor.fetchone.return_value = {"id": 1}
+        actions = [
+            {"ticker": "CARLSMED", "action": "buy", "reasoning": "r",
+             "confidence": "high", "thesis_id": 1},
+        ]
+        tool_write_playbook(
+            market_outlook="Bullish",
+            priority_actions=actions,
+            watch_list=[],
+            risk_notes="",
+        )
+        assert actions[0]["ticker"] == "CARL"
+
+    def test_rejects_hallucinated_ticker_in_action(self):
+        """A playbook action with a drop-listed acronym ticker (e.g. FAANG)
+        is rejected at write time so the strategist sees the error in-loop
+        and reissues with the real ticker."""
+        result = tool_write_playbook(
+            market_outlook="Bullish",
+            priority_actions=[
+                {"ticker": "FAANG", "action": "buy", "reasoning": "r",
+                 "confidence": "high", "thesis_id": 1},
+            ],
+            watch_list=[],
+            risk_notes="",
+        )
+        assert "Error" in result and "FAANG" in result
+
     def test_actions_inserted_with_priority(self, mock_db, mock_cursor):
         """Each action should be inserted with its priority (1-indexed)."""
         mock_cursor.fetchone.return_value = {"id": 10}
@@ -516,6 +547,45 @@ class TestCreateThesis:
             invalidation="AI hype fades", confidence="high",
         )
         assert "Error" in result and "signal_ref" in result
+
+    def test_remaps_company_name_alias(self, mock_db, mock_cursor):
+        """CARLSMED (a company name the LLM emits because Carlsmed IPO'd
+        post-knowledge-cutoff) is remapped to CARL before the duplicate /
+        position check, so the thesis is created with the canonical ticker."""
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = {"id": 7}
+        with patch(
+            "v2.tools.validate_signal_refs",
+            return_value=[{"type": "news_signal", "id": 1}],
+        ), patch("v2.tools.insert_thesis_signals"):
+            result = tool_create_thesis(
+                ticker="CARLSMED",
+                direction="long",
+                thesis="Spine implant rollout",
+                entry_trigger="t",
+                exit_trigger="t",
+                invalidation="t",
+                confidence="high",
+                signal_refs=[{"type": "news_signal", "id": 1}],
+            )
+        assert "Created thesis ID 7" in result
+        assert "CARL" in result and "CARLSMED" not in result
+
+    def test_rejects_hallucinated_acronym(self, mock_db, mock_cursor):
+        """create_thesis on FAANG (or any drop-listed acronym) returns an
+        error message the strategist sees in its loop, so it can reissue
+        with the real underlying ticker."""
+        result = tool_create_thesis(
+            ticker="FAANG",
+            direction="long",
+            thesis="t",
+            entry_trigger="t",
+            exit_trigger="t",
+            invalidation="t",
+            confidence="high",
+            signal_refs=[{"type": "news_signal", "id": 1}],
+        )
+        assert "Error" in result and "not a recognized equity symbol" in result
 
 
 class TestCreateThesisSignalRefs:
