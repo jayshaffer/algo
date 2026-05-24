@@ -357,3 +357,65 @@ class TestCallWithRetryWritesContext:
             purpose="executor",
         )
         assert result is response
+
+    def test_accumulated_sdk_blocks_in_messages_are_json_serializable(self, monkeypatch):
+        """Regression: 'Object of type ParsedTextBlock is not JSON serializable'.
+
+        After turn 1 of an agentic loop, `response.content` (raw SDK blocks)
+        is appended to the running `messages` list. On turn 2, those blocks
+        must be JSON-serializable when the recorder hands them to
+        `Json(messages)` in `insert_llm_call_context`.
+        """
+        import json
+
+        import v2.claude_client as cc
+
+        recorded_inserts = []
+        monkeypatch.setattr(
+            "v2.claude_client.insert_llm_call_context",
+            lambda **kw: recorded_inserts.append(kw),
+        )
+        monkeypatch.setattr("v2.claude_client.record_event", lambda **kw: None)
+
+        turn1 = self._make_response(
+            content=[
+                self._text_block("thinking"),
+                self._tool_use_block("t1", "get_positions", {}),
+            ],
+            stop_reason="tool_use",
+        )
+        turn2 = self._make_response(
+            content=[self._text_block("done")],
+            stop_reason="end_turn",
+        )
+
+        responses = iter([turn1, turn2])
+
+        def stream_factory(**_kw):
+            ctx = MagicMock()
+            ctx.__enter__.return_value = ctx
+            ctx.__exit__.return_value = None
+            ctx.get_final_message.return_value = next(responses)
+            return ctx
+
+        client = MagicMock()
+        client.messages.stream.side_effect = stream_factory
+
+        cc.run_agentic_loop(
+            client=client,
+            model="claude-opus-4-7",
+            system="strategist",
+            initial_message="go",
+            tools=[{"name": "get_positions", "input_schema": {"type": "object"}}],
+            tool_handlers={"get_positions": lambda: "ok"},
+            max_turns=5,
+            session_id=42,
+            stage_name="ideation",
+            purpose=cc.AgentPurpose.STRATEGIST_LOOP,
+        )
+
+        assert len(recorded_inserts) == 2
+        # Turn 2's `messages` carries the assistant content from turn 1.
+        # That content must round-trip through json.dumps — psycopg2's
+        # Json() adapter will call it for real in production.
+        json.dumps(recorded_inserts[1]["messages"])
