@@ -146,12 +146,14 @@ def _serialize_content_blocks(content) -> list:
     """Convert anthropic content blocks to JSON-serializable dicts.
 
     Real anthropic SDK blocks are pydantic models exposing `.model_dump()`.
-    Test fixtures use SimpleNamespace. Fall back to `vars()` for the
-    latter so tests don't have to add a model_dump shim everywhere.
+    Test fixtures use SimpleNamespace (handled via `vars()`). User-message
+    content already arrives as plain dicts and passes through unchanged.
     """
     result = []
     for block in content or []:
-        if hasattr(block, "model_dump"):
+        if isinstance(block, dict):
+            result.append(block)
+        elif hasattr(block, "model_dump"):
             result.append(block.model_dump())
         else:
             result.append({k: v for k, v in vars(block).items()})
@@ -194,13 +196,28 @@ def _record_call_context(
             ) or None
         else:
             system_prompt = None
+        # Normalize the messages list for JSON storage: prior assistant turns
+        # carry raw SDK pydantic blocks (we keep them native so the API
+        # accepts them on the next turn). psycopg2's Json() adapter can't
+        # serialize those — dump them here at the recording boundary.
+        recorded_messages = [
+            {
+                "role": m["role"],
+                "content": (
+                    _serialize_content_blocks(m["content"])
+                    if isinstance(m.get("content"), list)
+                    else m.get("content")
+                ),
+            }
+            for m in (create_kwargs.get("messages") or [])
+        ]
         insert_llm_call_context(
             session_id=session_id,
             stage_name=stage_name or "unknown",
             purpose=purpose,
             model=create_kwargs.get("model"),
             system_prompt=system_prompt,
-            messages=create_kwargs.get("messages") or [],
+            messages=recorded_messages,
             tool_definitions=create_kwargs.get("tools"),
             response_content=response_content,
             input_tokens=getattr(usage, "input_tokens", None) if usage else None,
@@ -542,7 +559,12 @@ def run_agentic_loop(
             })
             continue
 
-        # Add assistant response to history
+        # Add assistant response to history using the SDK's native content
+        # blocks — the API accepts and re-serializes them correctly. We
+        # do NOT model_dump() here because newer SDK blocks (e.g.
+        # ParsedTextBlock) carry fields like `parsed_output` that the API
+        # rejects when echoed back. Serialization for forensic recording
+        # happens at the recording boundary instead.
         messages.append({"role": "assistant", "content": response.content})
 
         # Check stop reason
@@ -658,6 +680,14 @@ def extract_final_text(messages: list[dict]) -> str | None:
     string — otherwise the strategist memo gets stamped with the caller's
     "No summary available" placeholder and reflection loses the signal.
     """
+    def _block_field(block, field: str, default=""):
+        """Read a block field whether the block is a dict (post-serialization)
+        or an SDK pydantic model (defensive fallback for tests / call sites
+        that bypass run_agentic_loop's normalization)."""
+        if isinstance(block, dict):
+            return block.get(field, default)
+        return getattr(block, field, default)
+
     last_assistant_with_content: list | None = None
     for msg in reversed(messages):
         if msg["role"] != "assistant":
@@ -670,18 +700,18 @@ def extract_final_text(messages: list[dict]) -> str | None:
         if last_assistant_with_content is None:
             last_assistant_with_content = content
         text_blocks = [
-            getattr(block, "text", "")
+            _block_field(block, "text", "")
             for block in content
-            if getattr(block, "type", None) == "text"
+            if _block_field(block, "type", None) == "text"
         ]
         if text_blocks:
             return "".join(text_blocks)
 
     if last_assistant_with_content is not None:
         tool_names = [
-            getattr(block, "name", "")
+            _block_field(block, "name", "")
             for block in last_assistant_with_content
-            if getattr(block, "type", None) == "tool_use"
+            if _block_field(block, "type", None) == "tool_use"
         ]
         tool_names = [n for n in tool_names if n]
         if tool_names:
