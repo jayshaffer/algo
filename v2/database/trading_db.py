@@ -506,9 +506,12 @@ def get_recent_playbooks_with_actions(n: int = 3) -> list[dict]:
                 pa.action         AS action,
                 pa.intent_type    AS intent_type,
                 pa.intent_magnitude AS intent_magnitude,
-                pa.reasoning      AS reasoning
+                pa.reasoning      AS reasoning,
+                pa.status         AS status,
+                d.action          AS decision_action
             FROM playbooks p
             LEFT JOIN playbook_actions pa ON pa.playbook_id = p.id
+            LEFT JOIN decisions d ON d.playbook_action_id = pa.id
             WHERE p.id IN (
                 SELECT id FROM playbooks ORDER BY date DESC LIMIT %s
             )
@@ -536,8 +539,86 @@ def get_recent_playbooks_with_actions(n: int = 3) -> list[dict]:
                 "intent_type": row.get("intent_type"),
                 "intent_magnitude": row.get("intent_magnitude"),
                 "reasoning": row.get("reasoning") or "",
+                "status": row.get("status"),
+                "decision_action": row.get("decision_action"),
+                "outcome_class": classify_playbook_action_outcome(row),
             })
     return [by_pb[pb_id] for pb_id in order]
+
+
+def classify_playbook_action_outcome(row: dict) -> str:
+    """Classify a playbook action lifecycle for model-facing context."""
+    status = row.get("status") or "pending"
+    decision_action = row.get("decision_action")
+    market_closed = bool(row.get("market_closed"))
+    market_closed_inferred = bool(row.get("market_closed_inferred"))
+
+    if status == "executed" or decision_action in ("buy", "sell"):
+        return "executed"
+    if status == "deferred" or decision_action == "hold":
+        return "deferred_by_executor"
+    if status in ("failed", "skipped") or decision_action == "invalid":
+        return "invalid_runtime"
+    if status == "expired":
+        if market_closed or market_closed_inferred:
+            return "expired_market_closed"
+        return "expired_legacy"
+    if status == "pending":
+        return "pending_unreviewed"
+    return status
+
+
+def get_recent_playbook_action_history(
+    tickers: list[str] | None = None,
+    days: int = 30,
+) -> list[dict]:
+    """Return classified recent playbook action history."""
+    params: list = [days]
+    ticker_clause = ""
+    if tickers:
+        ticker_clause = "AND pa.ticker = ANY(%s)"
+        params.append(tickers)
+
+    with get_cursor() as cur:
+        cur.execute(f"""
+            WITH session_by_date AS (
+                SELECT session_date,
+                       COUNT(*) AS session_count,
+                       BOOL_OR(market_closed) AS any_market_closed
+                FROM sessions
+                WHERE session_type = 'daily'
+                GROUP BY session_date
+            )
+            SELECT
+                p.date AS playbook_date,
+                pa.id AS action_id,
+                pa.ticker,
+                pa.action,
+                pa.thesis_id,
+                pa.status,
+                d.id AS decision_id,
+                d.action AS decision_action,
+                LEFT(COALESCE(d.reasoning, ''), 160) AS decision_reason_prefix,
+                COALESCE(s.market_closed, FALSE) AS market_closed,
+                (
+                    d.id IS NULL
+                    AND sbd.session_count = 1
+                    AND sbd.any_market_closed
+                ) AS market_closed_inferred
+            FROM playbook_actions pa
+            JOIN playbooks p ON p.id = pa.playbook_id
+            LEFT JOIN decisions d ON d.playbook_action_id = pa.id
+            LEFT JOIN sessions s ON s.id = d.session_id
+            LEFT JOIN session_by_date sbd ON sbd.session_date = p.date
+            WHERE p.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+              {ticker_clause}
+            ORDER BY p.date DESC, pa.ticker, pa.id
+        """, tuple(params))
+        rows = [dict(row) for row in cur.fetchall()]
+
+    for row in rows:
+        row["outcome_class"] = classify_playbook_action_outcome(row)
+    return rows
 
 
 def update_playbook_action_status(action_id: int, status: str):

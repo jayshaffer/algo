@@ -17,6 +17,7 @@ from .database.trading_db import (
     get_playbook,
     get_positions,
     get_recent_decisions,
+    get_recent_playbook_action_history,
     get_signal_attribution,
     get_thesis_signals,
 )
@@ -538,6 +539,31 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         })
         per_ticker_count[d["ticker"]] = per_ticker_count.get(d["ticker"], 0) + 1
 
+    playbook_action_history = []
+    if playbook_tickers:
+        try:
+            history_rows = get_recent_playbook_action_history(
+                tickers=sorted(playbook_tickers),
+                days=30,
+            )
+            playbook_action_history = [
+                {
+                    "playbook_date": str(row["playbook_date"]),
+                    "action_id": row["action_id"],
+                    "ticker": row["ticker"],
+                    "action": row["action"],
+                    "thesis_id": row.get("thesis_id"),
+                    "status": row.get("status") or "pending",
+                    "decision_action": row.get("decision_action"),
+                    "outcome_class": row.get("outcome_class"),
+                    "decision_reason_prefix": row.get("decision_reason_prefix") or "",
+                    "market_closed_inferred": bool(row.get("market_closed_inferred")),
+                }
+                for row in history_rows[:20]
+            ]
+        except Exception:
+            playbook_action_history = []
+
     return ExecutorInput(
         playbook_actions=actions,
         positions=[dict(p) for p in positions],
@@ -552,4 +578,5 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         equity_summary=equity_summary,
         todays_decisions=todays_decisions,
         recent_ticker_decisions=recent_ticker_decisions,
+        playbook_action_history=playbook_action_history,
     )

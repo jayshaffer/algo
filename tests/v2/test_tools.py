@@ -1,7 +1,12 @@
 """Tests for v2.tools — tool definitions and handlers."""
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 from tests.v2.conftest import make_strategy_memo_row, make_strategy_rule_row, make_strategy_state_row
 from v2.tools import (
@@ -1182,6 +1187,8 @@ class TestToolGetRecentPlaybooks:
                 "actions": [
                     {"action_id": 401, "ticker": "ANET", "action": "sell",
                      "intent_type": "exit_partial_pct", "intent_magnitude": 50,
+                     "status": "deferred", "decision_action": "hold",
+                     "outcome_class": "deferred_by_executor",
                      "reasoning": "trim pre-earnings binary tomorrow"},
                 ],
             },
@@ -1193,6 +1200,7 @@ class TestToolGetRecentPlaybooks:
         assert "ANET" in result
         assert "SELL" in result.upper()
         assert "exit_partial_pct=50" in result
+        assert "deferred_by_executor" in result
         assert "trim pre-earnings" in result
 
     @patch("v2.tools.get_recent_playbooks_with_actions", return_value=[])

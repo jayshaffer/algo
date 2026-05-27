@@ -712,3 +712,47 @@ class TestRecentTickerDecisions:
         result = build_executor_input(account_info={"equity": 10000})
 
         assert result.recent_ticker_decisions == []
+
+
+class TestPlaybookActionHistory:
+    @patch("v2.executor.get_latest_price", return_value=Decimal("100"))
+    @patch("v2.context.get_recent_playbook_action_history")
+    @patch("v2.context.get_signal_attribution", return_value=[])
+    @patch("v2.context.get_positions", return_value=[])
+    @patch("v2.context.get_recent_decisions", return_value=[])
+    @patch("v2.context.get_pending_playbook_actions")
+    @patch("v2.context.get_playbook")
+    def test_executor_input_includes_history_for_playbook_tickers(
+        self, mock_pb, mock_pb_actions, mock_decisions, mock_pos, mock_attr,
+        mock_history, mock_price, mock_db, mock_cursor,
+    ):
+        from v2.context import build_executor_input
+
+        mock_pb.return_value = {"id": 1, "market_outlook": "", "risk_notes": ""}
+        mock_pb_actions.return_value = [
+            {"id": 10, "ticker": "GOOGL", "action": "buy", "thesis_id": 5,
+             "reasoning": "add", "confidence": "high", "intent_type": "invest_dollar",
+             "intent_magnitude": 100, "priority": 1},
+        ]
+        mock_history.return_value = [
+            {
+                "playbook_date": date(2026, 5, 26),
+                "action_id": 9,
+                "ticker": "GOOGL",
+                "action": "buy",
+                "thesis_id": 5,
+                "status": "deferred",
+                "decision_action": "hold",
+                "outcome_class": "deferred_by_executor",
+                "decision_reason_prefix": "awaiting confirmation",
+                "market_closed_inferred": False,
+            },
+        ]
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = None
+
+        result = build_executor_input(account_info={"equity": 10000})
+
+        mock_history.assert_called_once_with(tickers=["GOOGL"], days=30)
+        assert result.playbook_action_history[0]["outcome_class"] == "deferred_by_executor"
+        assert result.playbook_action_history[0]["decision_reason_prefix"] == "awaiting confirmation"

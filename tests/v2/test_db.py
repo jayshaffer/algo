@@ -640,6 +640,63 @@ class TestPlaybookActionStatus:
         result = get_pending_playbook_action_for_ticker(_date(2026, 5, 26), "AVGO")
         assert result is None
 
+    def test_get_recent_playbook_action_history_classifies_rows(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import get_recent_playbook_action_history
+
+        mock_cursor.fetchall.return_value = [
+            {
+                "playbook_date": _date(2026, 5, 26),
+                "action_id": 7,
+                "ticker": "AVGO",
+                "action": "buy",
+                "thesis_id": 3,
+                "status": "deferred",
+                "decision_id": 70,
+                "decision_action": "hold",
+                "decision_reason_prefix": "not enough confirmation",
+                "market_closed": False,
+                "market_closed_inferred": False,
+            },
+            {
+                "playbook_date": _date(2026, 5, 25),
+                "action_id": 6,
+                "ticker": "AVGO",
+                "action": "buy",
+                "thesis_id": 3,
+                "status": "expired",
+                "decision_id": None,
+                "decision_action": None,
+                "decision_reason_prefix": "",
+                "market_closed": False,
+                "market_closed_inferred": True,
+            },
+        ]
+
+        result = get_recent_playbook_action_history(tickers=["AVGO"], days=30)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "session_by_date" in sql
+        assert "market_closed_inferred" in sql
+        assert "pa.ticker = ANY" in sql
+        assert params == (30, ["AVGO"])
+        assert result[0]["outcome_class"] == "deferred_by_executor"
+        assert result[1]["outcome_class"] == "expired_market_closed"
+
+    def test_classify_playbook_action_outcome_legacy_expired(self):
+        from v2.database.trading_db import classify_playbook_action_outcome
+
+        result = classify_playbook_action_outcome({
+            "status": "expired",
+            "decision_action": None,
+            "market_closed": False,
+            "market_closed_inferred": False,
+        })
+
+        assert result == "expired_legacy"
+
     def test_expire_stale_playbook_actions_runs_update(self, mock_db, mock_cursor):
         from datetime import date as _date
 
