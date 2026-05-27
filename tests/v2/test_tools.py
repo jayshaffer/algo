@@ -1504,7 +1504,20 @@ def test_get_thesis_lineage_joins_decisions_via_playbook_actions(mock_db, mock_c
     assert len(result["decisions"]) == 1
     assert result["decisions"][0]["outcome_7d"] == 1.5
     assert result["decisions"][0]["outcome_30d"] == 3.2
-    # Regression guard: the join must go through playbook_actions
+    # Regression guard: the join must cover both paths
     fetchall_sql = mock_cursor.execute.call_args_list[-1].args[0]
     assert "playbook_actions" in fetchall_sql
     assert "pa.thesis_id = %s" in fetchall_sql
+    assert "decision_signals" in fetchall_sql
+    assert "ds.signal_type = 'thesis'" in fetchall_sql
+
+
+def test_get_thesis_lineage_returns_error_when_thesis_missing(mock_db, mock_cursor):
+    from v2.tools import tool_get_thesis_lineage
+    mock_cursor.fetchone.return_value = None
+    result = tool_get_thesis_lineage(thesis_id=9999)
+    assert result == {"thesis_id": 9999, "error": "not found"}
+    # Only the head SELECT should have run; the second query should not execute.
+    sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+    assert len(sqls) == 1
+    assert "FROM theses" in sqls[0]

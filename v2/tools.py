@@ -675,14 +675,25 @@ def tool_get_thesis_lineage(thesis_id: int) -> dict:
             return {"thesis_id": thesis_id, "error": "not found"}
         cur.execute(
             """
-            SELECT d.id, d.date::text, d.action, d.quantity,
-                   d.reasoning, d.outcome_7d, d.outcome_30d
-            FROM decisions d
-            JOIN playbook_actions pa ON pa.id = d.playbook_action_id
-            WHERE pa.thesis_id = %s
-            ORDER BY d.date ASC
+            SELECT id, date, action, quantity, reasoning, outcome_7d, outcome_30d
+            FROM (
+                SELECT d.id, d.date::text AS date, d.action, d.quantity, d.reasoning,
+                       d.outcome_7d, d.outcome_30d
+                FROM decisions d
+                JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+                WHERE pa.thesis_id = %s
+
+                UNION
+
+                SELECT d.id, d.date::text AS date, d.action, d.quantity, d.reasoning,
+                       d.outcome_7d, d.outcome_30d
+                FROM decisions d
+                JOIN decision_signals ds ON ds.decision_id = d.id
+                WHERE ds.signal_type = 'thesis' AND ds.signal_id = %s
+            ) thesis_decisions
+            ORDER BY date ASC
             """,
-            (thesis_id,),
+            (thesis_id, thesis_id),
         )
         rows = cur.fetchall()
     return {
