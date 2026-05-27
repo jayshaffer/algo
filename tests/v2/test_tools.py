@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 30 handler functions."""
+        """TOOL_HANDLERS should have all 31 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1035,6 +1035,7 @@ class TestToolCompleteness:
             "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
+            "get_strategy_identity_with_history",
             "get_strategy_rules",
             "get_strategy_history",
             "get_retired_rules",
@@ -1053,8 +1054,8 @@ class TestToolCompleteness:
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 31 entries (30 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 31
+        """TOOL_DEFINITIONS should have 32 entries (31 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 32
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1078,6 +1079,7 @@ class TestToolCompleteness:
             "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
+            "get_strategy_identity_with_history",
             "get_strategy_rules",
             "get_strategy_history",
             "get_retired_rules",
@@ -1137,6 +1139,39 @@ class TestGetStrategyIdentity:
         mock_get.return_value = None
         result = tool_get_strategy_identity()
         assert "No strategy identity" in result
+
+
+class TestGetStrategyIdentityWithHistory:
+    def test_get_strategy_identity_with_history_returns_current_plus_versions(self, mock_db, mock_cursor):
+        from v2.tools import tool_get_strategy_identity_with_history
+        mock_cursor.fetchall.return_value = [
+            {"id": 12, "identity_text": "v3 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 3, "is_current": True,
+             "created_at": "2026-05-20T00:00:00+00:00"},
+            {"id": 11, "identity_text": "v2 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 2, "is_current": False,
+             "created_at": "2026-05-15T00:00:00+00:00"},
+            {"id": 10, "identity_text": "v1 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 1, "is_current": False,
+             "created_at": "2026-05-10T00:00:00+00:00"},
+        ]
+        result = tool_get_strategy_identity_with_history(history_limit=5)
+        assert result["current"]["version"] == 3
+        assert result["current"]["identity_text"] == "v3 text"
+        assert len(result["history"]) == 3
+        assert [h["version"] for h in result["history"]] == [3, 2, 1]
+        args, _ = mock_cursor.execute.call_args
+        assert "strategy_state" in args[0]
+        assert "ORDER BY version DESC" in args[0]
+
+    def test_get_strategy_identity_with_history_empty(self, mock_db, mock_cursor):
+        from v2.tools import tool_get_strategy_identity_with_history
+        mock_cursor.fetchall.return_value = []
+        result = tool_get_strategy_identity_with_history()
+        assert result == {"current": None, "history": []}
 
 
 class TestGetStrategyRules:

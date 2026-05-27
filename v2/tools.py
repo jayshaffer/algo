@@ -735,6 +735,52 @@ def tool_get_strategy_identity() -> str:
     return "\n".join(lines)
 
 
+def tool_get_strategy_identity_with_history(history_limit: int = 5) -> dict:
+    """Read-only: current identity + last N versions with timestamps.
+
+    For the supervisor's identity-drift critique. The strategist uses
+    tool_get_strategy_identity (current only) — don't conflate them.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, identity_text, risk_posture, sector_biases,
+                   preferred_signals, avoided_signals, version, is_current,
+                   created_at
+            FROM strategy_state
+            ORDER BY version DESC
+            LIMIT %s
+            """,
+            (history_limit,),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return {"current": None, "history": []}
+    # rows[0] is the highest-version row; treat the is_current=true row as canonical.
+    current = next((r for r in rows if r["is_current"]), rows[0])
+    return {
+        "current": {
+            "id": current["id"],
+            "version": current["version"],
+            "identity_text": current["identity_text"],
+            "risk_posture": current["risk_posture"],
+            "sector_biases": current["sector_biases"],
+            "preferred_signals": current["preferred_signals"],
+            "avoided_signals": current["avoided_signals"],
+            "created_at": current["created_at"].isoformat() if hasattr(current["created_at"], "isoformat") else current["created_at"],
+        },
+        "history": [
+            {
+                "id": r["id"],
+                "version": r["version"],
+                "identity_text": r["identity_text"],
+                "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            }
+            for r in rows
+        ],
+    }
+
+
 def tool_get_strategy_rules() -> str:
     """Get all active strategy rules."""
     logger.info("Getting strategy rules")
@@ -1386,6 +1432,14 @@ TOOL_DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_strategy_identity_with_history",
+        "description": "Read-only. Current strategy identity plus the last N prior versions with timestamps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"history_limit": {"type": "integer", "default": 5}},
+        },
+    },
+    {
         "name": "get_strategy_rules",
         "description": "Active strategy rules (constraints and preferences).",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -1517,6 +1571,7 @@ TOOL_HANDLERS = {
     "get_recent_playbooks": tool_get_recent_playbooks,
     "write_playbook": tool_write_playbook,
     "get_strategy_identity": tool_get_strategy_identity,
+    "get_strategy_identity_with_history": tool_get_strategy_identity_with_history,
     "get_strategy_rules": tool_get_strategy_rules,
     "get_active_rules": tool_get_strategy_rules,
     "get_strategy_history": tool_get_strategy_history,

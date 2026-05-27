@@ -4,7 +4,6 @@ Runs a one-shot agentic loop with a read-only tool registry and persists
 a single markdown memo to `supervisor_memos`. No writes to strategy state.
 
 CLI: `python -m v2.supervisor [--model MODEL] [--max-turns N] [--dry-run]`
-(CLI wiring is added in Task 3.2.)
 """
 
 from __future__ import annotations
@@ -93,7 +92,7 @@ STRATEGY_MUTATOR_NAMES: frozenset[str] = frozenset({
 # under a renamed key (e.g. spec's "get_active_rules" → existing tool_get_strategy_rules).
 SUPERVISOR_TOOL_HANDLERS: dict = {
     # Strategy state
-    "get_strategy_identity": v2_tools.tool_get_strategy_identity,
+    "get_strategy_identity_with_history": v2_tools.tool_get_strategy_identity_with_history,
     "get_active_rules": v2_tools.tool_get_strategy_rules,
     "get_retired_rules": v2_tools.tool_get_retired_rules,
     "get_rule_bind_history": v2_tools.tool_get_rule_bind_history,
@@ -231,12 +230,21 @@ def run_supervisor(
 
     final_text = claude_client.extract_final_text(result.messages)
     tool_calls = _summarize_tool_calls(result.messages)
-    cost = _compute_cost_safely(model, usage)
+    cost_usd = _compute_cost_safely(model, usage)
 
-    if final_text is None:
+    if result.stop_reason == "max_turns":
+        status = "max_turns"
+        # extract_final_text may have returned a synthetic fallback string —
+        # store it so the operator can see what was attempted, but mark the
+        # status so the dashboard banner triggers.
+        content = final_text
+        error_message = "loop hit max_turns before producing a final memo"
+    elif final_text is None:
+        # Belt-and-suspenders: extract_final_text shouldn't return None given
+        # its synthetic fallback, but guard anyway.
         status = "max_turns"
         content = None
-        error_message = "loop did not produce final text within max_turns"
+        error_message = "loop did not produce final text"
     else:
         status = "ok"
         content = final_text
@@ -255,7 +263,7 @@ def run_supervisor(
         tool_calls=tool_calls,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        cost_usd=cost,
+        cost_usd=cost_usd,
         error_message=error_message,
     )
 

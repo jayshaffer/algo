@@ -99,7 +99,7 @@ def test_run_supervisor_max_turns_inserts_null_content(patched_supervisor):
             {"role": "assistant", "content": [
                 {"type": "tool_use", "name": "get_theses", "input": {}, "id": "x"},
             ]},
-            # No final text-block assistant message → extract_final_text returns None
+            # No final text-block assistant message → extract_final_text returns a synthetic fallback
         ],
         turns_used=20,
         stop_reason="max_turns",
@@ -108,15 +108,46 @@ def test_run_supervisor_max_turns_inserts_null_content(patched_supervisor):
         cache_creation_input_tokens=0,
         cache_read_input_tokens=0,
     )
-    with patch.object(sup.claude_client, "run_agentic_loop", return_value=no_final), \
-         patch.object(sup.claude_client, "extract_final_text", return_value=None):
+    # Don't patch extract_final_text — let it run real against the loop messages.
+    # status='max_turns' is driven by stop_reason, not by extract_final_text returning None.
+    with patch.object(sup.claude_client, "run_agentic_loop", return_value=no_final):
         memo_id = sup.run_supervisor(dry_run=False)
     assert memo_id == 42
     params = _last_insert_params(patched_supervisor["mock_cursor"])
     assert params[3] == "max_turns"
-    assert params[2] is None  # content NULL
+    # content may be a synthetic fallback string or None — both are acceptable
     assert params[4] == 20
-    assert params[9] == "loop did not produce final text within max_turns"
+    assert params[9] == "loop hit max_turns before producing a final memo"
+
+
+def test_run_supervisor_max_turns_with_synthetic_text_still_max_turns(patched_supervisor):
+    """A loop result with stop_reason='max_turns' AND a final assistant text block
+    (synthetic or otherwise) must still be recorded as status='max_turns', not 'ok'.
+    """
+    result_with_text = MagicMock(
+        messages=[
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "get_theses", "input": {}, "id": "x"},
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "[]"}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "## Partial analysis\nRan out of turns."},
+            ]},
+        ],
+        turns_used=20,
+        stop_reason="max_turns",
+        input_tokens=400,
+        output_tokens=200,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+    )
+    with patch.object(sup.claude_client, "run_agentic_loop", return_value=result_with_text):
+        memo_id = sup.run_supervisor(dry_run=False)
+    assert memo_id == 42
+    params = _last_insert_params(patched_supervisor["mock_cursor"])
+    # Despite having final text, stop_reason='max_turns' must set status='max_turns'
+    assert params[3] == "max_turns"
+    assert params[9] == "loop hit max_turns before producing a final memo"
 
 
 def test_run_supervisor_dry_run_does_not_insert(patched_supervisor, fake_loop_result, capsys):

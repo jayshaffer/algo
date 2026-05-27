@@ -1,4 +1,4 @@
--- 012_supervisor_memos.sql
+-- 033_supervisor_memos.sql
 -- Strategy supervisor memos. Observer-only critic output, one row per run.
 
 CREATE TABLE IF NOT EXISTS supervisor_memos (
