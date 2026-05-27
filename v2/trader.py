@@ -88,9 +88,13 @@ class TradingSessionResult:
     errors: list[str]
     market_summary: str = ""
     risk_assessment: str = ""
+    market_closed: bool = False
 
 
-def _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors):
+def _empty_result(
+    timestamp, positions_synced, orders_synced, snapshot_id, errors,
+    market_closed: bool = False,
+):
     return TradingSessionResult(
         timestamp=timestamp,
         account_snapshot_id=snapshot_id,
@@ -102,6 +106,7 @@ def _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, error
         total_buy_value=Decimal(0),
         total_sell_value=Decimal(0),
         errors=errors,
+        market_closed=market_closed,
     )
 
 
@@ -1248,8 +1253,10 @@ def run_trading_session(
     # Market hours gate — skip trading if market is closed (dry_run bypasses)
     if not dry_run and not is_market_open():
         logger.warning("Market is closed. Skipping trading session (use --dry-run to bypass)")
-        errors.append("Market is closed — skipped trading")
-        return _empty_result(timestamp, positions_synced, orders_synced, 0, errors)
+        return _empty_result(
+            timestamp, positions_synced, orders_synced, 0, errors,
+            market_closed=True,
+        )
 
     data_client = _build_stock_data_client()
 

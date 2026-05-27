@@ -803,6 +803,15 @@ def fail_session(session_id, error_text):
         """, (error_text, session_id))
 
 
+def mark_session_market_closed(session_id: int) -> None:
+    """Mark a session whose executor performed no trades because markets were closed."""
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE sessions SET market_closed = TRUE
+            WHERE id = %s
+        """, (session_id,))
+
+
 # --- Strategy State ---
 
 def insert_strategy_state(identity_text, risk_posture, sector_biases, preferred_signals, avoided_signals, version) -> int:

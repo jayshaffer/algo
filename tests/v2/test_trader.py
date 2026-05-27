@@ -666,7 +666,7 @@ class TestSessionIdThreading:
 
 class TestMarketHoursGate:
     def test_skips_trading_when_market_closed(self, mock_db, mock_cursor):
-        """When market is closed and not dry_run, should return early after sync."""
+        """When market is closed and not dry_run, return a neutral no-op result."""
         with patch("v2.trader.sync_positions_from_alpaca", return_value=2), \
              patch("v2.trader.sync_orders_from_alpaca", return_value=0), \
              patch("v2.trader.is_market_open", return_value=False), \
@@ -677,7 +677,8 @@ class TestMarketHoursGate:
 
         mock_acct.assert_not_called()
         assert result.trades_executed == 0
-        assert any("market" in e.lower() for e in result.errors)
+        assert result.errors == []
+        assert result.market_closed is True
 
     def test_allows_trading_when_market_open(self, mock_db, mock_cursor):
         """When market is open, should proceed normally."""
