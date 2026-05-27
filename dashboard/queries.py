@@ -236,6 +236,56 @@ def get_playbook_actions(playbook_id):
         return cur.fetchall()
 
 
+def get_behavior_regression_summary(days: int = 30):
+    """Return operator-facing behavior checks for strategist/executor drift."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT COALESCE(pa.status, 'pending') AS status,
+                   COUNT(*) AS count
+            FROM playbook_actions pa
+            JOIN playbooks p ON p.id = pa.playbook_id
+            WHERE p.date > CURRENT_DATE - INTERVAL '%s days'
+            GROUP BY COALESCE(pa.status, 'pending')
+            ORDER BY status
+        """, (days,))
+        playbook_actions_by_status = cur.fetchall()
+
+        cur.execute("""
+            SELECT pa.id, pa.playbook_id, pa.ticker, pa.action,
+                   COALESCE(pa.status, 'pending') AS status,
+                   p.date AS playbook_date,
+                   d.id AS decision_id,
+                   d.action AS decision_action,
+                   d.reasoning AS decision_reasoning
+            FROM playbook_actions pa
+            JOIN playbooks p ON p.id = pa.playbook_id
+            JOIN decisions d ON d.playbook_action_id = pa.id
+            WHERE p.date > CURRENT_DATE - INTERVAL '%s days'
+              AND (pa.status = 'pending' OR pa.status IS NULL)
+            ORDER BY p.date DESC, pa.ticker, pa.id
+        """, (days,))
+        reviewed_actions_still_pending = cur.fetchall()
+
+        cur.execute("""
+            SELECT pa.ticker,
+                   COUNT(*) AS count,
+                   MAX(p.date) AS last_deferred_date
+            FROM playbook_actions pa
+            JOIN playbooks p ON p.id = pa.playbook_id
+            WHERE p.date > CURRENT_DATE - INTERVAL '%s days'
+              AND pa.status = 'deferred'
+            GROUP BY pa.ticker
+            ORDER BY count DESC, pa.ticker
+        """, (days,))
+        deferred_actions_by_ticker = cur.fetchall()
+
+    return {
+        "playbook_actions_by_status": playbook_actions_by_status,
+        "reviewed_actions_still_pending": reviewed_actions_still_pending,
+        "deferred_actions_by_ticker": deferred_actions_by_ticker,
+    }
+
+
 # --- Signal Attribution ---
 
 def get_signal_attribution(category: str | None = None):

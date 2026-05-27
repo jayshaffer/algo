@@ -201,6 +201,48 @@ class TestGetPlaybookAction:
         assert get_playbook_action(999) is None
 
 
+class TestBehaviorRegressionSummary:
+    def test_returns_behavior_summary_sections(self, cur):
+        from dashboard.queries import get_behavior_regression_summary
+
+        cur.fetchall.side_effect = [
+            [{"status": "deferred", "count": 2}, {"status": "pending", "count": 1}],
+            [{
+                "id": 7,
+                "ticker": "AVGO",
+                "status": "pending",
+                "decision_id": 70,
+                "decision_action": "hold",
+            }],
+            [{"ticker": "AVGO", "count": 2, "last_deferred_date": date(2026, 5, 26)}],
+        ]
+
+        result = get_behavior_regression_summary(days=30)
+
+        assert result["playbook_actions_by_status"][0]["status"] == "deferred"
+        assert result["reviewed_actions_still_pending"][0]["decision_action"] == "hold"
+        assert result["deferred_actions_by_ticker"][0]["ticker"] == "AVGO"
+        assert cur.execute.call_count == 3
+
+    def test_queries_status_pending_and_deferred_metrics(self, cur):
+        from dashboard.queries import get_behavior_regression_summary
+
+        cur.fetchall.side_effect = [[], [], []]
+        get_behavior_regression_summary(days=14)
+
+        status_sql = cur.execute.call_args_list[0][0][0]
+        reviewed_sql = cur.execute.call_args_list[1][0][0]
+        deferred_sql = cur.execute.call_args_list[2][0][0]
+        params = [call[0][1] for call in cur.execute.call_args_list]
+
+        assert "COALESCE(pa.status, 'pending')" in status_sql
+        assert "JOIN decisions d ON d.playbook_action_id = pa.id" in reviewed_sql
+        assert "pa.status = 'pending' OR pa.status IS NULL" in reviewed_sql
+        assert "pa.status = 'deferred'" in deferred_sql
+        assert "GROUP BY pa.ticker" in deferred_sql
+        assert params == [(14,), (14,), (14,)]
+
+
 class TestTickerQueries:
     def test_get_ticker_position_returns_row_when_held(self, cur):
         from dashboard.queries import get_ticker_position
