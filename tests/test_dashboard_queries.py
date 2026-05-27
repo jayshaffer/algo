@@ -215,6 +215,36 @@ class TestBehaviorRegressionSummary:
                 "decision_action": "hold",
             }],
             [{"ticker": "AVGO", "count": 2, "last_deferred_date": date(2026, 5, 26)}],
+            [{"id": 9, "session_date": date(2026, 5, 25), "status": "completed"}],
+            [
+                {
+                    "rule_id": 42,
+                    "rule_text": "Hold until macro cap lifts",
+                    "category": "risk",
+                    "direction": "constraint",
+                    "lift_condition": None,
+                    "decision_date": date(2026, 5, 27),
+                    "ticker": "GOOGL",
+                    "decision_action": "hold",
+                    "playbook_action_status": "deferred",
+                },
+                {
+                    "rule_id": 42,
+                    "rule_text": "Hold until macro cap lifts",
+                    "category": "risk",
+                    "direction": "constraint",
+                    "lift_condition": None,
+                    "decision_date": date(2026, 5, 26),
+                    "ticker": "AVGO",
+                    "decision_action": "hold",
+                    "playbook_action_status": None,
+                },
+            ],
+            [
+                {"role": "watch", "last_touched_date": date(2020, 1, 2)},
+                {"role": "watch", "last_touched_date": date(2020, 1, 3)},
+                {"role": "held", "last_touched_date": date(2020, 1, 2)},
+            ],
         ]
 
         result = get_behavior_regression_summary(days=30)
@@ -222,25 +252,42 @@ class TestBehaviorRegressionSummary:
         assert result["playbook_actions_by_status"][0]["status"] == "deferred"
         assert result["reviewed_actions_still_pending"][0]["decision_action"] == "hold"
         assert result["deferred_actions_by_ticker"][0]["ticker"] == "AVGO"
-        assert cur.execute.call_count == 3
+        assert result["market_closed_sessions"][0]["session_date"] == date(2026, 5, 25)
+        assert result["rule_gate_telemetry"][0]["rule_id"] == 42
+        assert result["rule_gate_telemetry"][0]["distinct_tickers"] == ["AVGO", "GOOGL"]
+        assert result["active_thesis_role_counts"][1]["role"] == "watch"
+        assert result["active_thesis_role_counts"][1]["count"] == 2
+        assert result["active_thesis_role_counts"][1]["stale_count"] == 2
+        assert cur.execute.call_count == 6
 
-    def test_queries_status_pending_and_deferred_metrics(self, cur):
+    def test_queries_all_behavior_metrics(self, cur):
         from dashboard.queries import get_behavior_regression_summary
 
-        cur.fetchall.side_effect = [[], [], []]
+        cur.fetchall.side_effect = [[], [], [], [], [], []]
         get_behavior_regression_summary(days=14)
 
         status_sql = cur.execute.call_args_list[0][0][0]
         reviewed_sql = cur.execute.call_args_list[1][0][0]
         deferred_sql = cur.execute.call_args_list[2][0][0]
-        params = [call[0][1] for call in cur.execute.call_args_list]
+        market_sql = cur.execute.call_args_list[3][0][0]
+        rule_sql = cur.execute.call_args_list[4][0][0]
+        thesis_sql = cur.execute.call_args_list[5][0][0]
+        params = [
+            call[0][1] if len(call[0]) > 1 else ()
+            for call in cur.execute.call_args_list
+        ]
 
         assert "COALESCE(pa.status, 'pending')" in status_sql
         assert "JOIN decisions d ON d.playbook_action_id = pa.id" in reviewed_sql
         assert "pa.status = 'pending' OR pa.status IS NULL" in reviewed_sql
         assert "pa.status = 'deferred'" in deferred_sql
         assert "GROUP BY pa.ticker" in deferred_sql
-        assert params == [(14,), (14,), (14,)]
+        assert "market_closed = TRUE" in market_sql
+        assert "ds.signal_type = 'rule_gate'" in rule_sql
+        assert "sr.lift_condition" in rule_sql
+        assert "LEFT JOIN positions" in thesis_sql
+        assert "last_touched_date" in thesis_sql
+        assert params == [(14,), (14,), (14,), (14,), (14,), ()]
 
 
 class TestTickerQueries:
