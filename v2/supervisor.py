@@ -9,9 +9,18 @@ CLI: `python -m v2.supervisor [--model MODEL] [--max-turns N] [--dry-run]`
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import os
+import sys
+import traceback
+from collections import Counter
 
+from v2 import claude_client
 from v2 import tools as v2_tools
+from v2.database.connection import get_cursor
+from v2.pricing import UnknownModelError, stage_cost_usd
 
 log = logging.getLogger(__name__)
 
@@ -113,3 +122,168 @@ def build_supervisor_tool_defs() -> list[dict]:
     """
     wanted = set(SUPERVISOR_TOOL_HANDLERS.keys())
     return [td for td in v2_tools.TOOL_DEFINITIONS if td.get("name") in wanted]
+
+
+def _summarize_tool_calls(messages: list) -> list[dict]:
+    """Walk assistant messages and count tool_use blocks by name."""
+    counter: Counter = Counter()
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for block in msg.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                counter[block.get("name", "?")] += 1
+    return [{"name": name, "count": count} for name, count in counter.most_common()]
+
+
+def _insert_memo(
+    *,
+    model: str,
+    content: str | None,
+    status: str,
+    turns_used: int,
+    tool_calls: list[dict],
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cost_usd: float | None,
+    error_message: str | None,
+) -> int:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO supervisor_memos
+              (model, prompt_version, content, status, turns_used,
+               tool_calls, input_tokens, output_tokens, cost_usd, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                model,
+                PROMPT_VERSION,
+                content,
+                status,
+                turns_used,
+                json.dumps(tool_calls),
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                error_message,
+            ),
+        )
+        row = cur.fetchone()
+    # RealDictCursor returns dict-shaped rows
+    return row["id"] if isinstance(row, dict) else row[0]
+
+
+def _compute_cost_safely(model: str, usage) -> float | None:
+    """Return cost in USD, or None if the model isn't priced."""
+    try:
+        return stage_cost_usd(
+            model=model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+        )
+    except UnknownModelError:
+        log.warning("model %r missing from model_pricing; cost_usd=NULL", model)
+        return None
+
+
+def run_supervisor(
+    model: str = DEFAULT_SUPERVISOR_MODEL,
+    max_turns: int = DEFAULT_MAX_TURNS,
+    dry_run: bool = False,
+) -> int | None:
+    """Run one supervisor pass. Returns inserted memo id, or None if dry_run."""
+    client = claude_client.get_claude_client()
+    tool_defs = build_supervisor_tool_defs()
+    initial = "Begin your strategy review. Investigate, cite IDs, then write the memo."
+
+    try:
+        with claude_client.capture_usage() as usage:
+            result = claude_client.run_agentic_loop(
+                client=client,
+                model=model,
+                system=STRATEGY_SUPERVISOR_SYSTEM,
+                initial_message=initial,
+                tools=tool_defs,
+                tool_handlers=SUPERVISOR_TOOL_HANDLERS,
+                max_turns=max_turns,
+                stage_name="supervisor",
+                purpose="supervisor_loop",
+            )
+    except Exception as exc:  # noqa: BLE001 — top-level guard for the agentic loop
+        log.exception("supervisor loop failed")
+        if dry_run:
+            raise
+        return _insert_memo(
+            model=model,
+            content=None,
+            status="error",
+            turns_used=0,
+            tool_calls=[],
+            input_tokens=None,
+            output_tokens=None,
+            cost_usd=None,
+            error_message=f"{type(exc).__name__}: {exc}"[:2000],
+        )
+
+    final_text = claude_client.extract_final_text(result.messages)
+    tool_calls = _summarize_tool_calls(result.messages)
+    cost = _compute_cost_safely(model, usage)
+
+    if final_text is None:
+        status = "max_turns"
+        content = None
+        error_message = "loop did not produce final text within max_turns"
+    else:
+        status = "ok"
+        content = final_text
+        error_message = None
+
+    if dry_run:
+        print("=== SUPERVISOR MEMO (dry-run, not persisted) ===")
+        print(content or f"[no final text — status={status}]")
+        return None
+
+    return _insert_memo(
+        model=model,
+        content=content,
+        status=status,
+        turns_used=result.turns_used,
+        tool_calls=tool_calls,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cost_usd=cost,
+        error_message=error_message,
+    )
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    parser = argparse.ArgumentParser(description="Pinchy strategy supervisor (observer-only)")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("ALGO_SUPERVISOR_MODEL", DEFAULT_SUPERVISOR_MODEL),
+        help=f"Anthropic model id (default: env ALGO_SUPERVISOR_MODEL or {DEFAULT_SUPERVISOR_MODEL!r})",
+    )
+    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run the loop, print the memo, skip the INSERT",
+    )
+    args = parser.parse_args()
+    try:
+        memo_id = run_supervisor(model=args.model, max_turns=args.max_turns, dry_run=args.dry_run)
+    except Exception:
+        traceback.print_exc()
+        return 2
+    if memo_id is not None:
+        print(f"supervisor_memo_id={memo_id}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
