@@ -1444,4 +1444,6 @@ def test_get_rule_bind_history_counts_citations(mock_db, mock_cursor):
     assert result["citations"][0]["decision_id"] == 101
     args, _ = mock_cursor.execute.call_args
     assert "decisions" in args[0]
+    assert "decision_signals" in args[0]
+    assert "signal_type = 'rule_gate'" in args[0]
     assert "%s" in args[0]  # rule_id param

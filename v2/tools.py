@@ -693,15 +693,17 @@ def tool_get_retired_rules(limit: int = 50) -> list[dict]:
 def tool_get_rule_bind_history(rule_id: int, days: int = 30) -> dict:
     """Read-only: decisions that cited this rule within `days`."""
     sql = """
-        SELECT d.id, d.session_date::text, d.ticker, d.action, d.reasoning
+        SELECT d.id, d.date::text, d.ticker, d.action, d.reasoning
         FROM decisions d
-        WHERE d.session_date >= (CURRENT_DATE - %s::int)
-          AND (d.reasoning ILIKE '%%rule #' || %s::text || '%%'
-               OR d.reasoning ILIKE '%%rule_id=' || %s::text || '%%')
-        ORDER BY d.session_date ASC
+        JOIN decision_signals ds
+          ON ds.decision_id = d.id
+         AND ds.signal_type = 'rule_gate'
+         AND ds.signal_id = %s
+        WHERE d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        ORDER BY d.date ASC
     """
     with get_cursor() as cur:
-        cur.execute(sql, (days, rule_id, rule_id))
+        cur.execute(sql, (rule_id, days))
         rows = cur.fetchall()
     return {
         "rule_id": rule_id,
