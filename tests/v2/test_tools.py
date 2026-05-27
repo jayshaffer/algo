@@ -1415,8 +1415,16 @@ class TestToolGetCuratedNews:
 def test_get_retired_rules_returns_recent_retirements(mock_db, mock_cursor):
     from v2.tools import tool_get_retired_rules
     mock_cursor.fetchall.return_value = [
-        (7, "Avoid earnings-week entries", "risk", "evidence A", "retired",
-         "2026-04-15T00:00:00+00:00", "2026-05-01T00:00:00+00:00", "low signal"),
+        {
+            "id": 7,
+            "rule_text": "Avoid earnings-week entries",
+            "category": "risk",
+            "supporting_evidence": "evidence A",
+            "status": "retired",
+            "created_at": "2026-04-15T00:00:00+00:00",
+            "retired_at": "2026-05-01T00:00:00+00:00",
+            "retirement_reason": "low signal",
+        },
     ]
     result = tool_get_retired_rules(limit=10)
     assert result == [{
@@ -1438,8 +1446,8 @@ def test_get_retired_rules_returns_recent_retirements(mock_db, mock_cursor):
 def test_get_rule_bind_history_counts_citations(mock_db, mock_cursor):
     from v2.tools import tool_get_rule_bind_history
     mock_cursor.fetchall.return_value = [
-        (101, "2026-05-20", "AAPL", "buy", "rule #7 supports caution"),
-        (115, "2026-05-22", "MSFT", "sell", "lift_condition for #7 met"),
+        {"id": 101, "date": "2026-05-20", "ticker": "AAPL", "action": "buy", "reasoning": "rule #7 supports caution"},
+        {"id": 115, "date": "2026-05-22", "ticker": "MSFT", "action": "sell", "reasoning": "lift_condition for #7 met"},
     ]
     result = tool_get_rule_bind_history(rule_id=7, days=30)
     assert result["rule_id"] == 7

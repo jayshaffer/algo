@@ -756,14 +756,14 @@ def tool_get_retired_rules(limit: int = 50) -> list[dict]:
         rows = cur.fetchall()
     return [
         {
-            "rule_id": r[0],
-            "rule_text": r[1],
-            "category": r[2],
-            "supporting_evidence": r[3],
-            "status": r[4],
-            "created_at": r[5].isoformat() if hasattr(r[5], "isoformat") else r[5],
-            "retired_at": r[6].isoformat() if hasattr(r[6], "isoformat") else r[6],
-            "retirement_reason": r[7],
+            "rule_id": r["id"],
+            "rule_text": r["rule_text"],
+            "category": r["category"],
+            "supporting_evidence": r["supporting_evidence"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "retired_at": r["retired_at"].isoformat() if hasattr(r["retired_at"], "isoformat") else r["retired_at"],
+            "retirement_reason": r["retirement_reason"],
         }
         for r in rows
     ]
@@ -790,11 +790,11 @@ def tool_get_rule_bind_history(rule_id: int, days: int = 30) -> dict:
         "bind_count": len(rows),
         "citations": [
             {
-                "decision_id": r[0],
-                "date": r[1],
-                "ticker": r[2],
-                "action": r[3],
-                "reasoning_excerpt": (r[4] or "")[:200],
+                "decision_id": r["id"],
+                "date": r["date"],
+                "ticker": r["ticker"],
+                "action": r["action"],
+                "reasoning_excerpt": (r["reasoning"] or "")[:200],
             }
             for r in rows
         ],
