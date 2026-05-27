@@ -137,6 +137,8 @@ class TestExecutorPromptReversalGuidance:
         text = TRADING_SYSTEM_PROMPT.lower()
         assert "reversal" in text, "executor must be told to justify reversals"
         assert "new evidence" in text, "rule must require new evidence, not re-narration"
+        assert "playbook_action_history" in TRADING_SYSTEM_PROMPT
+        assert "deferred_by_executor" in TRADING_SYSTEM_PROMPT
 
     def test_input_json_includes_recent_ticker_decisions(self):
         from v2.agent import ExecutorInput, get_trading_decisions
@@ -147,6 +149,9 @@ class TestExecutorPromptReversalGuidance:
             recent_ticker_decisions=[
                 {"ticker": "GOOGL", "date": "2026-05-04", "action": "sell",
                  "quantity": 0.17, "price": 383.02, "reasoning": "trim"},
+            ],
+            playbook_action_history=[
+                {"ticker": "GOOGL", "outcome_class": "deferred_by_executor"},
             ],
         )
 
@@ -165,6 +170,8 @@ class TestExecutorPromptReversalGuidance:
 
         sent_json = captured["messages"][0]["content"]
         assert "recent_ticker_decisions" in sent_json
+        assert "playbook_action_history" in sent_json
+        assert "deferred_by_executor" in sent_json
         assert "GOOGL" in sent_json
 
 

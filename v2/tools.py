@@ -482,9 +482,17 @@ def tool_get_recent_playbooks(n: int = 3) -> str:
             intent = a.get("intent_type") or ""
             mag_str = f"={mag}" if mag is not None else ""
             intent_part = f" {intent}{mag_str}" if intent else ""
+            outcome = a.get("outcome_class") or "unknown"
+            status = a.get("status") or "pending"
+            decision = a.get("decision_action")
+            outcome_part = f" [{outcome}; status={status}"
+            if decision:
+                outcome_part += f"; executor={decision}"
+            outcome_part += "]"
             reasoning = (a.get("reasoning") or "").strip()
             lines.append(
-                f"  {a['ticker']}: {a['action'].upper()}{intent_part} — {reasoning}"
+                f"  {a['ticker']}: {a['action'].upper()}{intent_part}"
+                f"{outcome_part} — {reasoning}"
             )
         lines.append("")
     return "\n".join(lines).rstrip()

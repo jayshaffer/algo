@@ -122,6 +122,7 @@ class ExecutorInput:
     equity_summary: str = ""
     todays_decisions: list[dict] = None
     recent_ticker_decisions: list[dict] = None
+    playbook_action_history: list[dict] = None
 
     def __post_init__(self):
         if self.current_prices is None:
@@ -130,6 +131,8 @@ class ExecutorInput:
             self.todays_decisions = []
         if self.recent_ticker_decisions is None:
             self.recent_ticker_decisions = []
+        if self.playbook_action_history is None:
+            self.playbook_action_history = []
 
 
 @dataclass
@@ -191,6 +194,7 @@ INPUTS (as JSON object):
 11. equity_summary — recent account performance
 12. todays_decisions — decisions already executed THIS session (don't duplicate)
 13. recent_ticker_decisions — for every ticker in today's playbook, the most recent ≤5 buy/sell decisions on that ticker in the past 7 days (with full reasoning). USE THIS to detect when today's playbook reverses a recent decision.
+14. playbook_action_history — recent prior playbook actions for today's tickers with outcome_class values such as executed, deferred_by_executor, expired_market_closed, expired_legacy, invalid_runtime, pending_unreviewed.
 
 CRITICAL RULE — YOU NEVER AUTHOR SHARE QUANTITIES:
 Share counts are computed by the system from live portfolio state. You author an INTENT and a MAGNITUDE; the system divides/multiplies against the real position, current price, buying_power, and portfolio_value. This is how the system stays consistent with actual holdings even if your reasoning drifts.
@@ -214,6 +218,7 @@ RULES:
 - If no playbook available: hold everything, no new positions
 - If uncertain: HOLD
 - REVERSAL JUSTIFICATION: if your decision on a ticker is the opposite action of any entry in `recent_ticker_decisions` for that ticker, your `reasoning` field MUST explicitly identify (a) the prior decision (date + action), and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. "Re-narrating the same fundamentals" is not new evidence. If you can't articulate (b), HOLD instead.
+- CARRY-FORWARD HISTORY: repeated prior playbook actions are not new evidence by themselves. Treat deferred_by_executor, expired_market_closed, expired_legacy, invalid_runtime, and pending_unreviewed as lifecycle context, not rising conviction. Execute only when today's playbook action is still valid against current portfolio, price, risk rules, and fresh evidence.
 
 SIGNAL_REFS — COPY VERBATIM, DO NOT INVENT:
 - For decisions ON a playbook action: copy `signal_refs` VERBATIM from the playbook action's `signal_refs` field. Do not edit, drop, or invent IDs. The strategist already cited the evidence; you are passing it through to attribution.
@@ -260,6 +265,7 @@ def get_trading_decisions(
         "equity_summary": executor_input.equity_summary,
         "todays_decisions": executor_input.todays_decisions,
         "recent_ticker_decisions": executor_input.recent_ticker_decisions,
+        "playbook_action_history": executor_input.playbook_action_history,
     }
     input_json = json.dumps(input_data, default=str)
 
