@@ -697,6 +697,29 @@ class TestPlaybookActionStatus:
 
         assert result == "expired_legacy"
 
+    def test_get_recent_thesis_decision_dates_joins_playbook_and_signal_refs(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import get_recent_thesis_decision_dates
+
+        mock_cursor.fetchall.return_value = [
+            {"thesis_id": 4, "last_decision_date": _date(2026, 5, 26)},
+            {"thesis_id": 5, "last_decision_date": _date(2026, 5, 25)},
+        ]
+
+        result = get_recent_thesis_decision_dates(days=60)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "JOIN playbook_actions" in sql
+        assert "JOIN decision_signals" in sql
+        assert "ds.signal_type = 'thesis'" in sql
+        assert params == (60, 60)
+        assert result == {
+            4: _date(2026, 5, 26),
+            5: _date(2026, 5, 25),
+        }
+
     def test_expire_stale_playbook_actions_runs_update(self, mock_db, mock_cursor):
         from datetime import date as _date
 

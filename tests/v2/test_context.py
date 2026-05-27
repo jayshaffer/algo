@@ -472,11 +472,14 @@ class TestGetThesesContext:
         }
         from v2.context import get_theses_context
         with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
-             _patch("v2.context.get_positions", return_value=[]):
+             _patch("v2.context.get_positions", return_value=[]), \
+             _patch("v2.context.get_recent_thesis_decision_dates", return_value={}):
             result = get_theses_context()
         assert "AAPL" in result
+        assert "Watch Theses" in result
         assert "long" in result
         assert "high confidence" in result
+        assert "last touched" in result
         assert "Strong earnings growth" in result
         assert "Entry trigger" in result
         assert "Exit trigger" in result
@@ -493,7 +496,8 @@ class TestGetThesesContext:
         }
         from v2.context import get_theses_context
         with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
-             _patch("v2.context.get_positions", return_value=[]):
+             _patch("v2.context.get_positions", return_value=[]), \
+             _patch("v2.context.get_recent_thesis_decision_dates", return_value={}):
             result = get_theses_context()
         assert "GOOG" in result
         assert "Entry trigger" not in result
@@ -513,12 +517,73 @@ class TestGetThesesContext:
 
         from v2.context import get_theses_context
         with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
-             _patch("v2.context.get_positions", return_value=[position]):
+             _patch("v2.context.get_positions", return_value=[position]), \
+             _patch("v2.context.get_recent_thesis_decision_dates", return_value={}):
             result = get_theses_context()
 
         assert "AMZN" in result
+        assert "Held Theses" in result
         assert "1.0 shares" in result
         assert "Long on consumer strength" in result
+
+    def test_theses_context_buckets_roles_and_stale_threshold(self, mock_db, mock_cursor):
+        from unittest.mock import patch as _patch
+
+        theses = [
+            {
+                "id": 1, "ticker": "AMZN", "direction": "long", "confidence": "high",
+                "thesis": "Held position", "entry_trigger": None, "exit_trigger": None,
+                "invalidation": None, "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 12),
+            },
+            {
+                "id": 2, "ticker": "AVGO", "direction": "long", "confidence": "medium",
+                "thesis": "Watch candidate", "entry_trigger": None, "exit_trigger": None,
+                "invalidation": None, "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 12),
+            },
+            {
+                "id": 3, "ticker": "TSLA", "direction": "avoid", "confidence": "low",
+                "thesis": "Avoid until margin improves", "entry_trigger": None,
+                "exit_trigger": None, "invalidation": None,
+                "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 13),
+            },
+        ]
+        positions = [{"ticker": "AMZN", "shares": Decimal("1"), "avg_cost": Decimal("100")}]
+
+        from v2.context import get_theses_context
+        with _patch("v2.context.get_active_theses", return_value=theses), \
+             _patch("v2.context.get_positions", return_value=positions), \
+             _patch("v2.context.get_recent_thesis_decision_dates", return_value={}), \
+             _patch("v2.context._today", return_value=date(2026, 5, 27)):
+            result = get_theses_context()
+
+        assert "Held Theses:\n- AMZN" in result
+        assert "Watch Theses:\n- AVGO" in result
+        assert "Avoid Theses:\n- TSLA" in result
+        assert "AVGO" in result and "[STALE: 10d untouched]" in result
+        assert "TSLA" in result and "[STALE" not in result.split("Avoid Theses:\n- TSLA", 1)[1].split("\n", 1)[0]
+
+    def test_theses_context_uses_recent_decision_as_last_touched(self, mock_db, mock_cursor):
+        from unittest.mock import patch as _patch
+
+        thesis_row = {
+            "id": 2, "ticker": "AVGO", "direction": "long", "confidence": "medium",
+            "thesis": "Watch candidate", "entry_trigger": None, "exit_trigger": None,
+            "invalidation": None, "created_at": datetime(2026, 5, 1),
+            "updated_at": datetime(2026, 5, 12),
+        }
+
+        from v2.context import get_theses_context
+        with _patch("v2.context.get_active_theses", return_value=[thesis_row]), \
+             _patch("v2.context.get_positions", return_value=[]), \
+             _patch("v2.context.get_recent_thesis_decision_dates", return_value={2: date(2026, 5, 13)}), \
+             _patch("v2.context._today", return_value=date(2026, 5, 27)):
+            result = get_theses_context()
+
+        assert "last touched 2026-05-13" in result
+        assert "[STALE" not in result
 
 
 class TestGetPlaybookContext:

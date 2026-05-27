@@ -1,11 +1,11 @@
 """Tool definitions and implementations for Claude ideation agent."""
 
 import logging
-from datetime import date, datetime
+from datetime import date
 
 from .agent import validate_signal_refs
 from .attribution import get_attribution_summary
-from .context import get_macro_context, get_portfolio_context
+from .context import format_active_theses_by_role, get_macro_context, get_portfolio_context
 from .database.trading_db import (
     close_thesis,
     get_active_strategy_rules,
@@ -17,6 +17,7 @@ from .database.trading_db import (
     get_recent_decisions,
     get_recent_playbooks_with_actions,
     get_recent_strategy_memos,
+    get_recent_thesis_decision_dates,
     get_thesis_by_id,
     insert_thesis,
     insert_thesis_signals,
@@ -94,24 +95,9 @@ def tool_get_active_theses(ticker: str | None = None) -> str:
     if not theses:
         return "No active theses."
 
-    lines = []
-    for t in theses:
-        age_days = (datetime.now() - t["created_at"]).days
-        lines.append(
-            f"#{t['id']} {t['ticker']} {t['direction']} {t['confidence']} {age_days}d | "
-            f"{t['thesis'][:120]}"
-        )
-        parts = []
-        if t['entry_trigger']:
-            parts.append(f"entry:{t['entry_trigger']}")
-        if t['exit_trigger']:
-            parts.append(f"exit:{t['exit_trigger']}")
-        if t['invalidation']:
-            parts.append(f"invalidate:{t['invalidation']}")
-        if parts:
-            lines.append(f"  {' | '.join(parts)}")
-
-    return "\n".join(lines)
+    positions = get_positions()
+    last_decision_dates = get_recent_thesis_decision_dates(days=60)
+    return format_active_theses_by_role(theses, positions, last_decision_dates)
 
 
 def _persist_signal_refs(thesis_id: int, signal_refs: list[dict] | None) -> str:

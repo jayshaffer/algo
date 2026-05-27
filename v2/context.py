@@ -1,7 +1,7 @@
 """Context builder for trading agent - aggregates signals into compressed format."""
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .agent import ExecutorInput, PlaybookAction
 from .attribution import get_attribution_summary
@@ -18,9 +18,13 @@ from .database.trading_db import (
     get_positions,
     get_recent_decisions,
     get_recent_playbook_action_history,
+    get_recent_thesis_decision_dates,
     get_signal_attribution,
     get_thesis_signals,
 )
+from .market_calendar import is_trading_day
+
+THESIS_STALE_TRADING_DAYS = 10
 
 
 def get_portfolio_context(account_info: dict) -> str:
@@ -248,6 +252,125 @@ def get_decision_outcomes_context(days: int = 30) -> str:
     return "\n".join(lines)
 
 
+def _today() -> date:
+    return date.today()
+
+
+def _as_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _trading_days_since(start: date, end: date) -> int:
+    if start >= end:
+        return 0
+
+    current = start + timedelta(days=1)
+    days = 0
+    while current <= end:
+        if is_trading_day(current):
+            days += 1
+        current += timedelta(days=1)
+    return days
+
+
+def _last_touched_date(thesis: dict, last_decision_dates: dict[int, date]) -> date:
+    touched = _as_date(thesis.get("updated_at")) or _as_date(thesis.get("created_at")) or _today()
+    decision_date = last_decision_dates.get(thesis.get("id"))
+    if decision_date and decision_date > touched:
+        return decision_date
+    return touched
+
+
+def _format_thesis_lines(thesis: dict, pos_map: dict, last_decision_dates: dict[int, date]) -> list[str]:
+    ticker = thesis["ticker"]
+    direction = thesis["direction"]
+    confidence = thesis["confidence"]
+    now = _today()
+    created = _as_date(thesis.get("created_at")) or now
+    age_days = (now - created).days
+    last_touched = _last_touched_date(thesis, last_decision_dates)
+    untouched_trading_days = _trading_days_since(last_touched, now)
+
+    stale_note = ""
+    if (
+        (direction == "avoid" or ticker not in pos_map)
+        and untouched_trading_days >= THESIS_STALE_TRADING_DAYS
+    ):
+        stale_note = f" [STALE: {untouched_trading_days}d untouched]"
+
+    lines = [
+        (
+            f"- {ticker} ({direction}, {confidence} confidence, {age_days}d old, "
+            f"last touched {last_touched}){stale_note}"
+        )
+    ]
+
+    pos = pos_map.get(ticker)
+    if pos:
+        lines.append(f"  Current: {pos['shares']} shares @ ${pos['avg_cost']:.2f} avg cost")
+    else:
+        lines.append("  Current: no position held")
+
+    lines.append(f"  Thesis: {thesis['thesis']}")
+
+    if thesis["entry_trigger"]:
+        lines.append(f"  Entry trigger: {thesis['entry_trigger']}")
+
+    if thesis["exit_trigger"]:
+        lines.append(f"  Exit trigger: {thesis['exit_trigger']}")
+
+    if thesis["invalidation"]:
+        lines.append(f"  Invalidation: {thesis['invalidation']}")
+
+    return lines
+
+
+def format_active_theses_by_role(
+    theses: list[dict],
+    positions: list[dict],
+    last_decision_dates: dict[int, date] | None = None,
+) -> str:
+    """Format active theses into held, watch, and avoid buckets."""
+    if not theses:
+        return "Active Theses:\n- No active trade theses"
+
+    pos_map = {p["ticker"]: p for p in positions}
+    last_decision_dates = last_decision_dates or {}
+    buckets = {
+        "Held Theses": [],
+        "Watch Theses": [],
+        "Avoid Theses": [],
+    }
+
+    for thesis in theses:
+        ticker = thesis["ticker"]
+        direction = thesis["direction"]
+        if ticker in pos_map:
+            bucket = "Held Theses"
+        elif direction == "avoid":
+            bucket = "Avoid Theses"
+        else:
+            bucket = "Watch Theses"
+        buckets[bucket].append(thesis)
+
+    lines = ["Active Theses:"]
+    for bucket, rows in buckets.items():
+        lines.append(f"{bucket}:")
+        if not rows:
+            lines.append("- None")
+            continue
+        for thesis in rows:
+            lines.extend(_format_thesis_lines(thesis, pos_map, last_decision_dates))
+
+    return "\n".join(lines)
+
+
 def get_theses_context() -> str:
     """
     Build active theses section for trading context.
@@ -255,46 +378,16 @@ def get_theses_context() -> str:
     Returns:
         Formatted theses context string
     """
-    from datetime import datetime
-
     theses = get_active_theses()
-
     if not theses:
-        return "Active Theses:\n- No active trade theses"
-
-    lines = ["Active Theses:"]
+        return format_active_theses_by_role([], [], {})
 
     # Build a ticker → position map so we can show current numeric state
     # alongside each thesis narrative — theses themselves stay qualitative
     # (see tool_create_thesis guidance).
-    pos_map = {p["ticker"]: p for p in get_positions()}
-
-    for thesis in theses:
-        ticker = thesis["ticker"]
-        direction = thesis["direction"]
-        confidence = thesis["confidence"]
-        age_days = (datetime.now() - thesis["created_at"]).days
-
-        lines.append(f"- {ticker} ({direction}, {confidence} confidence, {age_days}d old)")
-
-        pos = pos_map.get(ticker)
-        if pos:
-            lines.append(f"  Current: {pos['shares']} shares @ ${pos['avg_cost']:.2f} avg cost")
-        else:
-            lines.append("  Current: no position held")
-
-        lines.append(f"  Thesis: {thesis['thesis']}")
-
-        if thesis["entry_trigger"]:
-            lines.append(f"  Entry trigger: {thesis['entry_trigger']}")
-
-        if thesis["exit_trigger"]:
-            lines.append(f"  Exit trigger: {thesis['exit_trigger']}")
-
-        if thesis["invalidation"]:
-            lines.append(f"  Invalidation: {thesis['invalidation']}")
-
-    return "\n".join(lines)
+    positions = get_positions()
+    last_decision_dates = get_recent_thesis_decision_dates(days=60)
+    return format_active_theses_by_role(theses, positions, last_decision_dates)
 
 
 def get_playbook_context(playbook_date: date) -> str:
