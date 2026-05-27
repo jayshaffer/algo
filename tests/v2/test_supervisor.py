@@ -148,3 +148,54 @@ def test_run_supervisor_dry_run_reraises_on_error(patched_supervisor):
     # No INSERT should have happened (the dry-run path doesn't insert).
     for call in patched_supervisor["mock_cursor"].execute.call_args_list:
         assert "INSERT INTO supervisor_memos" not in call.args[0]
+
+
+def test_supervisor_tools_have_zero_overlap_with_mutators():
+    """Defense-in-depth: supervisor MUST NOT include any strategy mutator tool.
+
+    If this test fails, a future contributor has wired a write-capable tool
+    into the supervisor handlers. The supervisor is observer-only.
+    """
+    from v2.supervisor import STRATEGY_MUTATOR_NAMES, SUPERVISOR_TOOL_HANDLERS
+    overlap = set(SUPERVISOR_TOOL_HANDLERS.keys()) & set(STRATEGY_MUTATOR_NAMES)
+    assert overlap == set(), (
+        f"Supervisor MUST NOT include strategy mutator tools. Overlap: {overlap}"
+    )
+
+
+def test_supervisor_tools_are_all_get_prefixed():
+    """Every supervisor tool name must start with `get_` — naming hygiene
+    that also serves as a quick smell-test for an accidentally-wired
+    mutator (which would start with `propose_`, `retire_`, etc.).
+    """
+    from v2.supervisor import SUPERVISOR_TOOL_HANDLERS
+    bad = [name for name in SUPERVISOR_TOOL_HANDLERS if not name.startswith("get_")]
+    assert bad == [], f"Non-get_ tools in supervisor registry: {bad}"
+
+
+def test_mutator_set_matches_strategy_module_exports():
+    """Sync check: STRATEGY_MUTATOR_NAMES must match v2/strategy.py's actual
+    mutator-tool function exports. If a new mutator is added to strategy.py
+    without updating STRATEGY_MUTATOR_NAMES, the overlap-defense test silently
+    weakens — this catches that drift.
+    """
+    import v2.strategy as strat
+    from v2.supervisor import STRATEGY_MUTATOR_NAMES
+    expected_python_names = {
+        "tool_propose_rule",
+        "tool_retire_rule",
+        "tool_revalidate_rule",
+        "tool_update_strategy_identity",
+        "tool_write_strategy_memo",
+    }
+    actual_python_names = {name for name in dir(strat) if name in expected_python_names}
+    # The 5 expected mutators must all exist in v2.strategy
+    missing = expected_python_names - actual_python_names
+    assert missing == set(), f"Expected mutator functions missing from v2.strategy: {missing}"
+    # And STRATEGY_MUTATOR_NAMES must be the same 5 minus the `tool_` prefix.
+    expected_claude_names = {n.removeprefix("tool_") for n in expected_python_names}
+    assert set(STRATEGY_MUTATOR_NAMES) == expected_claude_names, (
+        f"STRATEGY_MUTATOR_NAMES drift. "
+        f"In supervisor but not strategy: {set(STRATEGY_MUTATOR_NAMES) - expected_claude_names}. "
+        f"In strategy but not supervisor: {expected_claude_names - set(STRATEGY_MUTATOR_NAMES)}."
+    )
