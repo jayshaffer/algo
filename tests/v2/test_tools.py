@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 20 handler functions."""
+        """TOOL_HANDLERS should have all 22 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1039,12 +1039,14 @@ class TestToolCompleteness:
             "get_strategy_history",
             "get_retired_rules",
             "get_rule_bind_history",
+            "get_theses",
+            "get_thesis_lineage",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 21 entries (20 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 21
+        """TOOL_DEFINITIONS should have 23 entries (22 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 23
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1072,6 +1074,8 @@ class TestToolCompleteness:
             "get_strategy_history",
             "get_retired_rules",
             "get_rule_bind_history",
+            "get_theses",
+            "get_thesis_lineage",
         }
         assert tool_names == expected_names
 
@@ -1447,3 +1451,52 @@ def test_get_rule_bind_history_counts_citations(mock_db, mock_cursor):
     assert "decision_signals" in args[0]
     assert "signal_type = 'rule_gate'" in args[0]
     assert "%s" in args[0]  # rule_id param
+
+
+def test_get_theses_filters_by_status(mock_db, mock_cursor):
+    from v2.tools import tool_get_theses
+    mock_cursor.fetchall.return_value = [
+        {"id": 3, "ticker": "AAPL", "thesis": "Long iPhone cycle",
+         "entry_trigger": "RSI<40", "exit_trigger": "RSI>70 or earnings",
+         "status": "active", "created_at": "2026-05-01T00:00:00+00:00",
+         "closed_at": None, "close_reason": None},
+    ]
+    result = tool_get_theses(status="active", limit=25)
+    assert len(result) == 1
+    assert result[0]["thesis_id"] == 3
+    assert result[0]["status"] == "active"
+    assert result[0]["thesis"] == "Long iPhone cycle"
+    args, _ = mock_cursor.execute.call_args
+    assert "status = %s" in args[0]
+    assert args[1] == ("active", 25)
+
+
+def test_get_theses_all_status_skips_filter(mock_db, mock_cursor):
+    from v2.tools import tool_get_theses
+    mock_cursor.fetchall.return_value = []
+    tool_get_theses(status="all", limit=50)
+    args, _ = mock_cursor.execute.call_args
+    assert "status = %s" not in args[0]
+    assert args[1] == (50,)
+
+
+def test_get_thesis_lineage_joins_decisions_via_playbook_actions(mock_db, mock_cursor):
+    from v2.tools import tool_get_thesis_lineage
+    # First fetchone: thesis header
+    mock_cursor.fetchone.return_value = {"id": 3, "ticker": "AAPL", "thesis": "Long cycle", "status": "active"}
+    # fetchall: decisions joined via playbook_actions
+    mock_cursor.fetchall.return_value = [
+        {"id": 88, "date": "2026-05-10", "action": "buy", "quantity": 10.0,
+         "reasoning": "thesis #3 entry", "outcome_7d": 1.5, "outcome_30d": 3.2},
+    ]
+    result = tool_get_thesis_lineage(thesis_id=3)
+    assert result["thesis_id"] == 3
+    assert result["ticker"] == "AAPL"
+    assert result["thesis"] == "Long cycle"
+    assert len(result["decisions"]) == 1
+    assert result["decisions"][0]["outcome_7d"] == 1.5
+    assert result["decisions"][0]["outcome_30d"] == 3.2
+    # Regression guard: the join must go through playbook_actions
+    fetchall_sql = mock_cursor.execute.call_args_list[-1].args[0]
+    assert "playbook_actions" in fetchall_sql
+    assert "pa.thesis_id = %s" in fetchall_sql

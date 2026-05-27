@@ -626,6 +626,85 @@ def tool_write_playbook(
         return f"Error writing playbook: {e}"
 
 
+def tool_get_theses(status: str = "all", limit: int = 50) -> list[dict]:
+    """Read-only: theses by status (all|active|closed)."""
+    base = """
+        SELECT id, ticker, thesis, entry_trigger, exit_trigger,
+               status, created_at, closed_at, close_reason
+        FROM theses
+    """
+    params: tuple
+    if status == "all":
+        sql = base + " ORDER BY created_at DESC LIMIT %s"
+        params = (limit,)
+    else:
+        sql = base + " WHERE status = %s ORDER BY created_at DESC LIMIT %s"
+        params = (status, limit)
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [
+        {
+            "thesis_id": r["id"],
+            "ticker": r["ticker"],
+            "thesis": r["thesis"],
+            "entry_trigger": r["entry_trigger"],
+            "exit_trigger": r["exit_trigger"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "closed_at": r["closed_at"].isoformat() if hasattr(r["closed_at"], "isoformat") else r["closed_at"],
+            "close_reason": r["close_reason"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_thesis_lineage(thesis_id: int) -> dict:
+    """Read-only: decisions tagged with this thesis, with outcomes.
+
+    Theses link to decisions via playbook_actions
+    (decisions.playbook_action_id → playbook_actions.id; playbook_actions.thesis_id → theses.id).
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, ticker, thesis, status FROM theses WHERE id = %s",
+            (thesis_id,),
+        )
+        head = cur.fetchone()
+        if head is None:
+            return {"thesis_id": thesis_id, "error": "not found"}
+        cur.execute(
+            """
+            SELECT d.id, d.date::text, d.action, d.quantity,
+                   d.reasoning, d.outcome_7d, d.outcome_30d
+            FROM decisions d
+            JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+            WHERE pa.thesis_id = %s
+            ORDER BY d.date ASC
+            """,
+            (thesis_id,),
+        )
+        rows = cur.fetchall()
+    return {
+        "thesis_id": head["id"],
+        "ticker": head["ticker"],
+        "thesis": head["thesis"],
+        "status": head["status"],
+        "decisions": [
+            {
+                "decision_id": r["id"],
+                "date": r["date"],
+                "action": r["action"],
+                "quantity": float(r["quantity"]) if r["quantity"] is not None else None,
+                "reasoning_excerpt": (r["reasoning"] or "")[:200],
+                "outcome_7d": float(r["outcome_7d"]) if r["outcome_7d"] is not None else None,
+                "outcome_30d": float(r["outcome_30d"]) if r["outcome_30d"] is not None else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 def tool_get_strategy_identity() -> str:
     """Get the system's current strategy identity."""
     logger.info("Getting strategy identity")
@@ -1069,6 +1148,26 @@ TOOL_DEFINITIONS = [
             "required": ["rule_id"],
         },
     },
+    {
+        "name": "get_theses",
+        "description": "Read-only. Theses filtered by status (all|active|closed).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["all", "active", "closed"], "default": "all"},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    },
+    {
+        "name": "get_thesis_lineage",
+        "description": "Read-only. Decisions tagged with a thesis, with outcomes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"thesis_id": {"type": "integer"}},
+            "required": ["thesis_id"],
+        },
+    },
 ]
 
 
@@ -1093,4 +1192,6 @@ TOOL_HANDLERS = {
     "get_strategy_history": tool_get_strategy_history,
     "get_retired_rules": tool_get_retired_rules,
     "get_rule_bind_history": tool_get_rule_bind_history,
+    "get_theses": tool_get_theses,
+    "get_thesis_lineage": tool_get_thesis_lineage,
 }
