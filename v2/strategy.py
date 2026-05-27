@@ -17,10 +17,12 @@ from .database.trading_db import (
     get_active_strategy_rules,
     get_current_strategy_state,
     get_recent_decisions,
+    get_rule_gate_revalidation_candidates,
     insert_strategy_memo,
     insert_strategy_rule,
     insert_strategy_state,
     retire_strategy_rule,
+    update_strategy_rule_revalidation,
 )
 from .formation import build_formation_context
 from .patterns import analyze_round_trips
@@ -35,6 +37,7 @@ except ImportError:  # pragma: no cover - Python < 3.11
 
 MIN_RULE_TENURE_DAYS = 5
 MAX_RETIREMENTS_PER_SESSION = 2
+RULE_REVALIDATION_STREAK = 5
 
 
 def _utc_date(dt: datetime) -> date:
@@ -63,6 +66,7 @@ MIN_RULE_EVIDENCE_CHARS = 2
 # `Context.run`) gets its own list.
 _session_retirements: ContextVar[list[int]] = ContextVar("_session_retirements")
 _session_proposals: ContextVar[list[int]] = ContextVar("_session_proposals")
+_session_revalidations: ContextVar[list[int]] = ContextVar("_session_revalidations")
 
 
 def _get_session_retirements() -> list[int]:
@@ -83,10 +87,20 @@ def _get_session_proposals() -> list[int]:
         return fresh
 
 
+def _get_session_revalidations() -> list[int]:
+    try:
+        return _session_revalidations.get()
+    except LookupError:
+        fresh: list[int] = []
+        _session_revalidations.set(fresh)
+        return fresh
+
+
 def reset_session():
     """Reset per-session counters. Called at start of strategy reflection."""
     _session_retirements.set([])
     _session_proposals.set([])
+    _session_revalidations.set([])
 
 
 @dataclass
@@ -113,6 +127,7 @@ You are NOT making trades. You are reflecting on performance and shaping who thi
 3. **Update Rules**: Based on attribution data and decision outcomes:
    - Propose new rules when patterns emerge (e.g., a signal type consistently wins or loses)
    - Retire rules that are no longer supported by data
+   - Revalidate execution-gating rules that repeatedly block/defer trades without a lift condition
    - Rules should be specific and evidence-based
 
 4. **Update Identity**: If the system's behavior or performance suggests a shift in trading style, update the identity. The identity should reflect what the system IS, not what it aspires to be.
@@ -147,6 +162,10 @@ Before proposing a new rule:
 ## Rule Tenure
 
 Rules have a minimum tenure of 5 days. You cannot retire a rule until it has been active for at least 5 sessions. This prevents oscillation (propose → retire → re-propose). If a new rule seems wrong, write a memo instead and revisit next session.
+
+## Rule Revalidation Gate
+
+If the initial context lists gated rules, you MUST call revalidate_rule for each gated rule before writing the final memo. A gated rule is an active execution constraint with no lift_condition that has repeatedly appeared as the binding reason for holds or deferrals. Revalidation must either keep the rule with a numeric lift_condition, narrow the rule text and add a numeric lift_condition, or retire the rule. If retirement is blocked by tenure, keep or narrow it with a lift_condition instead.
 
 You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
 
@@ -207,12 +226,14 @@ def tool_propose_rule(
     direction: str,
     confidence: float,
     supporting_evidence: str,
+    lift_condition: str | None = None,
 ) -> str:
     """Propose a new strategy rule."""
     rule_text = (rule_text or "").strip()
     category = (category or "").strip()
     direction = (direction or "").strip()
     supporting_evidence = (supporting_evidence or "").strip()
+    lift_condition = (lift_condition or "").strip() or None
 
     if not rule_text:
         return "Error: rule_text is required"
@@ -254,9 +275,51 @@ def tool_propose_rule(
         direction=direction,
         confidence=confidence,
         supporting_evidence=supporting_evidence,
+        lift_condition=lift_condition,
     )
     proposals.append(rule_id)
     return f"Created rule ID {rule_id}: {rule_text}"
+
+
+def tool_revalidate_rule(
+    rule_id: int,
+    action: str,
+    lift_condition: str | None = None,
+    revised_rule_text: str | None = None,
+    reason: str | None = None,
+) -> str:
+    """Revalidate an execution-gating rule."""
+    action = (action or "").strip()
+    lift_condition = (lift_condition or "").strip()
+    revised_rule_text = (revised_rule_text or "").strip()
+    reason = (reason or "").strip()
+
+    if action not in {"keep", "narrow", "retire"}:
+        return "Error: action must be keep, narrow, or retire"
+    if action == "keep" and not lift_condition:
+        return "Error: keep requires lift_condition"
+    if action == "narrow" and (not lift_condition or not revised_rule_text):
+        return "Error: narrow requires revised_rule_text and lift_condition"
+
+    if action == "retire":
+        result = tool_retire_rule(rule_id=rule_id, reason=reason or "Rule revalidation")
+        if result.startswith("Retired rule ID"):
+            _get_session_revalidations().append(rule_id)
+            return f"Revalidated rule ID {rule_id}: retired. {result}"
+        return result
+
+    success = update_strategy_rule_revalidation(
+        rule_id=rule_id,
+        lift_condition=lift_condition,
+        revised_rule_text=revised_rule_text if action == "narrow" else None,
+    )
+    if not success:
+        return f"Error: Rule ID {rule_id} not found or not active"
+
+    _get_session_revalidations().append(rule_id)
+    if action == "narrow":
+        return f"Revalidated rule ID {rule_id}: narrowed with lift condition."
+    return f"Revalidated rule ID {rule_id}: kept with lift condition."
 
 
 def tool_retire_rule(rule_id: int, reason: str) -> str:
@@ -495,8 +558,27 @@ STRATEGY_TOOL_DEFINITIONS = [
                 "direction": {"type": "string", "enum": ["constraint", "preference"]},
                 "confidence": {"type": "number", "description": "0.0-1.0"},
                 "supporting_evidence": {"type": "string"},
+                "lift_condition": {
+                    "type": "string",
+                    "description": "Optional numeric condition that lifts an execution-gating constraint.",
+                },
             },
             "required": ["rule_text", "category", "direction", "confidence", "supporting_evidence"],
+        },
+    },
+    {
+        "name": "revalidate_rule",
+        "description": "Keep, narrow, or retire an execution-gating rule that lacks lift criteria.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+                "action": {"type": "string", "enum": ["keep", "narrow", "retire"]},
+                "lift_condition": {"type": "string"},
+                "revised_rule_text": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["rule_id", "action"],
         },
     },
     {
@@ -532,6 +614,7 @@ STRATEGY_TOOL_HANDLERS = {
     "get_session_summary": tool_get_session_summary,
     "update_strategy_identity": tool_update_strategy_identity,
     "propose_rule": tool_propose_rule,
+    "revalidate_rule": tool_revalidate_rule,
     "retire_rule": tool_retire_rule,
     "write_strategy_memo": tool_write_strategy_memo,
 }
@@ -590,6 +673,45 @@ def _format_trading_context(trading_result) -> str:
     return "\n".join(lines)
 
 
+def _format_rule_revalidation_context(candidates: list[dict]) -> str:
+    lines = [
+        "RULE REVALIDATION EVIDENCE:",
+        (
+            f"Gate threshold: {RULE_REVALIDATION_STREAK} consecutive cited trading sessions "
+            "for active rules with lift_condition unset."
+        ),
+    ]
+    if not candidates:
+        lines.append("No recent rule-gate citations.")
+        return "\n".join(lines)
+
+    for row in candidates:
+        lift = row.get("lift_condition") or "UNSET"
+        gated = (
+            " GATED"
+            if not row.get("lift_condition")
+            and row.get("consecutive_session_streak", 0) >= RULE_REVALIDATION_STREAK
+            else ""
+        )
+        tickers = ",".join(row.get("tickers") or [])
+        lines.append(
+            f"- Rule {row['rule_id']}{gated}: streak={row['consecutive_session_streak']} "
+            f"cites={row['cite_count']} hold/defer={row['hold_deferred_count']} "
+            f"last={row['last_cited_date']} lift={lift} tickers={tickers}"
+        )
+        lines.append(f"  {row['rule_text']}")
+    return "\n".join(lines)
+
+
+def _gated_rule_ids(candidates: list[dict]) -> set[int]:
+    return {
+        row["rule_id"]
+        for row in candidates
+        if not row.get("lift_condition")
+        and row.get("consecutive_session_streak", 0) >= RULE_REVALIDATION_STREAK
+    }
+
+
 def run_strategy_reflection(
     model: str = DEFAULT_REFLECTION_MODEL,
     max_turns: int = 10,
@@ -603,10 +725,18 @@ def run_strategy_reflection(
     client = get_claude_client()
 
     trading_context = _format_trading_context(trading_result)
+    try:
+        rule_revalidation_candidates = get_rule_gate_revalidation_candidates(days=30)
+    except Exception as e:
+        logger.warning("Could not load rule revalidation evidence: %s", e)
+        rule_revalidation_candidates = []
+    gated_rule_ids = _gated_rule_ids(rule_revalidation_candidates)
     initial_parts = []
     if trading_context:
         initial_parts.append(trading_context)
         initial_parts.append("")
+    initial_parts.append(_format_rule_revalidation_context(rule_revalidation_candidates))
+    initial_parts.append("")
     initial_parts.append(
         "Begin your strategy reflection. Start by:\n"
         "1. Getting the current strategy identity and rules\n"
@@ -649,6 +779,12 @@ def run_strategy_reflection(
     )
 
     proposed, retired, identity_updated, memo_written = _count_actions(result.messages)
+    missing_revalidations = sorted(gated_rule_ids - set(_get_session_revalidations()))
+    if missing_revalidations:
+        raise RuntimeError(
+            "Reflection finished without revalidating gated rule(s): "
+            + ", ".join(str(rule_id) for rule_id in missing_revalidations)
+        )
 
     logger.info(
         "Strategy reflection complete: %d rules proposed, %d retired, "

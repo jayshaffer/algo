@@ -584,7 +584,8 @@ def build_executor_input(account_info: dict, playbook_date: date = None) -> Exec
         if rules:
             rule_lines = []
             for r in rules:
-                rule_lines.append(f"#{r['id']} {r['direction']}/{r['category']}: {r['rule_text']}")
+                lift = f" lift:{r['lift_condition']}" if r.get("lift_condition") else " lift:UNSET"
+                rule_lines.append(f"#{r['id']} {r['direction']}/{r['category']}:{lift} {r['rule_text']}")
             strategy_rules = "\n".join(rule_lines)
         else:
             strategy_rules = ""

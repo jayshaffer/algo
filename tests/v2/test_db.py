@@ -1053,10 +1053,12 @@ class TestStrategyRules:
             direction="constraint",
             confidence=0.8,
             supporting_evidence="38% win rate over 12 trades",
+            lift_condition="Lift when 20-trade win rate exceeds 50%",
         )
         assert result == 1
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO strategy_rules" in sql
+        assert "lift_condition" in sql
 
     def test_get_active_strategy_rules(self, mock_db, mock_cursor):
         mock_cursor.fetchall.return_value = [{"id": 1, "rule_text": "test", "status": "active"}]
@@ -1080,6 +1082,79 @@ class TestStrategyRules:
         from v2.database.trading_db import retire_strategy_rule
         result = retire_strategy_rule(rule_id=999)
         assert result is False
+
+    def test_update_strategy_rule_revalidation_keep(self, mock_db, mock_cursor):
+        mock_cursor.rowcount = 1
+        from v2.database.trading_db import update_strategy_rule_revalidation
+
+        result = update_strategy_rule_revalidation(
+            rule_id=7,
+            lift_condition="Lift when drawdown is below 2%",
+        )
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert result is True
+        assert "lift_condition" in sql
+        assert "rule_text" not in sql.split("SET", 1)[1].split("WHERE", 1)[0]
+        assert params == ("Lift when drawdown is below 2%", 7)
+
+    def test_get_rule_gate_revalidation_candidates_computes_streak(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import get_rule_gate_revalidation_candidates
+
+        mock_cursor.fetchall.return_value = [
+            {
+                "rule_id": 42,
+                "rule_text": "Hold until macro cap lifts",
+                "category": "risk",
+                "direction": "constraint",
+                "lift_condition": None,
+                "decision_id": 3,
+                "decision_date": _date(2026, 5, 27),
+                "decision_action": "hold",
+                "ticker": "GOOGL",
+                "playbook_action_status": "deferred",
+            },
+            {
+                "rule_id": 42,
+                "rule_text": "Hold until macro cap lifts",
+                "category": "risk",
+                "direction": "constraint",
+                "lift_condition": None,
+                "decision_id": 2,
+                "decision_date": _date(2026, 5, 26),
+                "decision_action": "hold",
+                "ticker": "GOOGL",
+                "playbook_action_status": "deferred",
+            },
+            {
+                "rule_id": 42,
+                "rule_text": "Hold until macro cap lifts",
+                "category": "risk",
+                "direction": "constraint",
+                "lift_condition": None,
+                "decision_id": 1,
+                "decision_date": _date(2026, 5, 22),
+                "decision_action": "hold",
+                "ticker": "AVGO",
+                "playbook_action_status": None,
+            },
+        ]
+
+        result = get_rule_gate_revalidation_candidates(days=30)
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "decision_signals" in sql
+        assert "signal_type = 'rule_gate'" in sql
+        assert "LEFT JOIN playbook_actions" in sql
+        assert "LEFT JOIN sessions" in sql
+        assert result[0]["rule_id"] == 42
+        assert result[0]["consecutive_session_streak"] == 3
+        assert result[0]["cite_count"] == 3
+        assert result[0]["hold_deferred_count"] == 3
+        assert result[0]["tickers"] == ["AVGO", "GOOGL"]
 
 
 class TestSessionTracking:

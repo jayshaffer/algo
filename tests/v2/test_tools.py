@@ -1123,6 +1123,7 @@ class TestGetStrategyRules:
         result = tool_get_strategy_rules()
         assert "Fade legal" in result
         assert "constraint" in result
+        assert "lift:" in result
 
     @patch("v2.tools.get_active_strategy_rules")
     def test_returns_empty_message(self, mock_get):

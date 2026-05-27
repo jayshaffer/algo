@@ -9,6 +9,7 @@ from datetime import date
 
 from psycopg2.extras import Json, execute_values
 
+from ..market_calendar import is_trading_day
 from .connection import get_cursor
 
 # --- News Signals ---
@@ -954,13 +955,22 @@ def clear_current_strategy_state():
 
 # --- Strategy Rules ---
 
-def insert_strategy_rule(rule_text, category, direction, confidence, supporting_evidence=None) -> int:
+def insert_strategy_rule(
+    rule_text,
+    category,
+    direction,
+    confidence,
+    supporting_evidence=None,
+    lift_condition=None,
+) -> int:
     with get_cursor() as cur:
         cur.execute("""
-            INSERT INTO strategy_rules (rule_text, category, direction, confidence, supporting_evidence)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO strategy_rules (
+                rule_text, category, direction, confidence, supporting_evidence, lift_condition
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (rule_text, category, direction, confidence, supporting_evidence))
+        """, (rule_text, category, direction, confidence, supporting_evidence, lift_condition))
         return cur.fetchone()["id"]
 
 
@@ -985,6 +995,114 @@ def retire_strategy_rule(rule_id, reason=None) -> bool:
             WHERE id = %s AND status = 'active'
         """, (reason, rule_id))
         return cur.rowcount > 0
+
+
+def update_strategy_rule_revalidation(
+    rule_id: int,
+    lift_condition: str,
+    revised_rule_text: str | None = None,
+) -> bool:
+    """Attach lift condition and optionally narrow rule text."""
+    with get_cursor() as cur:
+        if revised_rule_text is None:
+            cur.execute("""
+                UPDATE strategy_rules
+                SET lift_condition = %s
+                WHERE id = %s AND status = 'active'
+            """, (lift_condition, rule_id))
+        else:
+            cur.execute("""
+                UPDATE strategy_rules
+                SET rule_text = %s, lift_condition = %s
+                WHERE id = %s AND status = 'active'
+            """, (revised_rule_text, lift_condition, rule_id))
+        return cur.rowcount > 0
+
+
+def _previous_trading_day(day: date) -> date:
+    from datetime import timedelta
+
+    current = day - timedelta(days=1)
+    while not is_trading_day(current):
+        current -= timedelta(days=1)
+    return current
+
+
+def _rule_cite_streak(cited_dates: list[date]) -> int:
+    if not cited_dates:
+        return 0
+    ordered = sorted(set(cited_dates), reverse=True)
+    streak = 1
+    expected = _previous_trading_day(ordered[0])
+    for cited_date in ordered[1:]:
+        if cited_date != expected:
+            break
+        streak += 1
+        expected = _previous_trading_day(cited_date)
+    return streak
+
+
+def get_rule_gate_revalidation_candidates(days: int = 30) -> list[dict]:
+    """Return rule-gate cite telemetry for active rules in the recent window."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                sr.id AS rule_id,
+                sr.rule_text,
+                sr.category,
+                sr.direction,
+                sr.lift_condition,
+                d.id AS decision_id,
+                d.date AS decision_date,
+                d.action AS decision_action,
+                d.ticker,
+                pa.status AS playbook_action_status
+            FROM strategy_rules sr
+            JOIN decision_signals ds
+              ON ds.signal_type = 'rule_gate'
+             AND ds.signal_id = sr.id
+            JOIN decisions d ON d.id = ds.decision_id
+            LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+            LEFT JOIN sessions s ON s.id = d.session_id
+            WHERE sr.status = 'active'
+              AND d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            ORDER BY sr.id, d.date DESC, d.id DESC
+        """, (days,))
+        rows = [dict(row) for row in cur.fetchall()]
+
+    by_rule: dict[int, dict] = {}
+    for row in rows:
+        rule = by_rule.setdefault(row["rule_id"], {
+            "rule_id": row["rule_id"],
+            "rule_text": row["rule_text"],
+            "category": row["category"],
+            "direction": row["direction"],
+            "lift_condition": row.get("lift_condition"),
+            "cite_count": 0,
+            "last_cited_date": None,
+            "hold_deferred_count": 0,
+            "tickers": set(),
+            "_dates": [],
+        })
+        rule["cite_count"] += 1
+        rule["tickers"].add(row["ticker"])
+        decision_date = row["decision_date"]
+        rule["_dates"].append(decision_date)
+        if rule["last_cited_date"] is None or decision_date > rule["last_cited_date"]:
+            rule["last_cited_date"] = decision_date
+        if row["decision_action"] == "hold" or row.get("playbook_action_status") == "deferred":
+            rule["hold_deferred_count"] += 1
+
+    results = []
+    for rule in by_rule.values():
+        rule["consecutive_session_streak"] = _rule_cite_streak(rule.pop("_dates"))
+        rule["tickers"] = sorted(rule["tickers"])
+        results.append(rule)
+    return sorted(
+        results,
+        key=lambda r: (r["consecutive_session_streak"], r["cite_count"], r["rule_id"]),
+        reverse=True,
+    )
 
 
 # --- Strategy Memos ---

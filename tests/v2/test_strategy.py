@@ -1,8 +1,13 @@
 """Tests for v2/strategy.py — strategy reflection stage (Stage 4)."""
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 from tests.v2.conftest import (
     make_decision_row,
@@ -154,6 +159,7 @@ class TestToolProposeRule:
         mock_insert.assert_called_once()
         assert "5" in result
         assert "Created rule" in result
+        assert mock_insert.call_args.kwargs["lift_condition"] is None
 
     @patch("v2.strategy.insert_strategy_rule")
     def test_rejects_invalid_confidence(self, mock_insert):
@@ -432,9 +438,10 @@ class TestToolGetSessionSummary:
         assert "Attribution" in result
         assert "news_signal:earnings" in result
 
+    @patch("v2.strategy.analyze_round_trips", return_value=[])
     @patch("v2.strategy.get_attribution_summary")
     @patch("v2.strategy.get_recent_decisions")
-    def test_handles_no_decisions(self, mock_decisions, mock_attr):
+    def test_handles_no_decisions(self, mock_decisions, mock_attr, mock_round_trips):
         from v2.strategy import tool_get_session_summary
         mock_decisions.return_value = []
         mock_attr.return_value = "No data"
@@ -573,6 +580,58 @@ class TestToolGetSessionSummary:
         assert "7 total" in result or "(7 tickers)" in result
 
 
+class TestToolRevalidateRule:
+    @patch("v2.strategy.update_strategy_rule_revalidation", return_value=True)
+    def test_keep_requires_and_stores_lift_condition(self, mock_update):
+        from v2.strategy import reset_session, tool_revalidate_rule
+
+        reset_session()
+        result = tool_revalidate_rule(
+            rule_id=42,
+            action="keep",
+            lift_condition="Lift when 5-day VIX closes below 18",
+        )
+
+        assert "Revalidated rule ID 42" in result
+        mock_update.assert_called_once_with(
+            rule_id=42,
+            lift_condition="Lift when 5-day VIX closes below 18",
+            revised_rule_text=None,
+        )
+
+    @patch("v2.strategy.update_strategy_rule_revalidation")
+    def test_keep_without_lift_condition_rejected(self, mock_update):
+        from v2.strategy import tool_revalidate_rule
+
+        result = tool_revalidate_rule(rule_id=42, action="keep")
+
+        assert "lift_condition" in result
+        mock_update.assert_not_called()
+
+    @patch("v2.strategy.update_strategy_rule_revalidation", return_value=True)
+    def test_narrow_requires_revised_text_and_lift_condition(self, mock_update):
+        from v2.strategy import tool_revalidate_rule
+
+        result = tool_revalidate_rule(
+            rule_id=42,
+            action="narrow",
+            revised_rule_text="Hold GOOGL only when concentration exceeds 20%",
+            lift_condition="Lift once concentration is below 18%",
+        )
+
+        assert "narrowed" in result
+        mock_update.assert_called_once()
+
+    @patch("v2.strategy.update_strategy_rule_revalidation")
+    def test_narrow_missing_inputs_rejected(self, mock_update):
+        from v2.strategy import tool_revalidate_rule
+
+        result = tool_revalidate_rule(rule_id=42, action="narrow", lift_condition="Lift at 18%")
+
+        assert "revised_rule_text" in result
+        mock_update.assert_not_called()
+
+
 class TestStrategyToolDefinitions:
     def test_all_tools_defined(self):
         from v2.strategy import STRATEGY_TOOL_DEFINITIONS
@@ -583,6 +642,7 @@ class TestStrategyToolDefinitions:
         assert "get_session_summary" in names
         assert "update_strategy_identity" in names
         assert "propose_rule" in names
+        assert "revalidate_rule" in names
         assert "retire_rule" in names
         assert "write_strategy_memo" in names
 
@@ -780,6 +840,78 @@ class TestRunStrategyReflection:
         call_kwargs = mock_loop.call_args.kwargs
         assert call_kwargs["session_id"] == 42
         assert call_kwargs["stage_name"] == "reflection"
+
+    @patch("v2.strategy.get_rule_gate_revalidation_candidates")
+    @patch("v2.strategy.get_claude_client")
+    @patch("v2.strategy.run_agentic_loop")
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_injects_rule_revalidation_evidence(
+        self, mock_formation, mock_loop, mock_client, mock_candidates,
+    ):
+        from datetime import date
+
+        from v2.claude_client import AgenticLoopResult
+        from v2.strategy import run_strategy_reflection
+
+        mock_candidates.return_value = [{
+            "rule_id": 42,
+            "rule_text": "Hold until cap lifts",
+            "lift_condition": None,
+            "consecutive_session_streak": 4,
+            "cite_count": 7,
+            "hold_deferred_count": 6,
+            "last_cited_date": date(2026, 5, 27),
+            "tickers": ["GOOGL"],
+        }]
+        mock_loop.return_value = AgenticLoopResult(
+            messages=[],
+            turns_used=1,
+            stop_reason="end_turn",
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        run_strategy_reflection()
+
+        initial_message = mock_loop.call_args.kwargs["initial_message"]
+        assert "RULE REVALIDATION EVIDENCE" in initial_message
+        assert "Rule 42" in initial_message
+        assert "streak=4" in initial_message
+
+    @patch("v2.strategy.get_rule_gate_revalidation_candidates")
+    @patch("v2.strategy.get_claude_client")
+    @patch("v2.strategy.run_agentic_loop")
+    @patch("v2.strategy.build_formation_context", return_value="")
+    def test_fails_when_gated_rule_not_revalidated(
+        self, mock_formation, mock_loop, mock_client, mock_candidates,
+    ):
+        from datetime import date
+
+        import pytest
+
+        from v2.claude_client import AgenticLoopResult
+        from v2.strategy import run_strategy_reflection
+
+        mock_candidates.return_value = [{
+            "rule_id": 42,
+            "rule_text": "Hold until cap lifts",
+            "lift_condition": None,
+            "consecutive_session_streak": 5,
+            "cite_count": 7,
+            "hold_deferred_count": 6,
+            "last_cited_date": date(2026, 5, 27),
+            "tickers": ["GOOGL"],
+        }]
+        mock_loop.return_value = AgenticLoopResult(
+            messages=[],
+            turns_used=1,
+            stop_reason="end_turn",
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        with pytest.raises(RuntimeError, match="revalidating gated rule"):
+            run_strategy_reflection()
 
 
 class TestEvidenceShownEvent:
