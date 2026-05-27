@@ -28,6 +28,7 @@ from .database.trading_db import (
 from .executor import get_account_info
 from .market_data import format_market_snapshot, get_market_snapshot
 from .news_filter import curate_signals
+from .patterns import analyze_round_trips
 
 logger = logging.getLogger(__name__)
 
@@ -829,6 +830,154 @@ def tool_get_strategy_history(n: int = 5, full_recent: int = 2) -> str:
     return "\n".join(lines)
 
 
+def tool_get_recent_decisions(days: int = 14) -> list[dict]:
+    """Read-only: compact recent decisions for behavior review."""
+    sql = """
+        SELECT d.id, d.date::text AS date, d.ticker, d.action, d.quantity,
+               d.reasoning,
+               COALESCE(string_agg(DISTINCT ds.signal_type, ','), '') AS signals_referenced,
+               d.outcome_7d
+        FROM decisions d
+        LEFT JOIN decision_signals ds ON ds.decision_id = d.id
+        WHERE d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        GROUP BY d.id, d.date, d.ticker, d.action, d.quantity, d.reasoning, d.outcome_7d
+        ORDER BY d.date ASC, d.id ASC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+    return [
+        {
+            "decision_id": r["id"],
+            "date": r["date"],
+            "ticker": r["ticker"],
+            "action": r["action"],
+            "quantity": float(r["quantity"]) if r["quantity"] is not None else None,
+            "reasoning_excerpt": (r["reasoning"] or "")[:200],
+            "signals_referenced": r["signals_referenced"],
+            "outcome_7d": float(r["outcome_7d"]) if r["outcome_7d"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+def tool_get_decision_detail(decision_id: int) -> dict:
+    """Read-only: full decision detail + all referenced signals.
+
+    Signal rows are returned as {signal_id, signal_type} only — to fetch the
+    underlying signal's text/sentiment, call the appropriate get_* tool with
+    the signal_id.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, date::text AS date, ticker, action, quantity,
+                   reasoning, outcome_7d, outcome_30d, price
+            FROM decisions WHERE id = %s
+            """,
+            (decision_id,),
+        )
+        head = cur.fetchone()
+        if head is None:
+            return {"decision_id": decision_id, "error": "not found"}
+        cur.execute(
+            """
+            SELECT signal_id, signal_type
+            FROM decision_signals
+            WHERE decision_id = %s
+            ORDER BY signal_type, signal_id
+            """,
+            (decision_id,),
+        )
+        sigs = cur.fetchall()
+    return {
+        "decision_id": head["id"],
+        "date": head["date"],
+        "ticker": head["ticker"],
+        "action": head["action"],
+        "quantity": float(head["quantity"]) if head["quantity"] is not None else None,
+        "price": float(head["price"]) if head["price"] is not None else None,
+        "reasoning": head["reasoning"],
+        "outcome_7d": float(head["outcome_7d"]) if head["outcome_7d"] is not None else None,
+        "outcome_30d": float(head["outcome_30d"]) if head["outcome_30d"] is not None else None,
+        "signals": [
+            {"signal_id": s["signal_id"], "signal_type": s["signal_type"]}
+            for s in sigs
+        ],
+    }
+
+
+def tool_get_flip_flop_report(days: int = 30, min_reversals: int = 3) -> list[dict]:
+    """Read-only: tickers with N+ same-window opposing-action pairs."""
+    trips = analyze_round_trips(days=days, gap_days=7, min_pairs=min_reversals)
+    return [
+        {
+            "ticker": t.ticker,
+            "reversal_count": t.pair_count,
+            "first_date": str(t.first_date),
+            "last_date": str(t.last_date),
+        }
+        for t in trips
+    ]
+
+
+def tool_get_executor_behavior_summary(days: int = 14) -> dict:
+    """Read-only: sizing buckets, ticker concentration, round-trip count, hold rate."""
+    with get_cursor() as cur:
+        # Size histogram. Bucket by trade notional |quantity * price|.
+        cur.execute(
+            """
+            SELECT
+                CASE
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 500 THEN 'small'
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 2500 THEN 'medium'
+                    ELSE 'large'
+                END AS bucket,
+                COUNT(*) AS n
+            FROM decisions
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            GROUP BY bucket
+            """,
+            (days,),
+        )
+        size_rows = cur.fetchall()
+
+        # Ticker concentration (positions has no sector column).
+        cur.execute(
+            """
+            SELECT ticker, COUNT(*) AS n
+            FROM decisions
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            GROUP BY ticker
+            ORDER BY n DESC
+            """,
+            (days,),
+        )
+        ticker_rows = cur.fetchall()
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM decisions WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s",
+            (days,),
+        )
+        total = cur.fetchone()["n"]
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM decisions WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s AND action = 'hold'",
+            (days,),
+        )
+        holds = cur.fetchone()["n"]
+
+    round_trips = analyze_round_trips(days=days, gap_days=7, min_pairs=2)
+    return {
+        "window_days": days,
+        "decision_count": total or 0,
+        "hold_rate": (holds / total) if total else 0.0,
+        "size_histogram": {r["bucket"]: r["n"] for r in size_rows},
+        "ticker_concentration": {r["ticker"]: r["n"] for r in ticker_rows},
+        "round_trip_count": sum(t.pair_count for t in round_trips),
+    }
+
+
 # --- Tool Definitions for Claude ---
 
 TOOL_DEFINITIONS = [
@@ -1179,6 +1328,42 @@ TOOL_DEFINITIONS = [
             "required": ["thesis_id"],
         },
     },
+    {
+        "name": "get_recent_decisions",
+        "description": "Read-only. Compact recent decisions for behavior review.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "default": 14}},
+        },
+    },
+    {
+        "name": "get_decision_detail",
+        "description": "Read-only. Full decision detail plus all referenced signal IDs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"decision_id": {"type": "integer"}},
+            "required": ["decision_id"],
+        },
+    },
+    {
+        "name": "get_flip_flop_report",
+        "description": "Read-only. Tickers with N+ opposing-action pairs in the window.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "default": 30},
+                "min_reversals": {"type": "integer", "default": 3},
+            },
+        },
+    },
+    {
+        "name": "get_executor_behavior_summary",
+        "description": "Read-only. Sizing, ticker concentration, round trips, hold rate.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "default": 14}},
+        },
+    },
 ]
 
 
@@ -1205,4 +1390,8 @@ TOOL_HANDLERS = {
     "get_rule_bind_history": tool_get_rule_bind_history,
     "get_theses": tool_get_theses,
     "get_thesis_lineage": tool_get_thesis_lineage,
+    "get_recent_decisions": tool_get_recent_decisions,
+    "get_decision_detail": tool_get_decision_detail,
+    "get_flip_flop_report": tool_get_flip_flop_report,
+    "get_executor_behavior_summary": tool_get_executor_behavior_summary,
 }

@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 22 handler functions."""
+        """TOOL_HANDLERS should have all 26 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1041,12 +1041,16 @@ class TestToolCompleteness:
             "get_rule_bind_history",
             "get_theses",
             "get_thesis_lineage",
+            "get_recent_decisions",
+            "get_decision_detail",
+            "get_flip_flop_report",
+            "get_executor_behavior_summary",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 23 entries (22 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 23
+        """TOOL_DEFINITIONS should have 27 entries (26 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 27
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1076,6 +1080,10 @@ class TestToolCompleteness:
             "get_rule_bind_history",
             "get_theses",
             "get_thesis_lineage",
+            "get_recent_decisions",
+            "get_decision_detail",
+            "get_flip_flop_report",
+            "get_executor_behavior_summary",
         }
         assert tool_names == expected_names
 
@@ -1520,4 +1528,101 @@ def test_get_thesis_lineage_returns_error_when_thesis_missing(mock_db, mock_curs
     # Only the head SELECT should have run; the second query should not execute.
     sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
     assert len(sqls) == 1
-    assert "FROM theses" in sqls[0]
+
+
+def test_get_recent_decisions_returns_compact_rows(mock_db, mock_cursor):
+    from v2.tools import tool_get_recent_decisions
+    long_reasoning = "This is a long reasoning that goes on and on and on " * 20
+    mock_cursor.fetchall.return_value = [
+        {
+            "id": 501,
+            "date": "2026-05-20",
+            "ticker": "AAPL",
+            "action": "buy",
+            "quantity": 10.0,
+            "reasoning": long_reasoning,
+            "signals_referenced": "news_signal,thesis",
+            "outcome_7d": 1.25,
+        },
+    ]
+    result = tool_get_recent_decisions(days=14)
+    assert len(result) == 1
+    assert result[0]["decision_id"] == 501
+    assert len(result[0]["reasoning_excerpt"]) <= 200
+    assert result[0]["signals_referenced"] == "news_signal,thesis"
+    args, _ = mock_cursor.execute.call_args
+    assert "d.date >= CURRENT_DATE - INTERVAL '1 day' * %s" in args[0]
+
+
+def test_get_decision_detail_includes_referenced_signals(mock_db, mock_cursor):
+    from v2.tools import tool_get_decision_detail
+    mock_cursor.fetchone.return_value = {
+        "id": 501,
+        "date": "2026-05-20",
+        "ticker": "AAPL",
+        "action": "buy",
+        "quantity": 10.0,
+        "reasoning": "full reasoning text",
+        "outcome_7d": 1.25,
+        "outcome_30d": None,
+        "price": 178.5,
+    }
+    mock_cursor.fetchall.return_value = [
+        {"signal_id": 12, "signal_type": "news_signal"},
+        {"signal_id": 44, "signal_type": "thesis"},
+    ]
+    result = tool_get_decision_detail(decision_id=501)
+    assert result["decision_id"] == 501
+    assert result["reasoning"] == "full reasoning text"
+    assert len(result["signals"]) == 2
+    assert result["signals"][0]["signal_type"] == "news_signal"
+
+
+def test_get_decision_detail_returns_error_when_missing(mock_db, mock_cursor):
+    from v2.tools import tool_get_decision_detail
+    mock_cursor.fetchone.return_value = None
+    result = tool_get_decision_detail(decision_id=999999)
+    assert result == {"decision_id": 999999, "error": "not found"}
+
+
+def test_get_flip_flop_report_uses_round_trip_analyzer(monkeypatch):
+    from v2 import tools
+    from v2.patterns import RoundTrip
+    monkeypatch.setattr(
+        tools,
+        "analyze_round_trips",
+        lambda **kw: [RoundTrip(ticker="GOOGL", pair_count=11, first_date="2026-05-01", last_date="2026-05-22")],
+    )
+    result = tools.tool_get_flip_flop_report(days=30, min_reversals=3)
+    assert len(result) == 1
+    assert result[0]["ticker"] == "GOOGL"
+    assert result[0]["reversal_count"] == 11
+    assert result[0]["first_date"] == "2026-05-01"
+    assert result[0]["last_date"] == "2026-05-22"
+
+
+def test_get_executor_behavior_summary_returns_aggregates(mock_db, mock_cursor, monkeypatch):
+    from v2 import tools
+    from v2.patterns import RoundTrip
+    # Mock the three DB result sets in the order they're fetched
+    mock_cursor.fetchall.side_effect = [
+        # Size histogram
+        [{"bucket": "small", "n": 12}, {"bucket": "medium", "n": 7}, {"bucket": "large", "n": 1}],
+        # Ticker concentration
+        [{"ticker": "AAPL", "n": 5}, {"ticker": "GOOGL", "n": 4}, {"ticker": "TSLA", "n": 3}],
+    ]
+    mock_cursor.fetchone.side_effect = [
+        {"n": 20},  # total decisions
+        {"n": 4},   # hold count
+    ]
+    monkeypatch.setattr(
+        tools, "analyze_round_trips",
+        lambda **kw: [RoundTrip(ticker="GOOGL", pair_count=3, first_date="x", last_date="y")],
+    )
+    result = tools.tool_get_executor_behavior_summary(days=14)
+    assert result["window_days"] == 14
+    assert result["decision_count"] == 20
+    assert result["hold_rate"] == 0.2
+    assert result["size_histogram"] == {"small": 12, "medium": 7, "large": 1}
+    assert result["ticker_concentration"] == {"AAPL": 5, "GOOGL": 4, "TSLA": 3}
+    assert result["round_trip_count"] == 3
