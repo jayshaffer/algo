@@ -1036,6 +1036,15 @@ class TestSessionTracking:
         assert "UPDATE sessions" in sql
         assert "failed" in sql
 
+    def test_mark_session_market_closed(self, mock_db, mock_cursor):
+        from v2.database.trading_db import mark_session_market_closed
+        mark_session_market_closed(7)
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "UPDATE sessions" in sql
+        assert "market_closed = TRUE" in sql
+        assert params == (7,)
+
 
 class TestSessionStages:
     def test_insert_session_stage(self, mock_db, mock_cursor):

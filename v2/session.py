@@ -38,6 +38,7 @@ from .database.trading_db import (
     insert_session_record,
     insert_session_stage,
     insert_strategy_memo,
+    mark_session_market_closed,
 )
 from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .log_config import setup_logging
@@ -358,6 +359,14 @@ def _run_executor_stage(
                 session_id=session_id,
                 session_date=session_date,
             )
+            if result.trading_result.market_closed:
+                if session_id is not None:
+                    try:
+                        mark_session_market_closed(session_id)
+                    except Exception as e:
+                        logger.warning("Could not mark session market_closed: %s", e)
+                _complete_stage(session_id, "executor", usage=usage)
+                return
             if result.trading_result.errors:
                 raise RuntimeError("; ".join(result.trading_result.errors))
             _complete_stage(session_id, "executor", usage=usage)

@@ -1338,7 +1338,7 @@ class TestExecutorStageErrors:
             trades_failed=0,
             total_buy_value=Decimal("0"),
             total_sell_value=Decimal("0"),
-            errors=["Market is closed -- skipped trading"],
+            errors=["Alpaca API unavailable"],
         )
 
         with patch("v2.session.run_backfill"), \
@@ -1352,11 +1352,55 @@ class TestExecutorStageErrors:
              patch("v2.session.fail_session_stage") as mock_fail:
             result = run_session(dry_run=False)
 
-        assert "Market is closed" in result.trading_error
+        assert "Alpaca API unavailable" in result.trading_error
         completed = [c.args[1] for c in mock_complete.call_args_list]
         failed_stages = [c.args[1] for c in mock_fail.call_args_list]
         assert "executor" not in completed
         assert "executor" in failed_stages
+
+    def test_market_closed_executor_result_completes_stage_and_reflects(self):
+        """Exchange-closed no-op sessions should not fail executor or skip reflection."""
+        market_closed = TradingSessionResult(
+            timestamp=datetime(2026, 5, 15, 10, 0, 0),
+            account_snapshot_id=0,
+            positions_synced=0,
+            orders_synced=0,
+            decisions_made=0,
+            trades_executed=0,
+            trades_failed=0,
+            total_buy_value=Decimal("0"),
+            total_sell_value=Decimal("0"),
+            errors=[],
+            market_closed=True,
+        )
+        reflection = StrategyReflectionResult(
+            rules_proposed=0, rules_retired=0, identity_updated=False,
+            memo_written=True, input_tokens=10, output_tokens=10, turns_used=1,
+        )
+
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session", return_value=market_closed), \
+             patch("v2.session.run_strategy_reflection", return_value=reflection) as mock_reflect, \
+             patch("v2.session.insert_session_record", return_value=77), \
+             patch("v2.session.mark_session_market_closed") as mock_mark, \
+             patch("v2.session.complete_session_stage") as mock_complete, \
+             patch("v2.session.fail_session_stage") as mock_fail:
+            result = run_session(dry_run=False)
+
+        assert result.trading_error is None
+        assert result.trading_result.market_closed is True
+        mock_mark.assert_called_once_with(77)
+        mock_reflect.assert_called_once()
+        assert mock_reflect.call_args.kwargs["trading_result"].market_closed is True
+        completed = [c.args[1] for c in mock_complete.call_args_list]
+        failed_stages = [c.args[1] for c in mock_fail.call_args_list]
+        assert "executor" in completed
+        assert "strategy" in completed
+        assert "executor" not in failed_stages
 
 
 class TestPlaybookActionExpiry:
