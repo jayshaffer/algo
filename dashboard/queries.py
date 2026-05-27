@@ -2,9 +2,15 @@
 
 import os
 from contextlib import contextmanager
+from datetime import date, timedelta
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+from v2.market_calendar import is_trading_day
+
+RULE_REVALIDATION_STREAK = 5
+THESIS_STALE_TRADING_DAYS = 10
 
 
 def get_connection():
@@ -279,11 +285,178 @@ def get_behavior_regression_summary(days: int = 30):
         """, (days,))
         deferred_actions_by_ticker = cur.fetchall()
 
+        cur.execute("""
+            SELECT id, session_date, status, completed_at
+            FROM sessions
+            WHERE session_date > CURRENT_DATE - INTERVAL '%s days'
+              AND market_closed = TRUE
+            ORDER BY session_date DESC, id DESC
+        """, (days,))
+        market_closed_sessions = cur.fetchall()
+
+        cur.execute("""
+            SELECT
+                sr.id AS rule_id,
+                sr.rule_text,
+                sr.category,
+                sr.direction,
+                sr.lift_condition,
+                d.date AS decision_date,
+                d.ticker,
+                d.action AS decision_action,
+                pa.status AS playbook_action_status
+            FROM strategy_rules sr
+            JOIN decision_signals ds
+              ON ds.signal_type = 'rule_gate'
+             AND ds.signal_id = sr.id
+            JOIN decisions d ON d.id = ds.decision_id
+            LEFT JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+            WHERE sr.status = 'active'
+              AND d.date > CURRENT_DATE - INTERVAL '%s days'
+            ORDER BY sr.id, d.date DESC, d.id DESC
+        """, (days,))
+        rule_gate_rows = cur.fetchall()
+
+        cur.execute("""
+            WITH thesis_decisions AS (
+                SELECT pa.thesis_id AS thesis_id, MAX(d.date) AS last_decision_date
+                FROM decisions d
+                JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+                WHERE pa.thesis_id IS NOT NULL
+                GROUP BY pa.thesis_id
+
+                UNION ALL
+
+                SELECT ds.signal_id AS thesis_id, MAX(d.date) AS last_decision_date
+                FROM decisions d
+                JOIN decision_signals ds ON ds.decision_id = d.id
+                WHERE ds.signal_type = 'thesis'
+                GROUP BY ds.signal_id
+            ),
+            last_touched AS (
+                SELECT thesis_id, MAX(last_decision_date) AS last_decision_date
+                FROM thesis_decisions
+                GROUP BY thesis_id
+            ),
+            classified AS (
+                SELECT
+                    CASE
+                        WHEN p.ticker IS NOT NULL THEN 'held'
+                        WHEN t.direction = 'avoid' THEN 'avoid'
+                        ELSE 'watch'
+                    END AS role,
+                    GREATEST(
+                        t.updated_at::date,
+                        COALESCE(lt.last_decision_date, t.created_at::date)
+                    ) AS last_touched_date
+                FROM theses t
+                LEFT JOIN positions p ON p.ticker = t.ticker
+                LEFT JOIN last_touched lt ON lt.thesis_id = t.id
+                WHERE t.status = 'active'
+            )
+            SELECT role, last_touched_date
+            FROM classified
+            ORDER BY role, last_touched_date
+        """)
+        active_thesis_role_rows = cur.fetchall()
+
     return {
         "playbook_actions_by_status": playbook_actions_by_status,
         "reviewed_actions_still_pending": reviewed_actions_still_pending,
         "deferred_actions_by_ticker": deferred_actions_by_ticker,
+        "market_closed_sessions": market_closed_sessions,
+        "rule_gate_telemetry": _shape_rule_gate_telemetry(rule_gate_rows),
+        "active_thesis_role_counts": _shape_active_thesis_role_counts(active_thesis_role_rows),
     }
+
+
+def _previous_trading_day(day):
+    current = day - timedelta(days=1)
+    while not is_trading_day(current):
+        current -= timedelta(days=1)
+    return current
+
+
+def _consecutive_rule_cite_streak(dates) -> int:
+    ordered = sorted(set(dates), reverse=True)
+    if not ordered:
+        return 0
+    streak = 1
+    expected = _previous_trading_day(ordered[0])
+    for cited_date in ordered[1:]:
+        if cited_date != expected:
+            break
+        streak += 1
+        expected = _previous_trading_day(cited_date)
+    return streak
+
+
+def _shape_rule_gate_telemetry(rows):
+    by_rule = {}
+    for row in rows:
+        rule = by_rule.setdefault(row["rule_id"], {
+            "rule_id": row["rule_id"],
+            "rule_text": row["rule_text"],
+            "category": row["category"],
+            "direction": row["direction"],
+            "lift_condition": row.get("lift_condition"),
+            "has_lift_condition": bool(row.get("lift_condition")),
+            "cite_count": 0,
+            "distinct_tickers": set(),
+            "last_cited_date": None,
+            "hold_deferred_count": 0,
+            "_dates": [],
+        })
+        rule["cite_count"] += 1
+        rule["distinct_tickers"].add(row["ticker"])
+        decision_date = row["decision_date"]
+        rule["_dates"].append(decision_date)
+        if rule["last_cited_date"] is None or decision_date > rule["last_cited_date"]:
+            rule["last_cited_date"] = decision_date
+        if row["decision_action"] == "hold" or row.get("playbook_action_status") == "deferred":
+            rule["hold_deferred_count"] += 1
+
+    shaped = []
+    for rule in by_rule.values():
+        rule["consecutive_session_streak"] = _consecutive_rule_cite_streak(rule.pop("_dates"))
+        rule["distinct_tickers"] = sorted(rule["distinct_tickers"])
+        rule["is_gated"] = (
+            not rule["has_lift_condition"]
+            and rule["consecutive_session_streak"] >= RULE_REVALIDATION_STREAK
+        )
+        shaped.append(rule)
+    return sorted(
+        shaped,
+        key=lambda r: (r["consecutive_session_streak"], r["cite_count"], r["rule_id"]),
+        reverse=True,
+    )
+
+
+def _trading_days_since(start, end) -> int:
+    if start >= end:
+        return 0
+    current = start + timedelta(days=1)
+    days = 0
+    while current <= end:
+        if is_trading_day(current):
+            days += 1
+        current += timedelta(days=1)
+    return days
+
+
+def _shape_active_thesis_role_counts(rows):
+    today = date.today()
+    by_role = {}
+    for row in rows:
+        role = row["role"]
+        bucket = by_role.setdefault(role, {"role": role, "count": 0, "stale_count": 0})
+        bucket["count"] += 1
+        if (
+            role in ("watch", "avoid")
+            and _trading_days_since(row["last_touched_date"], today) >= THESIS_STALE_TRADING_DAYS
+        ):
+            bucket["stale_count"] += 1
+    return [by_role[role] for role in sorted(by_role)]
 
 
 # --- Signal Attribution ---
