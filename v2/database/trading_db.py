@@ -353,6 +353,34 @@ def get_active_theses(ticker=None) -> list:
         return cur.fetchall()
 
 
+def get_recent_thesis_decision_dates(days: int = 60) -> dict[int, date]:
+    """Return most recent decision date by thesis id in the recent window."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT thesis_id, MAX(decision_date) AS last_decision_date
+            FROM (
+                SELECT pa.thesis_id AS thesis_id, d.date AS decision_date
+                FROM decisions d
+                JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+                WHERE pa.thesis_id IS NOT NULL
+                  AND d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+
+                UNION ALL
+
+                SELECT ds.signal_id AS thesis_id, d.date AS decision_date
+                FROM decisions d
+                JOIN decision_signals ds ON ds.decision_id = d.id
+                WHERE ds.signal_type = 'thesis'
+                  AND d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            ) thesis_decisions
+            GROUP BY thesis_id
+        """, (days, days))
+        return {
+            row["thesis_id"]: row["last_decision_date"]
+            for row in cur.fetchall()
+        }
+
+
 def get_thesis_by_id(thesis_id) -> dict | None:
     """Get a specific thesis by ID."""
     with get_cursor() as cur:

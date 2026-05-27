@@ -475,20 +475,53 @@ class TestGetActiveTheses:
         result = tool_get_active_theses()
         assert "No active theses" in result
 
-    def test_with_theses(self, mock_db, mock_cursor):
+    @patch("v2.context._today", return_value=date(2026, 5, 27))
+    @patch("v2.tools.get_recent_thesis_decision_dates", return_value={})
+    @patch("v2.tools.get_positions", return_value=[
+        {"ticker": "AAPL", "shares": 1, "avg_cost": 150},
+    ])
+    def test_with_theses(self, mock_positions, mock_last_dates, mock_today, mock_db, mock_cursor):
         """Should format theses when they exist."""
         mock_cursor.fetchall.return_value = [
             {
                 "id": 1, "ticker": "AAPL", "direction": "long",
                 "confidence": "high", "thesis": "Strong earnings",
                 "entry_trigger": "Price > $150", "exit_trigger": "Price > $180",
-                "invalidation": "Earnings miss", "created_at": datetime.now(),
+                "invalidation": "Earnings miss", "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 20),
             }
         ]
         result = tool_get_active_theses()
+        assert "Held Theses" in result
         assert "AAPL" in result
         assert "long" in result
         assert "Strong earnings" in result
+
+    @patch("v2.context._today", return_value=date(2026, 5, 27))
+    @patch("v2.tools.get_recent_thesis_decision_dates", return_value={})
+    @patch("v2.tools.get_positions", return_value=[])
+    def test_with_theses_shows_watch_avoid_and_stale(self, mock_positions, mock_last_dates, mock_today, mock_db, mock_cursor):
+        """Should expose operational thesis buckets and stale watch/avoid markers."""
+        mock_cursor.fetchall.return_value = [
+            {
+                "id": 1, "ticker": "AVGO", "direction": "long",
+                "confidence": "medium", "thesis": "Watch setup",
+                "entry_trigger": "Breakout", "exit_trigger": None,
+                "invalidation": None, "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 12),
+            },
+            {
+                "id": 2, "ticker": "TSLA", "direction": "avoid",
+                "confidence": "low", "thesis": "Avoid margin pressure",
+                "entry_trigger": None, "exit_trigger": None,
+                "invalidation": None, "created_at": datetime(2026, 5, 1),
+                "updated_at": datetime(2026, 5, 13),
+            },
+        ]
+        result = tool_get_active_theses()
+        assert "Watch Theses:\n- AVGO" in result
+        assert "Avoid Theses:\n- TSLA" in result
+        assert "[STALE: 10d untouched]" in result
 
 
 # --- Create thesis tests ---
