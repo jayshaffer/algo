@@ -929,8 +929,8 @@ def tool_get_executor_behavior_summary(days: int = 14) -> dict:
             """
             SELECT
                 CASE
-                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 500 THEN 'small'
-                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 2500 THEN 'medium'
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 100 THEN 'small'
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 300 THEN 'medium'
                     ELSE 'large'
                 END AS bucket,
                 COUNT(*) AS n
@@ -950,6 +950,7 @@ def tool_get_executor_behavior_summary(days: int = 14) -> dict:
             WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
             GROUP BY ticker
             ORDER BY n DESC
+            LIMIT 20
             """,
             (days,),
         )
