@@ -568,3 +568,58 @@ class TestGetLlmCall:
         cur.fetchone.return_value = None
         get_llm_call(137)
         assert cur.execute.call_args[0][1] == (137,)
+
+
+class TestGetRecentSupervisorMemos:
+    def test_returns_compact_rows(self, cur):
+        from dashboard.queries import get_recent_supervisor_memos
+        cur.fetchall.return_value = [
+            {"id": 5, "created_at": datetime(2026, 5, 27, 10, 0, 0),
+             "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+             "status": "ok", "turns_used": 12, "cost_usd": Decimal("0.082")},
+            {"id": 4, "created_at": datetime(2026, 5, 20, 10, 0, 0),
+             "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+             "status": "ok", "turns_used": 9, "cost_usd": Decimal("0.061")},
+        ]
+        rows = get_recent_supervisor_memos(limit=10)
+        assert len(rows) == 2
+        assert rows[0]["id"] == 5
+        assert rows[0]["status"] == "ok"
+        assert rows[0]["cost_usd"] == 0.082  # float, not Decimal
+        args, _ = cur.execute.call_args
+        assert "supervisor_memos" in args[0]
+        assert "ORDER BY created_at DESC" in args[0]
+        assert args[1] == (10,)
+
+
+class TestGetSupervisorMemo:
+    def test_returns_full_row(self, cur):
+        from dashboard.queries import get_supervisor_memo
+        cur.fetchone.return_value = {
+            "id": 5,
+            "created_at": datetime(2026, 5, 27, 10, 0, 0),
+            "model": "claude-opus-4-7",
+            "prompt_version": "v1.0.0",
+            "content": "## Rules\n- Rule 27 oscillates",
+            "status": "ok",
+            "turns_used": 12,
+            "tool_calls": [{"name": "get_active_rules", "count": 2}],
+            "input_tokens": 1200,
+            "output_tokens": 800,
+            "cost_usd": Decimal("0.082"),
+            "error_message": None,
+        }
+        row = get_supervisor_memo(5)
+        assert row["id"] == 5
+        assert "Rule 27" in row["content"]
+        assert row["status"] == "ok"
+        assert row["tool_calls"] == [{"name": "get_active_rules", "count": 2}]
+        assert row["cost_usd"] == 0.082  # float, not Decimal
+        args, _ = cur.execute.call_args
+        assert "WHERE id = %s" in args[0]
+        assert args[1] == (5,)
+
+    def test_returns_none_when_missing(self, cur):
+        from dashboard.queries import get_supervisor_memo
+        cur.fetchone.return_value = None
+        assert get_supervisor_memo(99999) is None

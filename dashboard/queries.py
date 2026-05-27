@@ -1132,3 +1132,59 @@ def get_ticker_attribution(sym: str, days: int = 90):
             ORDER BY sample_size DESC
         """, (sym, days))
         return cur.fetchall()
+
+
+# --- Supervisor memos ---
+
+def get_recent_supervisor_memos(limit: int = 10) -> list[dict]:
+    """Compact recent supervisor memos for the dashboard sidebar / index page."""
+    sql = """
+        SELECT id, created_at, model, prompt_version, status, turns_used, cost_usd
+        FROM supervisor_memos
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "id": r["id"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "model": r["model"],
+            "prompt_version": r["prompt_version"],
+            "status": r["status"],
+            "turns_used": r["turns_used"],
+            "cost_usd": float(r["cost_usd"]) if r["cost_usd"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+def get_supervisor_memo(memo_id: int) -> dict | None:
+    """Full supervisor memo for the detail page. Returns None if not found."""
+    sql = """
+        SELECT id, created_at, model, prompt_version, content, status, turns_used,
+               tool_calls, input_tokens, output_tokens, cost_usd, error_message
+        FROM supervisor_memos
+        WHERE id = %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (memo_id,))
+        r = cur.fetchone()
+    if r is None:
+        return None
+    return {
+        "id": r["id"],
+        "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+        "model": r["model"],
+        "prompt_version": r["prompt_version"],
+        "content": r["content"],
+        "status": r["status"],
+        "turns_used": r["turns_used"],
+        "tool_calls": r["tool_calls"],
+        "input_tokens": r["input_tokens"],
+        "output_tokens": r["output_tokens"],
+        "cost_usd": float(r["cost_usd"]) if r["cost_usd"] is not None else None,
+        "error_message": r["error_message"],
+    }
