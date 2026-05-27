@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS supervisor_memos (
     error_message   TEXT
 );
 
-CREATE INDEX IF NOT EXISTS supervisor_memos_created_idx
+CREATE INDEX IF NOT EXISTS idx_supervisor_memos_created_at
     ON supervisor_memos (created_at DESC);
 
 COMMENT ON TABLE supervisor_memos IS
