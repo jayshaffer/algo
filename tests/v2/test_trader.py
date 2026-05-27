@@ -89,6 +89,8 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
         "format_decisions_for_logging": MagicMock(return_value={}),
         "check_sector_concentration": MagicMock(return_value=[]),
         "update_playbook_action_status": MagicMock(),
+        "get_pending_playbook_action_for_ticker": MagicMock(return_value=None),
+        "StockHistoricalDataClient": MagicMock(return_value=MagicMock()),
     }
     defaults.update(overrides)
     mocks = {}
@@ -1576,6 +1578,86 @@ class TestExecutionSuccessBranches:
         # The decision is still logged in Step 6 (the execution `continue` skips
         # the order-tracking path but not the bulk logging loop).
         mocks["insert_decision"].assert_called_once()
+
+
+class TestHoldPlaybookLifecycle:
+    def test_playbook_backed_hold_marks_action_deferred(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AVGO",
+            action="hold",
+            playbook_action_id=42,
+            is_off_playbook=False,
+        )
+
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=True, session_date=date(2026, 5, 26))
+
+        assert result.decisions_made == 1
+        mocks["update_playbook_action_status"].assert_called_once_with(42, "deferred")
+        mocks["get_pending_playbook_action_for_ticker"].assert_not_called()
+
+    def test_hold_without_playbook_action_id_does_not_mark_deferred(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AVGO",
+            action="hold",
+            playbook_action_id=None,
+            is_off_playbook=False,
+        )
+
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision])
+            result = run_trading_session(dry_run=True, session_date=date(2026, 5, 26))
+
+        assert result.decisions_made == 1
+        mocks["update_playbook_action_status"].assert_not_called()
+        mocks["get_pending_playbook_action_for_ticker"].assert_not_called()
+
+    def test_deferred_status_update_failure_does_not_block_logging(self, mock_db, mock_cursor):
+        decision = _make_decision(
+            ticker="AVGO",
+            action="hold",
+            playbook_action_id=42,
+            is_off_playbook=False,
+        )
+
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "update_playbook_action_status": MagicMock(
+                    side_effect=RuntimeError("status write failed"),
+                ),
+            })
+            result = run_trading_session(dry_run=True, session_date=date(2026, 5, 26))
+
+        assert result.errors == []
+        assert result.decisions_made == 1
+        mocks["insert_decision"].assert_called_once()
+
+    def test_off_playbook_hold_with_pending_action_warns(self, mock_db, mock_cursor, caplog):
+        decision = _make_decision(
+            ticker="AVGO",
+            action="hold",
+            playbook_action_id=None,
+            is_off_playbook=True,
+        )
+
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_pending_playbook_action_for_ticker": MagicMock(
+                    return_value={"id": 99, "ticker": "AVGO"},
+                ),
+            })
+            with caplog.at_level("WARNING", logger="trader"):
+                result = run_trading_session(
+                    dry_run=True,
+                    session_date=date(2026, 5, 26),
+                )
+
+        assert result.decisions_made == 1
+        mocks["get_pending_playbook_action_for_ticker"].assert_called_once_with(
+            date(2026, 5, 26), "AVGO",
+        )
+        assert "off-playbook HOLD has pending playbook action 99" in caplog.text
 
 
 class TestThesisLifecycle:

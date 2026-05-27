@@ -612,6 +612,34 @@ class TestPlaybookActionStatus:
         result = get_pending_playbook_actions(playbook_id=99)
         assert result == []
 
+    def test_get_pending_playbook_action_for_ticker(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from tests.v2.conftest import make_playbook_action_row
+        from v2.database.trading_db import get_pending_playbook_action_for_ticker
+
+        mock_cursor.fetchone.return_value = make_playbook_action_row(id=7, ticker="AVGO")
+        result = get_pending_playbook_action_for_ticker(_date(2026, 5, 26), "AVGO")
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "JOIN playbooks" in sql
+        assert "p.date = %s" in sql
+        assert "pa.ticker = %s" in sql
+        assert "status = 'pending'" in sql
+        assert "status IS NULL" in sql
+        assert result["id"] == 7
+        assert params == (_date(2026, 5, 26), "AVGO")
+
+    def test_get_pending_playbook_action_for_ticker_not_found(self, mock_db, mock_cursor):
+        from datetime import date as _date
+
+        from v2.database.trading_db import get_pending_playbook_action_for_ticker
+
+        mock_cursor.fetchone.return_value = None
+        result = get_pending_playbook_action_for_ticker(_date(2026, 5, 26), "AVGO")
+        assert result is None
+
     def test_expire_stale_playbook_actions_runs_update(self, mock_db, mock_cursor):
         from datetime import date as _date
 
@@ -1392,4 +1420,3 @@ class TestLlmCallContexts:
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO llm_call_contexts" in sql
         assert "tool_definitions" in sql
-
