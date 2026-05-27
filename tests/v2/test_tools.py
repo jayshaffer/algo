@@ -1671,16 +1671,17 @@ def test_get_session_summary_window_aggregates(mock_db, mock_cursor):
     from v2.tools import tool_get_session_summary_window
     mock_cursor.fetchall.return_value = [
         {"session_id": 44, "session_date": "2026-05-20",
-         "decisions_count": 14, "pnl_usd": 152.40,
+         "decisions_count": 14, "avg_outcome_7d_pct": 1.5,
          "stage_failures": 0, "cost_usd": 0.42},
         {"session_id": 43, "session_date": "2026-05-19",
-         "decisions_count": 11, "pnl_usd": -33.10,
+         "decisions_count": 11, "avg_outcome_7d_pct": -2.5,
          "stage_failures": 1, "cost_usd": 0.38},
     ]
     result = tool_get_session_summary_window(days=14)
     assert len(result) == 2
     assert result[0]["decisions_count"] == 14
     assert result[0]["stage_failures"] == 0
+    assert result[0]["avg_outcome_7d_pct"] == 1.5
     assert result[1]["cost_usd"] == 0.38
     args, _ = mock_cursor.execute.call_args
     assert "session_costs" in args[0]

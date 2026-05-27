@@ -991,10 +991,10 @@ def tool_get_reflection_actions(limit: int = 10) -> list[dict]:
 
 
 def tool_get_session_summary_window(days: int = 14) -> list[dict]:
-    """Read-only: per-session decisions/P&L/stage failures/cost within a window.
+    """Read-only: per-session decisions/stage failures/cost within a window.
 
     Uses the `session_costs` view (defined in db/init/024_session_stage_token_usage.sql)
-    for total_cost_usd. P&L proxy uses sum of outcome_7d for that session's decisions.
+    for total_cost_usd. avg_outcome_7d_pct: mean percentage outcome across the session's decisions.
     """
     sql = """
         SELECT
@@ -1005,9 +1005,9 @@ def tool_get_session_summary_window(days: int = 14) -> list[dict]:
                 WHERE d.session_id = sc.session_id
             ), 0) AS decisions_count,
             COALESCE((
-                SELECT SUM(d.outcome_7d) FROM decisions d
+                SELECT AVG(d.outcome_7d) FROM decisions d
                 WHERE d.session_id = sc.session_id
-            ), 0)::numeric AS pnl_usd,
+            ), 0)::numeric AS avg_outcome_7d_pct,
             COALESCE((
                 SELECT COUNT(*) FROM session_stages st
                 WHERE st.session_id = sc.session_id AND st.status = 'failed'
@@ -1025,7 +1025,7 @@ def tool_get_session_summary_window(days: int = 14) -> list[dict]:
             "session_id": r["session_id"],
             "session_date": r["session_date"],
             "decisions_count": r["decisions_count"],
-            "pnl_usd": float(r["pnl_usd"]),
+            "avg_outcome_7d_pct": float(r["avg_outcome_7d_pct"]),
             "stage_failures": r["stage_failures"],
             "cost_usd": float(r["cost_usd"]),
         }
@@ -1489,7 +1489,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "get_session_summary",
-        "description": "Read-only. Per-session decisions, P&L (outcome_7d sum), failures, cost within a window.",
+        "description": "Read-only. Per-session decisions, average outcome (% over 7d), stage failures, cost within a window.",
         "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 14}}},
     },
 ]
