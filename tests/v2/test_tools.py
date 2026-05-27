@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 18 handler functions."""
+        """TOOL_HANDLERS should have all 20 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1037,12 +1037,14 @@ class TestToolCompleteness:
             "get_strategy_identity",
             "get_strategy_rules",
             "get_strategy_history",
+            "get_retired_rules",
+            "get_rule_bind_history",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 19 entries (18 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 19
+        """TOOL_DEFINITIONS should have 21 entries (20 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 21
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1068,6 +1070,8 @@ class TestToolCompleteness:
             "get_strategy_identity",
             "get_strategy_rules",
             "get_strategy_history",
+            "get_retired_rules",
+            "get_rule_bind_history",
         }
         assert tool_names == expected_names
 
@@ -1402,3 +1406,42 @@ class TestToolGetCuratedNews:
         # Ticker is normalised upstream; assert the DB was queried for AAPL/3.
         assert captured_kwargs.get("ticker") == "AAPL"
         assert captured_kwargs.get("days") == 3
+
+
+def test_get_retired_rules_returns_recent_retirements(mock_db, mock_cursor):
+    from v2.tools import tool_get_retired_rules
+    mock_cursor.fetchall.return_value = [
+        (7, "Avoid earnings-week entries", "risk", "evidence A", "retired",
+         "2026-04-15T00:00:00+00:00", "2026-05-01T00:00:00+00:00", "low signal"),
+    ]
+    result = tool_get_retired_rules(limit=10)
+    assert result == [{
+        "rule_id": 7,
+        "rule_text": "Avoid earnings-week entries",
+        "category": "risk",
+        "supporting_evidence": "evidence A",
+        "status": "retired",
+        "created_at": "2026-04-15T00:00:00+00:00",
+        "retired_at": "2026-05-01T00:00:00+00:00",
+        "retirement_reason": "low signal",
+    }]
+    args, _ = mock_cursor.execute.call_args
+    assert "status = 'retired'" in args[0]
+    assert "LIMIT %s" in args[0]
+    assert args[1] == (10,)
+
+
+def test_get_rule_bind_history_counts_citations(mock_db, mock_cursor):
+    from v2.tools import tool_get_rule_bind_history
+    mock_cursor.fetchall.return_value = [
+        (101, "2026-05-20", "AAPL", "buy", "rule #7 supports caution"),
+        (115, "2026-05-22", "MSFT", "sell", "lift_condition for #7 met"),
+    ]
+    result = tool_get_rule_bind_history(rule_id=7, days=30)
+    assert result["rule_id"] == 7
+    assert result["bind_count"] == 2
+    assert len(result["citations"]) == 2
+    assert result["citations"][0]["decision_id"] == 101
+    args, _ = mock_cursor.execute.call_args
+    assert "decisions" in args[0]
+    assert "%s" in args[0]  # rule_id param

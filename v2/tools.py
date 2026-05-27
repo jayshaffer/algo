@@ -6,6 +6,7 @@ from datetime import date
 from .agent import validate_signal_refs
 from .attribution import get_attribution_summary
 from .context import format_active_theses_by_role, get_macro_context, get_portfolio_context
+from .database.connection import get_cursor
 from .database.trading_db import (
     close_thesis,
     get_active_strategy_rules,
@@ -661,6 +662,64 @@ def tool_get_strategy_rules() -> str:
     return "\n".join(lines)
 
 
+def tool_get_retired_rules(limit: int = 50) -> list[dict]:
+    """Read-only: most recently retired strategy rules."""
+    sql = """
+        SELECT id, rule_text, category, supporting_evidence, status,
+               created_at, retired_at, retirement_reason
+        FROM strategy_rules
+        WHERE status = 'retired'
+        ORDER BY retired_at DESC NULLS LAST
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "rule_id": r[0],
+            "rule_text": r[1],
+            "category": r[2],
+            "supporting_evidence": r[3],
+            "status": r[4],
+            "created_at": r[5].isoformat() if hasattr(r[5], "isoformat") else r[5],
+            "retired_at": r[6].isoformat() if hasattr(r[6], "isoformat") else r[6],
+            "retirement_reason": r[7],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_rule_bind_history(rule_id: int, days: int = 30) -> dict:
+    """Read-only: decisions that cited this rule within `days`."""
+    sql = """
+        SELECT d.id, d.session_date::text, d.ticker, d.action, d.reasoning
+        FROM decisions d
+        WHERE d.session_date >= (CURRENT_DATE - %s::int)
+          AND (d.reasoning ILIKE '%%rule #' || %s::text || '%%'
+               OR d.reasoning ILIKE '%%rule_id=' || %s::text || '%%')
+        ORDER BY d.session_date ASC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days, rule_id, rule_id))
+        rows = cur.fetchall()
+    return {
+        "rule_id": rule_id,
+        "window_days": days,
+        "bind_count": len(rows),
+        "citations": [
+            {
+                "decision_id": r[0],
+                "date": r[1],
+                "ticker": r[2],
+                "action": r[3],
+                "reasoning_excerpt": (r[4] or "")[:200],
+            }
+            for r in rows
+        ],
+    }
+
+
 def tool_get_strategy_history(n: int = 5, full_recent: int = 2) -> str:
     """Get recent strategy memos. Last `full_recent` shown in full, older truncated to 300 chars."""
     logger.info(f"Getting strategy history (last {n})")
@@ -988,6 +1047,26 @@ TOOL_DEFINITIONS = [
             "required": [],
         },
     },
+    {
+        "name": "get_retired_rules",
+        "description": "Read-only. List the most recently retired strategy rules.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 50}},
+        },
+    },
+    {
+        "name": "get_rule_bind_history",
+        "description": "Read-only. Decisions that cited a given rule within the window.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+                "days": {"type": "integer", "default": 30},
+            },
+            "required": ["rule_id"],
+        },
+    },
 ]
 
 
@@ -1010,4 +1089,6 @@ TOOL_HANDLERS = {
     "get_strategy_identity": tool_get_strategy_identity,
     "get_strategy_rules": tool_get_strategy_rules,
     "get_strategy_history": tool_get_strategy_history,
+    "get_retired_rules": tool_get_retired_rules,
+    "get_rule_bind_history": tool_get_rule_bind_history,
 }
