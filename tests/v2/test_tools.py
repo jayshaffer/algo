@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 29 handler functions."""
+        """TOOL_HANDLERS should have all 30 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1048,12 +1048,13 @@ class TestToolCompleteness:
             "get_session_memos",
             "get_reflection_actions",
             "get_session_summary",
+            "get_active_rules",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 30 entries (29 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 30
+        """TOOL_DEFINITIONS should have 31 entries (30 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 31
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1090,6 +1091,7 @@ class TestToolCompleteness:
             "get_session_memos",
             "get_reflection_actions",
             "get_session_summary",
+            "get_active_rules",
         }
         assert tool_names == expected_names
 
