@@ -76,6 +76,18 @@ tasks:
     cmds:
       - docker compose exec trading python -m v2.learn {{.CLI_ARGS}}
 
+  supervise:
+    desc: Run the strategy supervisor (observer-only critic, persists one memo)
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.supervisor {{.CLI_ARGS}}
+
+  supervise:dry-run:
+    desc: Run the supervisor loop and print the memo without persisting
+    deps: [docker:up]
+    cmds:
+      - docker compose exec trading python -m v2.supervisor --dry-run {{.CLI_ARGS}}
+
   backfill:
     desc: Backfill decision outcomes
     deps: [docker:up]
