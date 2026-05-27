@@ -653,9 +653,10 @@ def tool_get_strategy_rules() -> str:
     lines = []
     for r in rules:
         evidence = f" | {r['supporting_evidence'][:80]}" if r.get("supporting_evidence") else ""
+        lift = f" | lift:{r['lift_condition']}" if r.get("lift_condition") else " | lift:UNSET"
         lines.append(
             f"#{r['id']} {r['direction']}/{r['category']} conf:{r['confidence']}: "
-            f"{r['rule_text']}{evidence}"
+            f"{r['rule_text']}{lift}{evidence}"
         )
     return "\n".join(lines)
 
