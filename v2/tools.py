@@ -921,6 +921,118 @@ def tool_get_flip_flop_report(days: int = 30, min_reversals: int = 3) -> list[di
     ]
 
 
+def tool_get_session_memos(limit: int = 10) -> list[dict]:
+    """Read-only: most recent strategy memos."""
+    sql = """
+        SELECT id, session_date::text AS session_date, memo_type, content, created_at
+        FROM strategy_memos
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "memo_id": r["id"],
+            "session_date": r["session_date"],
+            "memo_type": r["memo_type"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_reflection_actions(limit: int = 10) -> list[dict]:
+    """Read-only: per-session reflection-stage actions taken.
+
+    rules_revalidated is always 0 — the project does not track revalidation
+    as a column on strategy_rules. If a revalidation log table is added,
+    this can be updated.
+    """
+    sql = """
+        SELECT
+            s.id AS session_id,
+            s.session_date::text AS session_date,
+            (SELECT COUNT(*) FROM strategy_rules sr
+                WHERE sr.created_at::date = s.session_date) AS rules_proposed,
+            (SELECT COUNT(*) FROM strategy_rules sr
+                WHERE sr.retired_at::date = s.session_date) AS rules_retired,
+            EXISTS(
+                SELECT 1 FROM strategy_state ss
+                WHERE ss.created_at::date = s.session_date
+            ) AS identity_updated,
+            COALESCE((
+                SELECT array_length(regexp_split_to_array(sm.content, '\\s+'), 1)
+                FROM strategy_memos sm
+                WHERE sm.session_date = s.session_date
+                ORDER BY sm.created_at DESC LIMIT 1
+            ), 0) AS memo_word_count
+        FROM sessions s
+        ORDER BY s.session_date DESC
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "session_id": r["session_id"],
+            "session_date": r["session_date"],
+            "rules_proposed": r["rules_proposed"],
+            "rules_retired": r["rules_retired"],
+            "rules_revalidated": 0,
+            "identity_updated": bool(r["identity_updated"]),
+            "memo_word_count": r["memo_word_count"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_session_summary_window(days: int = 14) -> list[dict]:
+    """Read-only: per-session decisions/P&L/stage failures/cost within a window.
+
+    Uses the `session_costs` view (defined in db/init/024_session_stage_token_usage.sql)
+    for total_cost_usd. P&L proxy uses sum of outcome_7d for that session's decisions.
+    """
+    sql = """
+        SELECT
+            sc.session_id,
+            sc.session_date::text AS session_date,
+            COALESCE((
+                SELECT COUNT(*) FROM decisions d
+                WHERE d.session_id = sc.session_id
+            ), 0) AS decisions_count,
+            COALESCE((
+                SELECT SUM(d.outcome_7d) FROM decisions d
+                WHERE d.session_id = sc.session_id
+            ), 0)::numeric AS pnl_usd,
+            COALESCE((
+                SELECT COUNT(*) FROM session_stages st
+                WHERE st.session_id = sc.session_id AND st.status = 'failed'
+            ), 0) AS stage_failures,
+            COALESCE(sc.total_cost_usd, 0)::numeric AS cost_usd
+        FROM session_costs sc
+        WHERE sc.session_date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        ORDER BY sc.session_date DESC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+    return [
+        {
+            "session_id": r["session_id"],
+            "session_date": r["session_date"],
+            "decisions_count": r["decisions_count"],
+            "pnl_usd": float(r["pnl_usd"]),
+            "stage_failures": r["stage_failures"],
+            "cost_usd": float(r["cost_usd"]),
+        }
+        for r in rows
+    ]
+
+
 def tool_get_executor_behavior_summary(days: int = 14) -> dict:
     """Read-only: sizing buckets, ticker concentration, round-trip count, hold rate."""
     with get_cursor() as cur:
@@ -1365,6 +1477,21 @@ TOOL_DEFINITIONS = [
             "properties": {"days": {"type": "integer", "default": 14}},
         },
     },
+    {
+        "name": "get_session_memos",
+        "description": "Read-only. Most recent strategy memos.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 10}}},
+    },
+    {
+        "name": "get_reflection_actions",
+        "description": "Read-only. Per-session reflection-stage actions taken.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 10}}},
+    },
+    {
+        "name": "get_session_summary",
+        "description": "Read-only. Per-session decisions, P&L (outcome_7d sum), failures, cost within a window.",
+        "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 14}}},
+    },
 ]
 
 
@@ -1395,4 +1522,7 @@ TOOL_HANDLERS = {
     "get_decision_detail": tool_get_decision_detail,
     "get_flip_flop_report": tool_get_flip_flop_report,
     "get_executor_behavior_summary": tool_get_executor_behavior_summary,
+    "get_session_memos": tool_get_session_memos,
+    "get_reflection_actions": tool_get_reflection_actions,
+    "get_session_summary": tool_get_session_summary_window,
 }

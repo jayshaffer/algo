@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 26 handler functions."""
+        """TOOL_HANDLERS should have all 29 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1045,12 +1045,15 @@ class TestToolCompleteness:
             "get_decision_detail",
             "get_flip_flop_report",
             "get_executor_behavior_summary",
+            "get_session_memos",
+            "get_reflection_actions",
+            "get_session_summary",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 27 entries (26 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 27
+        """TOOL_DEFINITIONS should have 30 entries (29 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 30
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1084,6 +1087,9 @@ class TestToolCompleteness:
             "get_decision_detail",
             "get_flip_flop_report",
             "get_executor_behavior_summary",
+            "get_session_memos",
+            "get_reflection_actions",
+            "get_session_summary",
         }
         assert tool_names == expected_names
 
@@ -1626,3 +1632,56 @@ def test_get_executor_behavior_summary_returns_aggregates(mock_db, mock_cursor, 
     assert result["size_histogram"] == {"small": 12, "medium": 7, "large": 1}
     assert result["ticker_concentration"] == {"AAPL": 5, "GOOGL": 4, "TSLA": 3}
     assert result["round_trip_count"] == 3
+
+
+def test_get_session_memos_returns_recent(mock_db, mock_cursor):
+    from v2.tools import tool_get_session_memos
+    mock_cursor.fetchall.return_value = [
+        {"id": 12, "session_date": "2026-05-20", "memo_type": "reflection",
+         "content": "Memo body A", "created_at": "2026-05-20T22:00:00+00:00"},
+        {"id": 11, "session_date": "2026-05-19", "memo_type": "reflection",
+         "content": "Memo body B", "created_at": "2026-05-19T22:00:00+00:00"},
+    ]
+    result = tool_get_session_memos(limit=5)
+    assert len(result) == 2
+    assert result[0]["memo_id"] == 12
+    args, _ = mock_cursor.execute.call_args
+    assert args[1] == (5,)
+
+
+def test_get_reflection_actions_aggregates_per_session(mock_db, mock_cursor):
+    from v2.tools import tool_get_reflection_actions
+    mock_cursor.fetchall.return_value = [
+        {"session_id": 44, "session_date": "2026-05-20",
+         "rules_proposed": 2, "rules_retired": 1,
+         "identity_updated": True, "memo_word_count": 312},
+        {"session_id": 43, "session_date": "2026-05-19",
+         "rules_proposed": 0, "rules_retired": 0,
+         "identity_updated": False, "memo_word_count": 95},
+    ]
+    result = tool_get_reflection_actions(limit=10)
+    assert len(result) == 2
+    assert result[0]["rules_proposed"] == 2
+    assert result[0]["rules_revalidated"] == 0  # always 0 — no DB column
+    assert result[0]["identity_updated"] is True
+    assert result[1]["memo_word_count"] == 95
+
+
+def test_get_session_summary_window_aggregates(mock_db, mock_cursor):
+    from v2.tools import tool_get_session_summary_window
+    mock_cursor.fetchall.return_value = [
+        {"session_id": 44, "session_date": "2026-05-20",
+         "decisions_count": 14, "pnl_usd": 152.40,
+         "stage_failures": 0, "cost_usd": 0.42},
+        {"session_id": 43, "session_date": "2026-05-19",
+         "decisions_count": 11, "pnl_usd": -33.10,
+         "stage_failures": 1, "cost_usd": 0.38},
+    ]
+    result = tool_get_session_summary_window(days=14)
+    assert len(result) == 2
+    assert result[0]["decisions_count"] == 14
+    assert result[0]["stage_failures"] == 0
+    assert result[1]["cost_usd"] == 0.38
+    args, _ = mock_cursor.execute.call_args
+    assert "session_costs" in args[0]
+    assert args[1] == (14,)
