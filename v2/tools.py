@@ -1391,6 +1391,11 @@ TOOL_DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_active_rules",
+        "description": "Read-only. Active strategy rules (supervisor alias for get_strategy_rules).",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_strategy_history",
         "description": "Recent strategy reflection memos.",
         "input_schema": {
@@ -1513,6 +1518,7 @@ TOOL_HANDLERS = {
     "write_playbook": tool_write_playbook,
     "get_strategy_identity": tool_get_strategy_identity,
     "get_strategy_rules": tool_get_strategy_rules,
+    "get_active_rules": tool_get_strategy_rules,
     "get_strategy_history": tool_get_strategy_history,
     "get_retired_rules": tool_get_retired_rules,
     "get_rule_bind_history": tool_get_rule_bind_history,
