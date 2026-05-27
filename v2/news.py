@@ -2,10 +2,15 @@
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 
 @dataclass

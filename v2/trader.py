@@ -26,6 +26,7 @@ from .context import build_executor_input
 from .database.trading_db import (
     check_decision_exists,
     close_thesis,
+    get_pending_playbook_action_for_ticker,
     get_positions,
     insert_decision,
     insert_decision_signals_batch,
@@ -141,6 +142,15 @@ def _snapshot_account(errors: list[str]) -> tuple[dict | None, int]:
         errors.append(f"Account snapshot failed: {e}")
         logger.error("Account snapshot failed: %s", e, exc_info=True)
         return None, 0
+
+
+def _build_stock_data_client():
+    api_key = os.environ.get("ALPACA_API_KEY")
+    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+    if not api_key or not secret_key:
+        logger.warning("Alpaca data credentials missing; price helpers will create clients as needed")
+        return None
+    return StockHistoricalDataClient(api_key, secret_key)
 
 
 def _build_executor_context(account_info: dict, data_client, errors: list[str]) -> ExecutorInput:
@@ -563,6 +573,42 @@ class _ExecutionTotals:
     total_sell_value: Decimal = Decimal(0)
 
 
+def _handle_hold_playbook_status(decision: ExecutorDecision, session_date: date) -> None:
+    """Move reviewed playbook-backed holds out of pending status."""
+    if decision.playbook_action_id:
+        try:
+            update_playbook_action_status(decision.playbook_action_id, "deferred")
+        except Exception as e:
+            logger.warning(
+                "Could not mark playbook action %d as deferred: %s",
+                decision.playbook_action_id, e,
+            )
+        return
+
+    if not decision.is_off_playbook:
+        return
+
+    try:
+        pending_action = get_pending_playbook_action_for_ticker(
+            session_date, decision.ticker,
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not check pending playbook action for off-playbook hold %s: %s",
+            decision.ticker, e,
+        )
+        return
+
+    if pending_action:
+        logger.warning(
+            "%s: off-playbook HOLD has pending playbook action %s for %s; "
+            "executor may have lost playbook linkage",
+            decision.ticker,
+            pending_action.get("id"),
+            session_date,
+        )
+
+
 def _prepare_decision(
     decision: ExecutorDecision,
     positions: dict,
@@ -842,6 +888,7 @@ def _execute_decisions(
 
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
+            _handle_hold_playbook_status(decision, session_date)
             continue
 
         if totals.trades_executed >= max_trades_per_session:
@@ -1204,10 +1251,7 @@ def run_trading_session(
         errors.append("Market is closed — skipped trading")
         return _empty_result(timestamp, positions_synced, orders_synced, 0, errors)
 
-    data_client = StockHistoricalDataClient(
-        os.environ.get("ALPACA_API_KEY"),
-        os.environ.get("ALPACA_SECRET_KEY"),
-    )
+    data_client = _build_stock_data_client()
 
     # Step 2: Take account snapshot
     logger.info("[Step 2] Taking account snapshot")

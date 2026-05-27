@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 
 from alpaca.data.historical import StockHistoricalDataClient
@@ -27,6 +27,10 @@ from .database.trading_db import (
 )
 
 logger = logging.getLogger(__name__)
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 # Alpaca documents fractional-share precision at 9 decimals. Quantize ROUND_DOWN
 # before submit so a precheck-trimmed sell can never overshoot qty_available
@@ -534,13 +538,12 @@ def get_latest_price_with_reason(
     etc.) — the free IEX feed widens spreads near close even when last-print
     is fine, so the two functions can disagree, and that's by design.
     """
-    if client is None:
-        api_key = os.environ.get("ALPACA_API_KEY")
-        secret_key = os.environ.get("ALPACA_SECRET_KEY")
-        client = StockHistoricalDataClient(api_key, secret_key)
-    request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
-
     try:
+        if client is None:
+            api_key = os.environ.get("ALPACA_API_KEY")
+            secret_key = os.environ.get("ALPACA_SECRET_KEY")
+            client = StockHistoricalDataClient(api_key, secret_key)
+        request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
         quotes = client.get_stock_latest_quote(request)
         quote = quotes[ticker]
     except Exception as e:
@@ -609,13 +612,12 @@ def get_latest_trade_price(
     For order submission, keep using get_latest_price so stale/wide quotes
     still block bad fills.
     """
-    if client is None:
-        api_key = os.environ.get("ALPACA_API_KEY")
-        secret_key = os.environ.get("ALPACA_SECRET_KEY")
-        client = StockHistoricalDataClient(api_key, secret_key)
-    request = StockLatestTradeRequest(symbol_or_symbols=ticker)
-
     try:
+        if client is None:
+            api_key = os.environ.get("ALPACA_API_KEY")
+            secret_key = os.environ.get("ALPACA_SECRET_KEY")
+            client = StockHistoricalDataClient(api_key, secret_key)
+        request = StockLatestTradeRequest(symbol_or_symbols=ticker)
         trades = client.get_stock_latest_trade(request)
         trade = trades[ticker]
         price = Decimal(str(trade.price))

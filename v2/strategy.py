@@ -8,7 +8,7 @@ rules, and write session memos.
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from functools import partial
 
 from .attribution import get_attribution_summary
@@ -28,6 +28,10 @@ from .telemetry import record_event
 from .tools import tool_get_strategy_history, tool_get_strategy_identity, tool_get_strategy_rules
 
 logger = logging.getLogger(__name__)
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 MIN_RULE_TENURE_DAYS = 5
 MAX_RETIREMENTS_PER_SESSION = 2

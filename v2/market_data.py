@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from alpaca.data.enums import DataFeed
@@ -11,6 +11,11 @@ from alpaca.data.requests import (
     StockBarsRequest,
 )
 from alpaca.data.timeframe import TimeFrame
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - Python < 3.11
+    UTC = timezone.utc  # noqa: UP017
 
 # Sector ETF proxies
 SECTOR_ETFS = {

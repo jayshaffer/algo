@@ -581,6 +581,26 @@ def get_pending_playbook_actions(playbook_id: int) -> list[dict]:
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_pending_playbook_action_for_ticker(playbook_date: date, ticker: str) -> dict | None:
+    """Return today's pending playbook action for ticker, if one exists."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT pa.*
+              FROM playbook_actions pa
+              JOIN playbooks p ON p.id = pa.playbook_id
+             WHERE p.date = %s
+               AND pa.ticker = %s
+               AND (pa.status = 'pending' OR pa.status IS NULL)
+             ORDER BY pa.priority ASC, pa.id ASC
+             LIMIT 1
+            """,
+            (playbook_date, ticker),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def delete_playbook_actions(playbook_id) -> int:
     """Delete all actions for a playbook, clearing decision references first."""
     with get_cursor() as cur:
@@ -1082,4 +1102,3 @@ def insert_llm_call_context(
                 stop_reason, duration_ms,
             ),
         )
-
