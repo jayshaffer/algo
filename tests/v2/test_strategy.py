@@ -1215,3 +1215,25 @@ class TestReflectionWatchlistGate:
         monkeypatch.setattr("v2.watchlist.db.get_open_watchlist_items", lambda stage: [])
         res = strat.run_strategy_reflection(session_id=5)  # no raise
         assert res.memo_written is True
+
+
+def test_amend_rule_updates_in_place(monkeypatch):
+    monkeypatch.setattr(strat, "amend_strategy_rule", lambda **k: True)
+    out = strat.tool_amend_rule(
+        rule_id=48, new_rule_text="updated", new_evidence="beat 61% n=24",
+        reason="evidence refresh",
+    )
+    assert "48" in out and "amend" in out.lower()
+
+
+def test_amend_rule_reports_inactive(monkeypatch):
+    monkeypatch.setattr(strat, "amend_strategy_rule", lambda **k: False)
+    out = strat.tool_amend_rule(
+        rule_id=999, new_rule_text="x", new_evidence="y", reason="z",
+    )
+    assert "Error" in out
+
+
+def test_amend_rule_in_tool_defs():
+    names = {d["name"] for d in strat.STRATEGY_TOOL_DEFINITIONS}
+    assert "amend_rule" in names

@@ -16,6 +16,7 @@ from v2 import watchlist as wl
 from .attribution import get_attribution_summary
 from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
+    amend_strategy_rule,
     get_active_strategy_rules,
     get_current_strategy_state,
     get_recent_decisions,
@@ -160,6 +161,11 @@ Before proposing a new rule:
 1. Check if an existing active rule covers the same pattern
 2. If so, update the existing rule's confidence, scope, or evidence rather than creating a new one
 3. Only create a new rule if the pattern is genuinely distinct from all existing rules
+
+When attribution data refreshes but a rule's substance is unchanged, use
+amend_rule to update its evidence in place. Do NOT retire-and-replace a
+rule just to refresh its evidence string — that churns rule ids for no
+behavioral change.
 
 ## Rule Tenure
 
@@ -367,6 +373,27 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
         retirements.append(rule_id)
         return f"Retired rule ID {rule_id}. Reason: {reason}"
     return f"Error: Failed to retire rule ID {rule_id}"
+
+
+def tool_amend_rule(
+    rule_id: int, new_rule_text: str, new_evidence: str, reason: str
+) -> str:
+    """Update an active rule's text/evidence in place — no retire-and-replace.
+    Use this when only the embedded evidence changed (e.g. attribution
+    refreshed) and the rule's substance is unchanged."""
+    new_rule_text = (new_rule_text or "").strip()
+    new_evidence = (new_evidence or "").strip()
+    if not new_rule_text:
+        return "Error: new_rule_text is required"
+    if len(new_evidence) < MIN_RULE_EVIDENCE_CHARS:
+        return "Error: new_evidence is required"
+    ok = amend_strategy_rule(
+        rule_id=rule_id, new_rule_text=new_rule_text, new_evidence=new_evidence,
+    )
+    if not ok:
+        return f"Error: Rule ID {rule_id} not found or not active"
+    logger.info("Amended rule %s in place: %s", rule_id, (reason or "").strip())
+    return f"Amended rule ID {rule_id} in place (no new rule created)."
 
 
 def tool_write_strategy_memo(memo_type: str, content: str, session_id: int | None = None) -> str:
@@ -603,6 +630,25 @@ STRATEGY_TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "amend_rule",
+        "description": (
+            "Update an active rule's text/evidence IN PLACE without retiring it. "
+            "Prefer this over retire_rule + propose_rule when only the embedded "
+            "evidence changed and the rule's substance is the same — it avoids "
+            "rule-churn (new ids for the same rule every attribution refresh)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+                "new_rule_text": {"type": "string"},
+                "new_evidence": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["rule_id", "new_rule_text", "new_evidence", "reason"],
+        },
+    },
+    {
         "name": "write_strategy_memo",
         "description": "Write reflection memo. REQUIRED at end of every session.",
         "input_schema": {
@@ -626,6 +672,7 @@ STRATEGY_TOOL_HANDLERS = {
     "propose_rule": tool_propose_rule,
     "revalidate_rule": tool_revalidate_rule,
     "retire_rule": tool_retire_rule,
+    "amend_rule": tool_amend_rule,
     "write_strategy_memo": tool_write_strategy_memo,
     # Bound to (session_id, stage="reflection") at runtime in run_strategy_reflection.
     "resolve_watchlist_item": wl.make_resolve_handler(session_id=None, stage="reflection"),
