@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS supervisor_watchlist_items (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at             TIMESTAMPTZ,
     resolution_note         TEXT,
-    resolved_by_session_id  INT,
-    resolved_by_stage       TEXT
+    resolved_by_session_id  INT REFERENCES sessions(id),
+    resolved_by_stage       TEXT CHECK (resolved_by_stage IS NULL OR resolved_by_stage IN ('ideation', 'reflection'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_watchlist_open_by_stage
