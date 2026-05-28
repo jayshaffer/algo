@@ -32,6 +32,7 @@ def _isolate_attribution_summary_cache():
 # to callers, they just need a truthy mock).
 _NETWORK_PATCH_TARGETS = (
     # Session stage wrappers (import-site names used by v2.session.run_session)
+    "v2.session.run_supervisor",
     "v2.session.run_strategy_reflection",
     "v2.session.run_dashboard_stage",
     "v2.session.run_pipeline",
