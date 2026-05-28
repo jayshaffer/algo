@@ -73,13 +73,20 @@ def format_open_watchlist_items(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def get_open_items(owner_stage: str) -> list[dict]:
+    """Open watchlist items for a stage. Single read path shared by stage
+    ingestion and the gate, so test patches of db.get_open_watchlist_items
+    flow through both."""
+    return db.get_open_watchlist_items(owner_stage)
+
+
 def assert_watchlist_resolved(owner_stage: str) -> None:
     """Raise RuntimeError if any item owned by this stage is still open.
 
     Called after the agentic loop. New items are only created by the
     supervisor (earlier in the session), so any remaining open row is an
     unresolved item — the forcing function."""
-    remaining = db.get_open_watchlist_items(owner_stage)
+    remaining = get_open_items(owner_stage)
     if remaining:
         ids = ", ".join(str(it["id"]) for it in remaining)
         raise RuntimeError(

@@ -153,3 +153,10 @@ def test_assert_watchlist_resolved_raises_when_open_remain():
 def test_assert_watchlist_resolved_passes_when_clear():
     with patch("v2.watchlist.db.get_open_watchlist_items", return_value=[]):
         wl.assert_watchlist_resolved("ideation")  # no raise
+
+
+def test_get_open_items_delegates_to_db():
+    with patch("v2.watchlist.db.get_open_watchlist_items", return_value=[{"id": 1}]) as m:
+        out = wl.get_open_items("reflection")
+    m.assert_called_once_with("reflection")
+    assert out == [{"id": 1}]

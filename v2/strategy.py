@@ -18,7 +18,6 @@ from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
     get_active_strategy_rules,
     get_current_strategy_state,
-    get_open_watchlist_items,
     get_recent_decisions,
     get_rule_gate_revalidation_candidates,
     insert_strategy_memo,
@@ -744,7 +743,7 @@ def run_strategy_reflection(
         logger.warning("Could not load rule revalidation evidence: %s", e)
         rule_revalidation_candidates = []
     gated_rule_ids = _gated_rule_ids(rule_revalidation_candidates)
-    open_watchlist = get_open_watchlist_items("reflection")
+    open_watchlist = wl.get_open_items("reflection")
     initial_parts = []
     if trading_context:
         initial_parts.append(trading_context)

@@ -9,7 +9,6 @@ from functools import partial
 from . import watchlist as wl
 from .claude_client import AgentPurpose, extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
-from .database.trading_db import get_open_watchlist_items
 from .formation import build_formation_context, get_orphan_positions
 from .pricing import UnknownModelError, stage_cost_usd
 from .tools import (
@@ -447,7 +446,7 @@ def run_strategist_loop(
     if orphan_block:
         pre_seeded = pre_seeded + "\n\n" + orphan_block
 
-    open_watchlist = get_open_watchlist_items("ideation")
+    open_watchlist = wl.get_open_items("ideation")
     watchlist_block = wl.format_open_watchlist_items(open_watchlist)
 
     initial_message = f"""Here is the current state (pre-loaded to save round-trips):
