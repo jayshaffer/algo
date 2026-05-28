@@ -380,7 +380,8 @@ def tool_amend_rule(
 ) -> str:
     """Update an active rule's text/evidence in place — no retire-and-replace.
     Use this when only the embedded evidence changed (e.g. attribution
-    refreshed) and the rule's substance is unchanged."""
+    refreshed) and the rule's substance is unchanged.
+    The reason is logged for the audit trail, not stored in the DB."""
     new_rule_text = (new_rule_text or "").strip()
     new_evidence = (new_evidence or "").strip()
     if not new_rule_text:

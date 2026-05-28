@@ -1229,9 +1229,11 @@ def test_amend_rule_updates_in_place(monkeypatch):
 def test_amend_rule_reports_inactive(monkeypatch):
     monkeypatch.setattr(strat, "amend_strategy_rule", lambda **k: False)
     out = strat.tool_amend_rule(
-        rule_id=999, new_rule_text="x", new_evidence="y", reason="z",
+        rule_id=999, new_rule_text="updated", new_evidence="sufficient evidence",
+        reason="z",
     )
     assert "Error" in out
+    assert "999" in out  # reached the inactive-rule branch, not the evidence guard
 
 
 def test_amend_rule_in_tool_defs():
