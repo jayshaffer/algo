@@ -41,6 +41,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    volumes:
+      # queries.py imports v2.market_calendar (single source of truth for the
+      # NYSE calendar); the dashboard image builds only ./dashboard, so mount v2.
+      - ./v2:/app/v2:ro
 
 volumes:
   postgres_data:
