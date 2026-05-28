@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from v2 import watchlist as wl
 from v2.database import trading_db as db
 
 
@@ -95,3 +96,60 @@ def test_amend_strategy_rule_updates_in_place(fake_cursor):
     sql = cur.execute.call_args[0][0]
     assert "UPDATE strategy_rules" in sql
     assert "retired_at" not in sql  # amend must NOT retire
+
+
+def test_resolve_tool_def_shape():
+    d = wl.RESOLVE_WATCHLIST_TOOL_DEF
+    assert d["name"] == "resolve_watchlist_item"
+    props = d["input_schema"]["properties"]
+    assert set(props) == {"item_id", "resolution", "note"}
+    assert props["resolution"]["enum"] == ["acted", "dismissed"]
+    assert set(d["input_schema"]["required"]) == {"item_id", "resolution", "note"}
+
+
+def test_make_resolve_handler_binds_session_and_stage():
+    with patch("v2.watchlist.db.resolve_watchlist_item", return_value=True) as m:
+        handler = wl.make_resolve_handler(session_id=42, stage="reflection")
+        out = handler(item_id=5, resolution="acted", note="retired Rule 43")
+    m.assert_called_once_with(
+        item_id=5, resolution="acted", note="retired Rule 43",
+        session_id=42, stage="reflection",
+    )
+    assert "5" in out and "acted" in out
+
+
+def test_make_resolve_handler_reports_miss():
+    with patch("v2.watchlist.db.resolve_watchlist_item", return_value=False):
+        handler = wl.make_resolve_handler(session_id=1, stage="ideation")
+        out = handler(item_id=99, resolution="dismissed", note="n")
+    assert "Error" in out or "not found" in out.lower()
+
+
+def test_format_open_watchlist_items_empty():
+    assert "no open" in wl.format_open_watchlist_items([]).lower()
+
+
+def test_format_open_watchlist_items_lists_each():
+    items = [
+        {"id": 1, "title": "Retire Rule 43", "detail": "auto-lift fired"},
+        {"id": 2, "title": "Close thesis 267", "detail": "Rule 43 grounded"},
+    ]
+    out = wl.format_open_watchlist_items(items)
+    assert "item 1" in out and "Retire Rule 43" in out
+    assert "item 2" in out and "Close thesis 267" in out
+    assert "resolve_watchlist_item" in out
+
+
+def test_assert_watchlist_resolved_raises_when_open_remain():
+    with (
+        patch("v2.watchlist.db.get_open_watchlist_items",
+              return_value=[{"id": 3, "title": "x", "detail": "y"}]),
+        pytest.raises(RuntimeError) as exc,
+    ):
+        wl.assert_watchlist_resolved("reflection")
+    assert "3" in str(exc.value)
+
+
+def test_assert_watchlist_resolved_passes_when_clear():
+    with patch("v2.watchlist.db.get_open_watchlist_items", return_value=[]):
+        wl.assert_watchlist_resolved("ideation")  # no raise
