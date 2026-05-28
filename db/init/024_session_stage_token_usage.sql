@@ -21,6 +21,7 @@ CREATE TABLE model_pricing (
 -- (e.g. classifier uses "claude-haiku-4-5-20251001"); ideation/session
 -- pass the bare alias. Both must resolve.
 INSERT INTO model_pricing (model, input_per_mtok, output_per_mtok, cache_creation_per_mtok, cache_read_per_mtok) VALUES
+    ('claude-opus-4-8',              15.00, 75.00, 18.75, 1.50),
     ('claude-opus-4-7',              15.00, 75.00, 18.75, 1.50),
     ('claude-opus-4-6',              15.00, 75.00, 18.75, 1.50),
     ('claude-sonnet-4-6',             3.00, 15.00,  3.75, 0.30),

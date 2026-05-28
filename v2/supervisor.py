@@ -25,7 +25,7 @@ from v2.pricing import UnknownModelError, stage_cost_usd
 log = logging.getLogger(__name__)
 
 PROMPT_VERSION = "v1.0.0"
-DEFAULT_SUPERVISOR_MODEL = "claude-opus-4-7"
+DEFAULT_SUPERVISOR_MODEL = "claude-opus-4-8"
 DEFAULT_MAX_TURNS = 20
 
 STRATEGY_SUPERVISOR_SYSTEM = """\

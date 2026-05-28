@@ -513,7 +513,7 @@ def _finalize_session(result: SessionResult, session_id: int | None) -> None:
 
 def run_session(
     dry_run: bool = False,
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-8",
     executor_model: str = DEFAULT_EXECUTOR_MODEL,
     max_turns: int = 25,
     skip_supervisor: bool = False,
@@ -586,7 +586,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run consolidated daily trading session")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--model", default="claude-opus-4-6")
+    parser.add_argument("--model", default="claude-opus-4-8")
     parser.add_argument("--executor-model", default=DEFAULT_EXECUTOR_MODEL)
     parser.add_argument("--max-turns", type=int, default=25)
     parser.add_argument("--skip-supervisor", action="store_true")
