@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 
+from . import watchlist as wl
 from .claude_client import AgentPurpose, extract_final_text, get_claude_client, run_agentic_loop
 from .context import get_equity_summary
 from .formation import build_formation_context, get_orphan_positions
@@ -122,7 +123,13 @@ _STRATEGIST_TEMPLATE = """You are the strategist for an automated trading system
    Example: "put $500 into AMD" → {{"action":"buy","intent_type":"invest_dollar","intent_magnitude":500}}
    Example: "take half off SPY" → {{"action":"sell","intent_type":"exit_partial_pct","intent_magnitude":50}}
    Example: "hold MSFT through earnings" → do not emit any action for MSFT.
-8. **Reversal and Carry-Forward Justification.** Before adding a buy/sell action to today's playbook, check `get_recent_playbooks` for the same ticker. If today's action is the opposite of what you wrote in the past 7 days, your action's `reasoning` must explicitly cite (a) the prior playbook date and action, and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. Re-narrating the same fundamentals from a different angle is not new evidence; if you cannot articulate (b), do not propose the action. If you carry forward a repeated action, do not treat repetition as conviction unless prior outcome_class values show real execution or unresolved current evidence; deferred_by_executor, expired_market_closed, expired_legacy, invalid_runtime, and pending_unreviewed are lifecycle context, not proof."""
+8. **Reversal and Carry-Forward Justification.** Before adding a buy/sell action to today's playbook, check `get_recent_playbooks` for the same ticker. If today's action is the opposite of what you wrote in the past 7 days, your action's `reasoning` must explicitly cite (a) the prior playbook date and action, and (b) the new evidence — fundamentals shift, catalyst resolution, price level reached — that justifies reversing. Re-narrating the same fundamentals from a different angle is not new evidence; if you cannot articulate (b), do not propose the action. If you carry forward a repeated action, do not treat repetition as conviction unless prior outcome_class values show real execution or unresolved current evidence; deferred_by_executor, expired_market_closed, expired_legacy, invalid_runtime, and pending_unreviewed are lifecycle context, not proof.
+
+## Supervisor Watchlist Gate
+If your initial context lists a SUPERVISOR WATCHLIST, you MUST call
+resolve_watchlist_item for every item before finishing — 'acted' (you
+closed/updated a thesis or re-spec'd the playbook in response) or
+'dismissed' (with a reason). You cannot finish with an open item."""
 
 CLAUDE_STRATEGIST_SYSTEM = _STRATEGIST_TEMPLATE.format(
     timing="after market close",
@@ -236,14 +243,18 @@ def _run_claude_loop(
         **TOOL_HANDLERS,
         "create_thesis": partial(tool_create_thesis, session_id=session_id),
         "adopt_thesis": partial(tool_adopt_thesis, session_id=session_id),
+        "resolve_watchlist_item": wl.make_resolve_handler(
+            session_id=session_id, stage="ideation"
+        ),
     }
+    tools = TOOL_DEFINITIONS + [wl.RESOLVE_WATCHLIST_TOOL_DEF]
 
     result = run_agentic_loop(
         client=client,
         model=model,
         system=system,
         initial_message=initial_message,
-        tools=TOOL_DEFINITIONS,
+        tools=tools,
         tool_handlers=handlers,
         max_turns=max_turns,
         session_id=session_id,
@@ -435,9 +446,14 @@ def run_strategist_loop(
     if orphan_block:
         pre_seeded = pre_seeded + "\n\n" + orphan_block
 
+    open_watchlist = wl.get_open_items("ideation")
+    watchlist_block = wl.format_open_watchlist_items(open_watchlist)
+
     initial_message = f"""Here is the current state (pre-loaded to save round-trips):
 
 {pre_seeded}
+
+{watchlist_block}
 
 Now proceed with your strategist session:
 1. Review the data above — do NOT re-fetch portfolio, theses, decisions, attribution, identity, rules, or strategy history
@@ -447,7 +463,7 @@ Now proceed with your strategist session:
 
 When you've completed your work, provide a summary of your findings and actions."""
 
-    return _run_claude_loop(
+    result = _run_claude_loop(
         system=base_prompt,
         initial_message=initial_message,
         model=model,
@@ -456,6 +472,8 @@ When you've completed your work, provide a summary of your findings and actions.
         session_id=session_id,
         stage_name="ideation",
     )
+    wl.assert_watchlist_resolved("ideation")
+    return result
 
 
 def run_strategist_session(

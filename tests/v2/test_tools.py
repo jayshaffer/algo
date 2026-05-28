@@ -1017,7 +1017,7 @@ class TestGetMacroSignals:
 
 class TestToolCompleteness:
     def test_tool_handlers_dict_complete(self):
-        """TOOL_HANDLERS should have all 18 handler functions."""
+        """TOOL_HANDLERS should have all 31 handler functions."""
         expected_handlers = {
             "get_market_snapshot",
             "get_portfolio_state",
@@ -1035,14 +1035,27 @@ class TestToolCompleteness:
             "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
+            "get_strategy_identity_with_history",
             "get_strategy_rules",
             "get_strategy_history",
+            "get_retired_rules",
+            "get_rule_bind_history",
+            "get_theses",
+            "get_thesis_lineage",
+            "get_recent_decisions",
+            "get_decision_detail",
+            "get_flip_flop_report",
+            "get_executor_behavior_summary",
+            "get_session_memos",
+            "get_reflection_actions",
+            "get_session_summary",
+            "get_active_rules",
         }
         assert set(TOOL_HANDLERS.keys()) == expected_handlers
 
     def test_tool_definitions_list_complete(self):
-        """TOOL_DEFINITIONS should have 19 entries (18 tools + web_search)."""
-        assert len(TOOL_DEFINITIONS) == 19
+        """TOOL_DEFINITIONS should have 32 entries (31 tools + web_search)."""
+        assert len(TOOL_DEFINITIONS) == 32
 
         # Extract named tools (excluding web_search which has type field)
         tool_names = {
@@ -1066,8 +1079,21 @@ class TestToolCompleteness:
             "get_recent_playbooks",
             "write_playbook",
             "get_strategy_identity",
+            "get_strategy_identity_with_history",
             "get_strategy_rules",
             "get_strategy_history",
+            "get_retired_rules",
+            "get_rule_bind_history",
+            "get_theses",
+            "get_thesis_lineage",
+            "get_recent_decisions",
+            "get_decision_detail",
+            "get_flip_flop_report",
+            "get_executor_behavior_summary",
+            "get_session_memos",
+            "get_reflection_actions",
+            "get_session_summary",
+            "get_active_rules",
         }
         assert tool_names == expected_names
 
@@ -1113,6 +1139,39 @@ class TestGetStrategyIdentity:
         mock_get.return_value = None
         result = tool_get_strategy_identity()
         assert "No strategy identity" in result
+
+
+class TestGetStrategyIdentityWithHistory:
+    def test_get_strategy_identity_with_history_returns_current_plus_versions(self, mock_db, mock_cursor):
+        from v2.tools import tool_get_strategy_identity_with_history
+        mock_cursor.fetchall.return_value = [
+            {"id": 12, "identity_text": "v3 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 3, "is_current": True,
+             "created_at": "2026-05-20T00:00:00+00:00"},
+            {"id": 11, "identity_text": "v2 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 2, "is_current": False,
+             "created_at": "2026-05-15T00:00:00+00:00"},
+            {"id": 10, "identity_text": "v1 text", "risk_posture": "moderate",
+             "sector_biases": {}, "preferred_signals": [], "avoided_signals": [],
+             "version": 1, "is_current": False,
+             "created_at": "2026-05-10T00:00:00+00:00"},
+        ]
+        result = tool_get_strategy_identity_with_history(history_limit=5)
+        assert result["current"]["version"] == 3
+        assert result["current"]["identity_text"] == "v3 text"
+        assert len(result["history"]) == 3
+        assert [h["version"] for h in result["history"]] == [3, 2, 1]
+        args, _ = mock_cursor.execute.call_args
+        assert "strategy_state" in args[0]
+        assert "ORDER BY version DESC" in args[0]
+
+    def test_get_strategy_identity_with_history_empty(self, mock_db, mock_cursor):
+        from v2.tools import tool_get_strategy_identity_with_history
+        mock_cursor.fetchall.return_value = []
+        result = tool_get_strategy_identity_with_history()
+        assert result == {"current": None, "history": []}
 
 
 class TestGetStrategyRules:
@@ -1402,3 +1461,265 @@ class TestToolGetCuratedNews:
         # Ticker is normalised upstream; assert the DB was queried for AAPL/3.
         assert captured_kwargs.get("ticker") == "AAPL"
         assert captured_kwargs.get("days") == 3
+
+
+def test_get_retired_rules_returns_recent_retirements(mock_db, mock_cursor):
+    from v2.tools import tool_get_retired_rules
+    mock_cursor.fetchall.return_value = [
+        {
+            "id": 7,
+            "rule_text": "Avoid earnings-week entries",
+            "category": "risk",
+            "supporting_evidence": "evidence A",
+            "status": "retired",
+            "created_at": "2026-04-15T00:00:00+00:00",
+            "retired_at": "2026-05-01T00:00:00+00:00",
+            "retirement_reason": "low signal",
+        },
+    ]
+    result = tool_get_retired_rules(limit=10)
+    assert result == [{
+        "rule_id": 7,
+        "rule_text": "Avoid earnings-week entries",
+        "category": "risk",
+        "supporting_evidence": "evidence A",
+        "status": "retired",
+        "created_at": "2026-04-15T00:00:00+00:00",
+        "retired_at": "2026-05-01T00:00:00+00:00",
+        "retirement_reason": "low signal",
+    }]
+    args, _ = mock_cursor.execute.call_args
+    assert "status = 'retired'" in args[0]
+    assert "LIMIT %s" in args[0]
+    assert args[1] == (10,)
+
+
+def test_get_rule_bind_history_counts_citations(mock_db, mock_cursor):
+    from v2.tools import tool_get_rule_bind_history
+    mock_cursor.fetchall.return_value = [
+        {"id": 101, "date": "2026-05-20", "ticker": "AAPL", "action": "buy", "reasoning": "rule #7 supports caution"},
+        {"id": 115, "date": "2026-05-22", "ticker": "MSFT", "action": "sell", "reasoning": "lift_condition for #7 met"},
+    ]
+    result = tool_get_rule_bind_history(rule_id=7, days=30)
+    assert result["rule_id"] == 7
+    assert result["bind_count"] == 2
+    assert len(result["citations"]) == 2
+    assert result["citations"][0]["decision_id"] == 101
+    args, _ = mock_cursor.execute.call_args
+    assert "decisions" in args[0]
+    assert "decision_signals" in args[0]
+    assert "signal_type = 'rule_gate'" in args[0]
+    assert "%s" in args[0]  # rule_id param
+
+
+def test_get_theses_filters_by_status(mock_db, mock_cursor):
+    from v2.tools import tool_get_theses
+    mock_cursor.fetchall.return_value = [
+        {"id": 3, "ticker": "AAPL", "thesis": "Long iPhone cycle",
+         "entry_trigger": "RSI<40", "exit_trigger": "RSI>70 or earnings",
+         "status": "active", "created_at": "2026-05-01T00:00:00+00:00",
+         "closed_at": None, "close_reason": None},
+    ]
+    result = tool_get_theses(status="active", limit=25)
+    assert len(result) == 1
+    assert result[0]["thesis_id"] == 3
+    assert result[0]["status"] == "active"
+    assert result[0]["thesis"] == "Long iPhone cycle"
+    args, _ = mock_cursor.execute.call_args
+    assert "status = %s" in args[0]
+    assert args[1] == ("active", 25)
+
+
+def test_get_theses_all_status_skips_filter(mock_db, mock_cursor):
+    from v2.tools import tool_get_theses
+    mock_cursor.fetchall.return_value = []
+    tool_get_theses(status="all", limit=50)
+    args, _ = mock_cursor.execute.call_args
+    assert "status = %s" not in args[0]
+    assert args[1] == (50,)
+
+
+def test_get_thesis_lineage_joins_decisions_via_playbook_actions(mock_db, mock_cursor):
+    from v2.tools import tool_get_thesis_lineage
+    # First fetchone: thesis header
+    mock_cursor.fetchone.return_value = {"id": 3, "ticker": "AAPL", "thesis": "Long cycle", "status": "active"}
+    # fetchall: decisions joined via playbook_actions
+    mock_cursor.fetchall.return_value = [
+        {"id": 88, "date": "2026-05-10", "action": "buy", "quantity": 10.0,
+         "reasoning": "thesis #3 entry", "outcome_7d": 1.5, "outcome_30d": 3.2},
+    ]
+    result = tool_get_thesis_lineage(thesis_id=3)
+    assert result["thesis_id"] == 3
+    assert result["ticker"] == "AAPL"
+    assert result["thesis"] == "Long cycle"
+    assert len(result["decisions"]) == 1
+    assert result["decisions"][0]["outcome_7d"] == 1.5
+    assert result["decisions"][0]["outcome_30d"] == 3.2
+    # Regression guard: the join must cover both paths
+    fetchall_sql = mock_cursor.execute.call_args_list[-1].args[0]
+    assert "playbook_actions" in fetchall_sql
+    assert "pa.thesis_id = %s" in fetchall_sql
+    assert "decision_signals" in fetchall_sql
+    assert "ds.signal_type = 'thesis'" in fetchall_sql
+
+
+def test_get_thesis_lineage_returns_error_when_thesis_missing(mock_db, mock_cursor):
+    from v2.tools import tool_get_thesis_lineage
+    mock_cursor.fetchone.return_value = None
+    result = tool_get_thesis_lineage(thesis_id=9999)
+    assert result == {"thesis_id": 9999, "error": "not found"}
+    # Only the head SELECT should have run; the second query should not execute.
+    sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+    assert len(sqls) == 1
+
+
+def test_get_recent_decisions_returns_compact_rows(mock_db, mock_cursor):
+    from v2.tools import tool_get_recent_decisions
+    long_reasoning = "This is a long reasoning that goes on and on and on " * 20
+    mock_cursor.fetchall.return_value = [
+        {
+            "id": 501,
+            "date": "2026-05-20",
+            "ticker": "AAPL",
+            "action": "buy",
+            "quantity": 10.0,
+            "reasoning": long_reasoning,
+            "signals_referenced": "news_signal,thesis",
+            "outcome_7d": 1.25,
+        },
+    ]
+    result = tool_get_recent_decisions(days=14)
+    assert len(result) == 1
+    assert result[0]["decision_id"] == 501
+    assert len(result[0]["reasoning_excerpt"]) <= 200
+    assert result[0]["signals_referenced"] == "news_signal,thesis"
+    args, _ = mock_cursor.execute.call_args
+    assert "d.date >= CURRENT_DATE - INTERVAL '1 day' * %s" in args[0]
+
+
+def test_get_decision_detail_includes_referenced_signals(mock_db, mock_cursor):
+    from v2.tools import tool_get_decision_detail
+    mock_cursor.fetchone.return_value = {
+        "id": 501,
+        "date": "2026-05-20",
+        "ticker": "AAPL",
+        "action": "buy",
+        "quantity": 10.0,
+        "reasoning": "full reasoning text",
+        "outcome_7d": 1.25,
+        "outcome_30d": None,
+        "price": 178.5,
+    }
+    mock_cursor.fetchall.return_value = [
+        {"signal_id": 12, "signal_type": "news_signal"},
+        {"signal_id": 44, "signal_type": "thesis"},
+    ]
+    result = tool_get_decision_detail(decision_id=501)
+    assert result["decision_id"] == 501
+    assert result["reasoning"] == "full reasoning text"
+    assert len(result["signals"]) == 2
+    assert result["signals"][0]["signal_type"] == "news_signal"
+
+
+def test_get_decision_detail_returns_error_when_missing(mock_db, mock_cursor):
+    from v2.tools import tool_get_decision_detail
+    mock_cursor.fetchone.return_value = None
+    result = tool_get_decision_detail(decision_id=999999)
+    assert result == {"decision_id": 999999, "error": "not found"}
+
+
+def test_get_flip_flop_report_uses_round_trip_analyzer(monkeypatch):
+    from v2 import tools
+    from v2.patterns import RoundTrip
+    monkeypatch.setattr(
+        tools,
+        "analyze_round_trips",
+        lambda **kw: [RoundTrip(ticker="GOOGL", pair_count=11, first_date="2026-05-01", last_date="2026-05-22")],
+    )
+    result = tools.tool_get_flip_flop_report(days=30, min_reversals=3)
+    assert len(result) == 1
+    assert result[0]["ticker"] == "GOOGL"
+    assert result[0]["reversal_count"] == 11
+    assert result[0]["first_date"] == "2026-05-01"
+    assert result[0]["last_date"] == "2026-05-22"
+
+
+def test_get_executor_behavior_summary_returns_aggregates(mock_db, mock_cursor, monkeypatch):
+    from v2 import tools
+    from v2.patterns import RoundTrip
+    # Mock the three DB result sets in the order they're fetched
+    mock_cursor.fetchall.side_effect = [
+        # Size histogram
+        [{"bucket": "small", "n": 12}, {"bucket": "medium", "n": 7}, {"bucket": "large", "n": 1}],
+        # Ticker concentration
+        [{"ticker": "AAPL", "n": 5}, {"ticker": "GOOGL", "n": 4}, {"ticker": "TSLA", "n": 3}],
+    ]
+    mock_cursor.fetchone.side_effect = [
+        {"n": 20},  # total decisions
+        {"n": 4},   # hold count
+    ]
+    monkeypatch.setattr(
+        tools, "analyze_round_trips",
+        lambda **kw: [RoundTrip(ticker="GOOGL", pair_count=3, first_date="x", last_date="y")],
+    )
+    result = tools.tool_get_executor_behavior_summary(days=14)
+    assert result["window_days"] == 14
+    assert result["decision_count"] == 20
+    assert result["hold_rate"] == 0.2
+    assert result["size_histogram"] == {"small": 12, "medium": 7, "large": 1}
+    assert result["ticker_concentration"] == {"AAPL": 5, "GOOGL": 4, "TSLA": 3}
+    assert result["round_trip_count"] == 3
+
+
+def test_get_session_memos_returns_recent(mock_db, mock_cursor):
+    from v2.tools import tool_get_session_memos
+    mock_cursor.fetchall.return_value = [
+        {"id": 12, "session_date": "2026-05-20", "memo_type": "reflection",
+         "content": "Memo body A", "created_at": "2026-05-20T22:00:00+00:00"},
+        {"id": 11, "session_date": "2026-05-19", "memo_type": "reflection",
+         "content": "Memo body B", "created_at": "2026-05-19T22:00:00+00:00"},
+    ]
+    result = tool_get_session_memos(limit=5)
+    assert len(result) == 2
+    assert result[0]["memo_id"] == 12
+    args, _ = mock_cursor.execute.call_args
+    assert args[1] == (5,)
+
+
+def test_get_reflection_actions_aggregates_per_session(mock_db, mock_cursor):
+    from v2.tools import tool_get_reflection_actions
+    mock_cursor.fetchall.return_value = [
+        {"session_id": 44, "session_date": "2026-05-20",
+         "rules_proposed": 2, "rules_retired": 1,
+         "identity_updated": True, "memo_word_count": 312},
+        {"session_id": 43, "session_date": "2026-05-19",
+         "rules_proposed": 0, "rules_retired": 0,
+         "identity_updated": False, "memo_word_count": 95},
+    ]
+    result = tool_get_reflection_actions(limit=10)
+    assert len(result) == 2
+    assert result[0]["rules_proposed"] == 2
+    assert result[0]["rules_revalidated"] == 0  # always 0 — no DB column
+    assert result[0]["identity_updated"] is True
+    assert result[1]["memo_word_count"] == 95
+
+
+def test_get_session_summary_window_aggregates(mock_db, mock_cursor):
+    from v2.tools import tool_get_session_summary_window
+    mock_cursor.fetchall.return_value = [
+        {"session_id": 44, "session_date": "2026-05-20",
+         "decisions_count": 14, "avg_outcome_7d_pct": 1.5,
+         "stage_failures": 0, "cost_usd": 0.42},
+        {"session_id": 43, "session_date": "2026-05-19",
+         "decisions_count": 11, "avg_outcome_7d_pct": -2.5,
+         "stage_failures": 1, "cost_usd": 0.38},
+    ]
+    result = tool_get_session_summary_window(days=14)
+    assert len(result) == 2
+    assert result[0]["decisions_count"] == 14
+    assert result[0]["stage_failures"] == 0
+    assert result[0]["avg_outcome_7d_pct"] == 1.5
+    assert result[1]["cost_usd"] == 0.38
+    args, _ = mock_cursor.execute.call_args
+    assert "session_costs" in args[0]
+    assert args[1] == (14,)

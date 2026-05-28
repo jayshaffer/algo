@@ -1,5 +1,6 @@
 """Tests for trading/claude_client.py - Claude API client and agentic loop."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import anthropic
@@ -124,6 +125,11 @@ class TestAgenticLoopResult:
 # ---------------------------------------------------------------------------
 
 class TestGetClaudeClient:
+
+    def test_anthropic_key_is_fake_during_tests(self):
+        """Defense-in-depth guard: the autouse _fake_anthropic_key fixture must
+        replace any real key so accidental real calls 401 instead of billing."""
+        assert os.environ.get("ANTHROPIC_API_KEY", "").startswith("sk-ant-fake")
 
     def test_raises_without_api_key(self, monkeypatch):
         """Should raise ValueError when ANTHROPIC_API_KEY is not set."""

@@ -90,6 +90,7 @@ prior identity.
 - **`context.py`** — Context builder. Aggregates positions, signals, theses, playbook, and attribution into compressed LLM context.
 - **`ideation_claude.py`** — Strategist stage. Agentic loop where Claude manages theses and generates playbooks using database tools.
 - **`strategy.py`** — Post-session reflection. Claude reviews outcomes, updates trading identity, proposes/retires rules, writes memos.
+- **`supervisor.py`** — Observer-only strategy critic. Read-only DB tool registry + Opus loop, persists one markdown memo per run to `supervisor_memos`. Run with `task supervise` (or `task supervise:dry-run`). Spec: `docs/superpowers/specs/2026-05-27-strategy-supervisor-design.md`.
 - **`attribution.py`** — Computes which signal types are predictive by joining decisions with their source signals.
 - **`patterns.py`** — Pattern analysis: signal performance, sentiment performance metrics.
 - **`tools.py`** — Tool definitions and handlers for the agentic loops (portfolio state, theses, history, attribution, etc.).
@@ -121,6 +122,7 @@ The strategist maintains continuity between sessions via:
 - `strategy_memos` — Session reflection notes
 - `account_snapshots` — Daily account value snapshots
 - `sessions` / `session_stages` — Session tracking and stage completion
+- `supervisor_memos` — Free-form markdown critiques from `python -m v2.supervisor`
 
 ## Commands
 

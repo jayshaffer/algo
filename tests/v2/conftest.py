@@ -32,6 +32,7 @@ def _isolate_attribution_summary_cache():
 # to callers, they just need a truthy mock).
 _NETWORK_PATCH_TARGETS = (
     # Session stage wrappers (import-site names used by v2.session.run_session)
+    "v2.session.run_supervisor",
     "v2.session.run_strategy_reflection",
     "v2.session.run_dashboard_stage",
     "v2.session.run_pipeline",
@@ -82,6 +83,22 @@ def _block_social_llm_and_session_db_calls(monkeypatch):
 
 # --- Core DB Fixtures ---
 
+@pytest.fixture(autouse=True)
+def _patch_watchlist_db(request, monkeypatch):
+    """Default open-watchlist queries to empty in tests so unrelated tests
+    don't hit the real DB or get broken by leftover open items. Tests that
+    need the REAL db.get_open_watchlist_items (e.g. the SQL-shape unit test)
+    opt out with @pytest.mark.real_watchlist_db. Tests exercising watchlist
+    behaviour patch v2.watchlist.db.get_open_watchlist_items explicitly, which
+    overrides this default."""
+    if request.node.get_closest_marker("real_watchlist_db"):
+        return
+    monkeypatch.setattr(
+        "v2.watchlist.db.get_open_watchlist_items",
+        lambda stage: [],
+    )
+
+
 @pytest.fixture
 def mock_cursor():
     """Create a mock database cursor."""
@@ -103,6 +120,8 @@ def mock_db(mock_cursor):
          patch("v2.database.trading_db.get_cursor", _get_cursor), \
          patch("v2.database.dashboard_db.get_cursor", _get_cursor), \
          patch("v2.dashboard_publish.get_cursor", _get_cursor), \
+         patch("v2.tools.get_cursor", _get_cursor), \
+         patch("v2.supervisor.get_cursor", _get_cursor), \
          patch("alpaca.data.historical.StockHistoricalDataClient"), \
          patch("v2.database.connection.get_connection") as mock_conn:
         mock_conn.return_value = MagicMock()

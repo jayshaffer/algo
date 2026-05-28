@@ -1,6 +1,9 @@
 """Tests for Claude strategist."""
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from v2 import ideation_claude as ic
 from v2.ideation_claude import (
     _STRATEGIST_TEMPLATE,
     CLAUDE_IDEATION_SYSTEM,
@@ -364,3 +367,49 @@ class TestStrategistTelemetryWiring:
         call_kwargs = mock_loop.call_args.kwargs
         assert call_kwargs["session_id"] == 42
         assert call_kwargs["stage_name"] == "ideation"
+
+
+class TestStrategistWatchlistGate:
+    """Ideation stage must ingest and hard-gate on its supervisor watchlist items."""
+
+    def _patch_common(self, monkeypatch):
+        """Patch all IO that run_strategist_loop + _run_claude_loop touch."""
+        fake_loop_result = MagicMock()
+        fake_loop_result.messages = []
+        fake_loop_result.turns_used = 1
+        fake_loop_result.stop_reason = "end_turn"
+        fake_loop_result.input_tokens = 1
+        fake_loop_result.output_tokens = 1
+        fake_loop_result.cache_creation_input_tokens = 0
+        fake_loop_result.cache_read_input_tokens = 0
+
+        monkeypatch.setattr(ic, "build_formation_context", lambda orphans=None: "")
+        monkeypatch.setattr(ic, "get_orphan_positions", lambda: [])
+        monkeypatch.setattr(ic, "_build_pre_seeded_context", lambda: "STATE")
+        monkeypatch.setattr(ic, "_build_orphan_block", lambda orphans=None: ("", "", 0))
+        monkeypatch.setattr(ic, "get_claude_client", lambda: MagicMock())
+        monkeypatch.setattr(ic, "reset_session", lambda: None)
+        monkeypatch.setattr(ic, "run_agentic_loop", lambda **k: fake_loop_result)
+        monkeypatch.setattr(ic, "extract_final_text", lambda msgs: "Summary")
+        monkeypatch.setattr(ic, "_print_cost_summary", lambda *a, **kw: None)
+
+    def test_strategist_gates_on_open_ideation_items(self, monkeypatch):
+        """run_strategist_loop must raise RuntimeError when ideation watchlist items remain."""
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(
+            "v2.watchlist.db.get_open_watchlist_items",
+            lambda stage: [{"id": 4, "title": "Close thesis 267", "detail": "d"}]
+            if stage == "ideation" else [],
+        )
+        with pytest.raises(RuntimeError) as exc:
+            ic.run_strategist_loop(session_id=7)
+        assert "4" in str(exc.value)
+
+    def test_strategist_passes_when_ideation_items_clear(self, monkeypatch):
+        """run_strategist_loop must not raise when no ideation watchlist items remain."""
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(
+            "v2.watchlist.db.get_open_watchlist_items",
+            lambda stage: [],
+        )
+        ic.run_strategist_loop(session_id=7)  # no raise

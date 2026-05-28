@@ -1,5 +1,6 @@
 """Alpaca Learning Platform - Dashboard"""
 
+import markdown as _markdown
 from benchmark import (
     compute_alpha,
     enrich_snapshots_with_deposits,
@@ -28,6 +29,7 @@ from queries import (
     get_recent_decisions,
     get_recent_macro_signals,
     get_recent_session_costs,
+    get_recent_supervisor_memos,
     get_recent_ticker_signals,
     get_recent_tweets,
     get_session,
@@ -42,6 +44,7 @@ from queries import (
     get_signal_summary,
     get_strategy_memos,
     get_strategy_rules,
+    get_supervisor_memo,
     get_theses,
     get_thesis,
     get_thesis_decisions,
@@ -319,6 +322,30 @@ def strategy():
             m["session_id"] = lookup_session_id_by_date(m["session_date"])
         memos.append(m)
     return render_template("strategy.html", state=state, rules=rules, memos=memos)
+
+
+@app.route("/supervisor")
+def supervisor_index():
+    """Latest supervisor memo + list of recent runs."""
+    recent = get_recent_supervisor_memos(limit=10)
+    latest = get_supervisor_memo(recent[0]["id"]) if recent else None
+    latest_html = _markdown.markdown(latest["content"]) if (latest and latest.get("content")) else None
+    return render_template(
+        "supervisor.html",
+        recent=recent,
+        latest=latest,
+        latest_html=latest_html,
+    )
+
+
+@app.route("/supervisor/<int:memo_id>")
+def supervisor_detail(memo_id: int):
+    """Permalink to a specific supervisor memo."""
+    memo = get_supervisor_memo(memo_id)
+    if memo is None:
+        abort(404)
+    body_html = _markdown.markdown(memo["content"]) if memo.get("content") else None
+    return render_template("supervisor_detail.html", memo=memo, body_html=body_html)
 
 
 @app.route("/tweets")

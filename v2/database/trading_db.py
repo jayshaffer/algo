@@ -1019,6 +1019,86 @@ def update_strategy_rule_revalidation(
         return cur.rowcount > 0
 
 
+_WATCHLIST_OWNER_STAGES = {"ideation", "reflection"}
+_WATCHLIST_RESOLUTIONS = {"acted", "dismissed"}
+
+
+def record_watchlist_item(
+    source_memo_id: int, title: str, detail: str, owner_stage: str
+) -> int:
+    """Insert one supervisor watchlist item. Returns the new id."""
+    if owner_stage not in _WATCHLIST_OWNER_STAGES:
+        raise ValueError(f"owner_stage must be one of {_WATCHLIST_OWNER_STAGES}")
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO supervisor_watchlist_items
+              (source_memo_id, title, detail, owner_stage)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (source_memo_id, title, detail, owner_stage),
+        )
+        row = cur.fetchone()
+    return row["id"] if isinstance(row, dict) else row[0]
+
+
+def get_open_watchlist_items(owner_stage: str) -> list[dict]:
+    """Return all open watchlist items for one owner stage, oldest first."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_memo_id, title, detail, owner_stage, created_at
+            FROM supervisor_watchlist_items
+            WHERE status = 'open' AND owner_stage = %s
+            ORDER BY created_at ASC, id ASC
+            """,
+            (owner_stage,),
+        )
+        return list(cur.fetchall())
+
+
+def resolve_watchlist_item(
+    item_id: int, resolution: str, note: str, session_id: int | None, stage: str
+) -> bool:
+    """Mark an open item resolved. Scoped to the resolving stage so one stage
+    cannot resolve another stage's items. Returns True if a row was updated."""
+    if resolution not in _WATCHLIST_RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {_WATCHLIST_RESOLUTIONS}")
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE supervisor_watchlist_items
+            SET status = %s,
+                resolution_note = %s,
+                resolved_at = now(),
+                resolved_by_session_id = %s,
+                resolved_by_stage = %s
+            WHERE id = %s AND status = 'open' AND owner_stage = %s
+            """,
+            (resolution, note, session_id, stage, item_id, stage),
+        )
+        return cur.rowcount > 0
+
+
+def amend_strategy_rule(
+    rule_id: int, new_rule_text: str, new_evidence: str
+) -> bool:
+    """Update an active rule's text/evidence in place (no retire-and-replace).
+    Returns True if the rule was active and updated."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE strategy_rules
+            SET rule_text = %s,
+                supporting_evidence = %s
+            WHERE id = %s AND status = 'active'
+            """,
+            (new_rule_text, new_evidence, rule_id),
+        )
+        return cur.rowcount > 0
+
+
 def _previous_trading_day(day: date) -> date:
     from datetime import timedelta
 

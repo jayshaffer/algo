@@ -114,6 +114,8 @@ def _reset_query_mocks():
     mock_queries.get_session_events.return_value = []
     mock_queries.get_session_llm_calls.return_value = []
     mock_queries.get_llm_call.return_value = None
+    mock_queries.get_recent_supervisor_memos.return_value = []
+    mock_queries.get_supervisor_memo.return_value = None
     mock_benchmark.get_spy_benchmark.reset_mock()
     mock_benchmark.compute_alpha.reset_mock()
     mock_benchmark.get_deposit_history.reset_mock()
@@ -1522,3 +1524,74 @@ class TestLlmCallDetail:
         resp = client.get("/llm-call/137")
         assert resp.status_code == 200
         assert b"No response content captured" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Supervisor routes
+# ---------------------------------------------------------------------------
+
+
+class TestSupervisorRoutes:
+    def test_supervisor_index_with_one_memo(self, client):
+        from datetime import datetime
+        mock_queries.get_recent_supervisor_memos.return_value = [
+            {"id": 5, "created_at": datetime(2026, 5, 27, 10, 0, 0).isoformat(),
+             "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+             "status": "ok", "turns_used": 12, "cost_usd": 0.08},
+        ]
+        mock_queries.get_supervisor_memo.return_value = {
+            "id": 5, "created_at": datetime(2026, 5, 27, 10, 0, 0).isoformat(),
+            "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+            "content": "## Rules\n- Rule 27 oscillates",
+            "status": "ok", "turns_used": 12,
+            "tool_calls": [{"name": "get_active_rules", "count": 2}],
+            "input_tokens": 1200, "output_tokens": 800, "cost_usd": 0.08, "error_message": None,
+        }
+        resp = client.get("/supervisor")
+        assert resp.status_code == 200
+        assert b"Rule 27 oscillates" in resp.data
+        assert b"claude-opus-4-7" in resp.data
+
+    def test_supervisor_index_empty(self, client):
+        # Defaults from _reset_query_mocks: list=[] and detail=None
+        resp = client.get("/supervisor")
+        assert resp.status_code == 200
+        assert b"No supervisor memos yet" in resp.data
+
+    def test_supervisor_detail_renders_specific_memo(self, client):
+        from datetime import datetime
+        mock_queries.get_supervisor_memo.return_value = {
+            "id": 5, "created_at": datetime(2026, 5, 27, 10, 0, 0).isoformat(),
+            "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+            "content": "## Theses\n- Thesis 17 stale",
+            "status": "ok", "turns_used": 8,
+            "tool_calls": [], "input_tokens": 500,
+            "output_tokens": 200, "cost_usd": 0.02, "error_message": None,
+        }
+        resp = client.get("/supervisor/5")
+        assert resp.status_code == 200
+        assert b"Thesis 17 stale" in resp.data
+
+    def test_supervisor_detail_404_when_missing(self, client):
+        mock_queries.get_supervisor_memo.return_value = None
+        resp = client.get("/supervisor/9999")
+        assert resp.status_code == 404
+
+    def test_supervisor_index_warns_on_error_status(self, client):
+        from datetime import datetime
+        mock_queries.get_recent_supervisor_memos.return_value = [
+            {"id": 6, "created_at": datetime(2026, 5, 28, 10, 0, 0).isoformat(),
+             "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+             "status": "error", "turns_used": 0, "cost_usd": None},
+        ]
+        mock_queries.get_supervisor_memo.return_value = {
+            "id": 6, "created_at": datetime(2026, 5, 28, 10, 0, 0).isoformat(),
+            "model": "claude-opus-4-7", "prompt_version": "v1.0.0",
+            "content": None, "status": "error", "turns_used": 0,
+            "tool_calls": [], "input_tokens": None, "output_tokens": None,
+            "cost_usd": None, "error_message": "RuntimeError: api 500",
+        }
+        resp = client.get("/supervisor")
+        assert resp.status_code == 200
+        # The warning should call out the non-ok status, and surface the error message.
+        assert b"RuntimeError: api 500" in resp.data

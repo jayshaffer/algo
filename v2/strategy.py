@@ -11,9 +11,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from functools import partial
 
+from v2 import watchlist as wl
+
 from .attribution import get_attribution_summary
 from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
+    amend_strategy_rule,
     get_active_strategy_rules,
     get_current_strategy_state,
     get_recent_decisions,
@@ -159,6 +162,11 @@ Before proposing a new rule:
 2. If so, update the existing rule's confidence, scope, or evidence rather than creating a new one
 3. Only create a new rule if the pattern is genuinely distinct from all existing rules
 
+When attribution data refreshes but a rule's substance is unchanged, use
+amend_rule to update its evidence in place. Do NOT retire-and-replace a
+rule just to refresh its evidence string — that churns rule ids for no
+behavioral change.
+
 ## Rule Tenure
 
 Rules have a minimum tenure of 5 days. You cannot retire a rule until it has been active for at least 5 sessions. This prevents oscillation (propose → retire → re-propose). If a new rule seems wrong, write a memo instead and revisit next session.
@@ -167,7 +175,14 @@ Rules have a minimum tenure of 5 days. You cannot retire a rule until it has bee
 
 If the initial context lists gated rules, you MUST call revalidate_rule for each gated rule before writing the final memo. A gated rule is an active execution constraint with no lift_condition that has repeatedly appeared as the binding reason for holds or deferrals. Revalidation must either keep the rule with a numeric lift_condition, narrow the rule text and add a numeric lift_condition, or retire the rule. If retirement is blocked by tenure, keep or narrow it with a lift_condition instead.
 
-You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
+You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo.
+
+## Supervisor Watchlist Gate
+
+If the initial context lists a SUPERVISOR WATCHLIST, you MUST call
+resolve_watchlist_item for every listed item before writing your memo —
+'acted' if you made a change in response, or 'dismissed' with a reason if
+no change is warranted. You cannot finish with an open item."""
 
 
 # --- Write Tool Handlers ---
@@ -358,6 +373,28 @@ def tool_retire_rule(rule_id: int, reason: str) -> str:
         retirements.append(rule_id)
         return f"Retired rule ID {rule_id}. Reason: {reason}"
     return f"Error: Failed to retire rule ID {rule_id}"
+
+
+def tool_amend_rule(
+    rule_id: int, new_rule_text: str, new_evidence: str, reason: str
+) -> str:
+    """Update an active rule's text/evidence in place — no retire-and-replace.
+    Use this when only the embedded evidence changed (e.g. attribution
+    refreshed) and the rule's substance is unchanged.
+    The reason is logged for the audit trail, not stored in the DB."""
+    new_rule_text = (new_rule_text or "").strip()
+    new_evidence = (new_evidence or "").strip()
+    if not new_rule_text:
+        return "Error: new_rule_text is required"
+    if len(new_evidence) < MIN_RULE_EVIDENCE_CHARS:
+        return "Error: new_evidence is required"
+    ok = amend_strategy_rule(
+        rule_id=rule_id, new_rule_text=new_rule_text, new_evidence=new_evidence,
+    )
+    if not ok:
+        return f"Error: Rule ID {rule_id} not found or not active"
+    logger.info("Amended rule %s in place: %s", rule_id, (reason or "").strip())
+    return f"Amended rule ID {rule_id} in place (no new rule created)."
 
 
 def tool_write_strategy_memo(memo_type: str, content: str, session_id: int | None = None) -> str:
@@ -594,6 +631,25 @@ STRATEGY_TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "amend_rule",
+        "description": (
+            "Update an active rule's text/evidence IN PLACE without retiring it. "
+            "Prefer this over retire_rule + propose_rule when only the embedded "
+            "evidence changed and the rule's substance is the same — it avoids "
+            "rule-churn (new ids for the same rule every attribution refresh)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+                "new_rule_text": {"type": "string"},
+                "new_evidence": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["rule_id", "new_rule_text", "new_evidence", "reason"],
+        },
+    },
+    {
         "name": "write_strategy_memo",
         "description": "Write reflection memo. REQUIRED at end of every session.",
         "input_schema": {
@@ -605,6 +661,7 @@ STRATEGY_TOOL_DEFINITIONS = [
             "required": ["memo_type", "content"],
         },
     },
+    wl.RESOLVE_WATCHLIST_TOOL_DEF,
 ]
 
 STRATEGY_TOOL_HANDLERS = {
@@ -616,7 +673,10 @@ STRATEGY_TOOL_HANDLERS = {
     "propose_rule": tool_propose_rule,
     "revalidate_rule": tool_revalidate_rule,
     "retire_rule": tool_retire_rule,
+    "amend_rule": tool_amend_rule,
     "write_strategy_memo": tool_write_strategy_memo,
+    # Bound to (session_id, stage="reflection") at runtime in run_strategy_reflection.
+    "resolve_watchlist_item": wl.make_resolve_handler(session_id=None, stage="reflection"),
 }
 
 
@@ -731,11 +791,14 @@ def run_strategy_reflection(
         logger.warning("Could not load rule revalidation evidence: %s", e)
         rule_revalidation_candidates = []
     gated_rule_ids = _gated_rule_ids(rule_revalidation_candidates)
+    open_watchlist = wl.get_open_items("reflection")
     initial_parts = []
     if trading_context:
         initial_parts.append(trading_context)
         initial_parts.append("")
     initial_parts.append(_format_rule_revalidation_context(rule_revalidation_candidates))
+    initial_parts.append("")
+    initial_parts.append(wl.format_open_watchlist_items(open_watchlist))
     initial_parts.append("")
     initial_parts.append(
         "Begin your strategy reflection. Start by:\n"
@@ -763,6 +826,9 @@ def run_strategy_reflection(
         "write_strategy_memo": partial(
             tool_write_strategy_memo, session_id=session_id
         ),
+        "resolve_watchlist_item": wl.make_resolve_handler(
+            session_id=session_id, stage="reflection"
+        ),
     }
 
     result = run_agentic_loop(
@@ -785,6 +851,7 @@ def run_strategy_reflection(
             "Reflection finished without revalidating gated rule(s): "
             + ", ".join(str(rule_id) for rule_id in missing_revalidations)
         )
+    wl.assert_watchlist_resolved("reflection")
 
     logger.info(
         "Strategy reflection complete: %d rules proposed, %d retired, "

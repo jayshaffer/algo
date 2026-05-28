@@ -44,6 +44,7 @@ from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
 from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
+from .supervisor import run_supervisor
 from .telemetry import session_summary_line
 from .trader import TradingSessionResult, run_trading_session
 
@@ -58,8 +59,8 @@ def current_market_date():
 
 
 _ERROR_FIELDS = (
-    "learning_error", "pipeline_error", "strategist_error", "trading_error",
-    "strategy_error", "dashboard_error",
+    "learning_error", "supervisor_error", "pipeline_error", "strategist_error",
+    "trading_error", "strategy_error", "dashboard_error",
 )
 
 
@@ -72,11 +73,15 @@ class SessionResult:
     dashboard_result: DashboardStageResult | None = None
 
     learning_error: str | None = None     # V3: Stage 0
+    supervisor_error: str | None = None   # Stage 0.5
     pipeline_error: str | None = None
     strategist_error: str | None = None
     trading_error: str | None = None
     strategy_error: str | None = None
     dashboard_error: str | None = None
+
+    supervisor_memo_id: int | None = None  # Stage 0.5
+    skipped_supervisor: bool = False
 
     # T2.1: distinct from errors — set when the session was already completed
     # for the day and force=False. The caller exits 0 with a clear log line
@@ -216,6 +221,41 @@ def _run_learning_refresh(
             _fail_stage(session_id, "learning", str(e), usage=usage)
             logger.warning("Learning refresh failed: %s — continuing with stale data", e)
             return ""
+
+
+def _run_supervisor_stage(
+    result: SessionResult,
+    session_id: int | None,
+    completed_stages: set,
+    skip: bool,
+) -> None:
+    """Stage 0.5 — observer-only critic that records the watchlist the acting
+    stages must resolve. Runs after the learning refresh (fresh attribution)
+    and before ideation. Independent: a failure here does not abort the session;
+    acting stages then resolve any items still open from a prior run.
+
+    Cost is recorded in supervisor_memos by run_supervisor itself. We do not
+    wrap this in capture_usage: run_supervisor's own capture_usage swaps the
+    active accumulator, so an outer one would capture nothing.
+    """
+    if skip or "supervisor" in completed_stages:
+        logger.info(
+            "[Stage 0.5] Supervisor — SKIPPED%s",
+            " (completed in prior run)" if "supervisor" in completed_stages else "",
+        )
+        result.skipped_supervisor = True
+        return
+    logger.info("[Stage 0.5] Running strategy supervisor")
+    _start_stage(session_id, "supervisor")
+    try:
+        result.supervisor_memo_id = run_supervisor()
+        _complete_stage(session_id, "supervisor")
+    except Exception as e:
+        result.supervisor_error = str(e)
+        _fail_stage(session_id, "supervisor", str(e))
+        logger.error(
+            "Supervisor failed: %s — continuing; acting stages use existing watchlist", e
+        )
 
 
 def _run_pipeline_stage(
@@ -476,6 +516,7 @@ def run_session(
     model: str = "claude-opus-4-6",
     executor_model: str = DEFAULT_EXECUTOR_MODEL,
     max_turns: int = 25,
+    skip_supervisor: bool = False,
     skip_pipeline: bool = False,
     skip_ideation: bool = False,
     skip_executor: bool = False,
@@ -500,6 +541,7 @@ def run_session(
         skip_dashboard = True
 
     result = SessionResult(
+        skipped_supervisor=skip_supervisor,
         skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation,
         skipped_executor=skip_executor, skipped_strategy=skip_strategy,
         skipped_dashboard=skip_dashboard,
@@ -523,6 +565,7 @@ def run_session(
 
     try:
         attribution_constraints = _run_learning_refresh(result, session_id, completed_stages)
+        _run_supervisor_stage(result, session_id, completed_stages, skip_supervisor)
         _run_pipeline_stage(result, session_id, completed_stages, skip_pipeline, pipeline_hours, pipeline_limit)
         _run_strategist_stage(
             result, session_id, completed_stages, skip_ideation,
@@ -546,6 +589,7 @@ def main():
     parser.add_argument("--model", default="claude-opus-4-6")
     parser.add_argument("--executor-model", default=DEFAULT_EXECUTOR_MODEL)
     parser.add_argument("--max-turns", type=int, default=25)
+    parser.add_argument("--skip-supervisor", action="store_true")
     parser.add_argument("--skip-pipeline", action="store_true")
     parser.add_argument("--skip-ideation", action="store_true")
     parser.add_argument("--skip-executor", action="store_true")
@@ -557,7 +601,8 @@ def main():
     args = parser.parse_args()
     result = run_session(
         dry_run=args.dry_run, model=args.model, executor_model=args.executor_model,
-        max_turns=args.max_turns, skip_pipeline=args.skip_pipeline,
+        max_turns=args.max_turns, skip_supervisor=args.skip_supervisor,
+        skip_pipeline=args.skip_pipeline,
         skip_ideation=args.skip_ideation, skip_executor=args.skip_executor,
         skip_strategy=args.skip_strategy,
         skip_dashboard=args.skip_dashboard,

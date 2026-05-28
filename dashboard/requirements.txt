@@ -2,3 +2,4 @@ flask>=3.0.0
 psycopg2-binary>=2.9.9
 pytz>=2025.2
 alpaca-py>=0.30.0
+markdown>=3.5

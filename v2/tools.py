@@ -6,6 +6,7 @@ from datetime import date
 from .agent import validate_signal_refs
 from .attribution import get_attribution_summary
 from .context import format_active_theses_by_role, get_macro_context, get_portfolio_context
+from .database.connection import get_cursor
 from .database.trading_db import (
     close_thesis,
     get_active_strategy_rules,
@@ -27,6 +28,7 @@ from .database.trading_db import (
 from .executor import get_account_info
 from .market_data import format_market_snapshot, get_market_snapshot
 from .news_filter import curate_signals
+from .patterns import analyze_round_trips
 
 logger = logging.getLogger(__name__)
 
@@ -625,6 +627,96 @@ def tool_write_playbook(
         return f"Error writing playbook: {e}"
 
 
+def tool_get_theses(status: str = "all", limit: int = 50) -> list[dict]:
+    """Read-only: theses by status (all|active|closed)."""
+    base = """
+        SELECT id, ticker, thesis, entry_trigger, exit_trigger,
+               status, created_at, closed_at, close_reason
+        FROM theses
+    """
+    params: tuple
+    if status == "all":
+        sql = base + " ORDER BY created_at DESC LIMIT %s"
+        params = (limit,)
+    else:
+        sql = base + " WHERE status = %s ORDER BY created_at DESC LIMIT %s"
+        params = (status, limit)
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [
+        {
+            "thesis_id": r["id"],
+            "ticker": r["ticker"],
+            "thesis": r["thesis"],
+            "entry_trigger": r["entry_trigger"],
+            "exit_trigger": r["exit_trigger"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "closed_at": r["closed_at"].isoformat() if hasattr(r["closed_at"], "isoformat") else r["closed_at"],
+            "close_reason": r["close_reason"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_thesis_lineage(thesis_id: int) -> dict:
+    """Read-only: decisions tagged with this thesis, with outcomes.
+
+    Theses link to decisions via playbook_actions
+    (decisions.playbook_action_id → playbook_actions.id; playbook_actions.thesis_id → theses.id).
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, ticker, thesis, status FROM theses WHERE id = %s",
+            (thesis_id,),
+        )
+        head = cur.fetchone()
+        if head is None:
+            return {"thesis_id": thesis_id, "error": "not found"}
+        cur.execute(
+            """
+            SELECT id, date, action, quantity, reasoning, outcome_7d, outcome_30d
+            FROM (
+                SELECT d.id, d.date::text AS date, d.action, d.quantity, d.reasoning,
+                       d.outcome_7d, d.outcome_30d
+                FROM decisions d
+                JOIN playbook_actions pa ON pa.id = d.playbook_action_id
+                WHERE pa.thesis_id = %s
+
+                UNION
+
+                SELECT d.id, d.date::text AS date, d.action, d.quantity, d.reasoning,
+                       d.outcome_7d, d.outcome_30d
+                FROM decisions d
+                JOIN decision_signals ds ON ds.decision_id = d.id
+                WHERE ds.signal_type = 'thesis' AND ds.signal_id = %s
+            ) thesis_decisions
+            ORDER BY date ASC
+            """,
+            (thesis_id, thesis_id),
+        )
+        rows = cur.fetchall()
+    return {
+        "thesis_id": head["id"],
+        "ticker": head["ticker"],
+        "thesis": head["thesis"],
+        "status": head["status"],
+        "decisions": [
+            {
+                "decision_id": r["id"],
+                "date": r["date"],
+                "action": r["action"],
+                "quantity": float(r["quantity"]) if r["quantity"] is not None else None,
+                "reasoning_excerpt": (r["reasoning"] or "")[:200],
+                "outcome_7d": float(r["outcome_7d"]) if r["outcome_7d"] is not None else None,
+                "outcome_30d": float(r["outcome_30d"]) if r["outcome_30d"] is not None else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 def tool_get_strategy_identity() -> str:
     """Get the system's current strategy identity."""
     logger.info("Getting strategy identity")
@@ -641,6 +733,52 @@ def tool_get_strategy_identity() -> str:
         f"  Avoided Signals: {state['avoided_signals']}",
     ]
     return "\n".join(lines)
+
+
+def tool_get_strategy_identity_with_history(history_limit: int = 5) -> dict:
+    """Read-only: current identity + last N versions with timestamps.
+
+    For the supervisor's identity-drift critique. The strategist uses
+    tool_get_strategy_identity (current only) — don't conflate them.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, identity_text, risk_posture, sector_biases,
+                   preferred_signals, avoided_signals, version, is_current,
+                   created_at
+            FROM strategy_state
+            ORDER BY version DESC
+            LIMIT %s
+            """,
+            (history_limit,),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return {"current": None, "history": []}
+    # rows[0] is the highest-version row; treat the is_current=true row as canonical.
+    current = next((r for r in rows if r["is_current"]), rows[0])
+    return {
+        "current": {
+            "id": current["id"],
+            "version": current["version"],
+            "identity_text": current["identity_text"],
+            "risk_posture": current["risk_posture"],
+            "sector_biases": current["sector_biases"],
+            "preferred_signals": current["preferred_signals"],
+            "avoided_signals": current["avoided_signals"],
+            "created_at": current["created_at"].isoformat() if hasattr(current["created_at"], "isoformat") else current["created_at"],
+        },
+        "history": [
+            {
+                "id": r["id"],
+                "version": r["version"],
+                "identity_text": r["identity_text"],
+                "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            }
+            for r in rows
+        ],
+    }
 
 
 def tool_get_strategy_rules() -> str:
@@ -661,6 +799,66 @@ def tool_get_strategy_rules() -> str:
     return "\n".join(lines)
 
 
+def tool_get_retired_rules(limit: int = 50) -> list[dict]:
+    """Read-only: most recently retired strategy rules."""
+    sql = """
+        SELECT id, rule_text, category, supporting_evidence, status,
+               created_at, retired_at, retirement_reason
+        FROM strategy_rules
+        WHERE status = 'retired'
+        ORDER BY retired_at DESC NULLS LAST
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "rule_id": r["id"],
+            "rule_text": r["rule_text"],
+            "category": r["category"],
+            "supporting_evidence": r["supporting_evidence"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "retired_at": r["retired_at"].isoformat() if hasattr(r["retired_at"], "isoformat") else r["retired_at"],
+            "retirement_reason": r["retirement_reason"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_rule_bind_history(rule_id: int, days: int = 30) -> dict:
+    """Read-only: decisions that cited this rule within `days`."""
+    sql = """
+        SELECT d.id, d.date::text, d.ticker, d.action, d.reasoning
+        FROM decisions d
+        JOIN decision_signals ds
+          ON ds.decision_id = d.id
+         AND ds.signal_type = 'rule_gate'
+         AND ds.signal_id = %s
+        WHERE d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        ORDER BY d.date ASC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (rule_id, days))
+        rows = cur.fetchall()
+    return {
+        "rule_id": rule_id,
+        "window_days": days,
+        "bind_count": len(rows),
+        "citations": [
+            {
+                "decision_id": r["id"],
+                "date": r["date"],
+                "ticker": r["ticker"],
+                "action": r["action"],
+                "reasoning_excerpt": (r["reasoning"] or "")[:200],
+            }
+            for r in rows
+        ],
+    }
+
+
 def tool_get_strategy_history(n: int = 5, full_recent: int = 2) -> str:
     """Get recent strategy memos. Last `full_recent` shown in full, older truncated to 300 chars."""
     logger.info(f"Getting strategy history (last {n})")
@@ -676,6 +874,267 @@ def tool_get_strategy_history(n: int = 5, full_recent: int = 2) -> str:
             content = m['content'][:300] + "..." if len(m['content']) > 300 else m['content']
         lines.append(f"[{m['session_date']}] {m['memo_type']}: {content}")
     return "\n".join(lines)
+
+
+def tool_get_recent_decisions(days: int = 14) -> list[dict]:
+    """Read-only: compact recent decisions for behavior review."""
+    sql = """
+        SELECT d.id, d.date::text AS date, d.ticker, d.action, d.quantity,
+               d.reasoning,
+               COALESCE(string_agg(DISTINCT ds.signal_type, ','), '') AS signals_referenced,
+               d.outcome_7d
+        FROM decisions d
+        LEFT JOIN decision_signals ds ON ds.decision_id = d.id
+        WHERE d.date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        GROUP BY d.id, d.date, d.ticker, d.action, d.quantity, d.reasoning, d.outcome_7d
+        ORDER BY d.date ASC, d.id ASC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+    return [
+        {
+            "decision_id": r["id"],
+            "date": r["date"],
+            "ticker": r["ticker"],
+            "action": r["action"],
+            "quantity": float(r["quantity"]) if r["quantity"] is not None else None,
+            "reasoning_excerpt": (r["reasoning"] or "")[:200],
+            "signals_referenced": r["signals_referenced"],
+            "outcome_7d": float(r["outcome_7d"]) if r["outcome_7d"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+def tool_get_decision_detail(decision_id: int) -> dict:
+    """Read-only: full decision detail + all referenced signals.
+
+    Signal rows are returned as {signal_id, signal_type} only — to fetch the
+    underlying signal's text/sentiment, call the appropriate get_* tool with
+    the signal_id.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, date::text AS date, ticker, action, quantity,
+                   reasoning, outcome_7d, outcome_30d, price
+            FROM decisions WHERE id = %s
+            """,
+            (decision_id,),
+        )
+        head = cur.fetchone()
+        if head is None:
+            return {"decision_id": decision_id, "error": "not found"}
+        cur.execute(
+            """
+            SELECT signal_id, signal_type
+            FROM decision_signals
+            WHERE decision_id = %s
+            ORDER BY signal_type, signal_id
+            """,
+            (decision_id,),
+        )
+        sigs = cur.fetchall()
+    return {
+        "decision_id": head["id"],
+        "date": head["date"],
+        "ticker": head["ticker"],
+        "action": head["action"],
+        "quantity": float(head["quantity"]) if head["quantity"] is not None else None,
+        "price": float(head["price"]) if head["price"] is not None else None,
+        "reasoning": head["reasoning"],
+        "outcome_7d": float(head["outcome_7d"]) if head["outcome_7d"] is not None else None,
+        "outcome_30d": float(head["outcome_30d"]) if head["outcome_30d"] is not None else None,
+        "signals": [
+            {"signal_id": s["signal_id"], "signal_type": s["signal_type"]}
+            for s in sigs
+        ],
+    }
+
+
+def tool_get_flip_flop_report(days: int = 30, min_reversals: int = 3) -> list[dict]:
+    """Read-only: tickers with N+ same-window opposing-action pairs."""
+    trips = analyze_round_trips(days=days, gap_days=7, min_pairs=min_reversals)
+    return [
+        {
+            "ticker": t.ticker,
+            "reversal_count": t.pair_count,
+            "first_date": str(t.first_date),
+            "last_date": str(t.last_date),
+        }
+        for t in trips
+    ]
+
+
+def tool_get_session_memos(limit: int = 10) -> list[dict]:
+    """Read-only: most recent strategy memos."""
+    sql = """
+        SELECT id, session_date::text AS session_date, memo_type, content, created_at
+        FROM strategy_memos
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "memo_id": r["id"],
+            "session_date": r["session_date"],
+            "memo_type": r["memo_type"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_reflection_actions(limit: int = 10) -> list[dict]:
+    """Read-only: per-session reflection-stage actions taken.
+
+    rules_revalidated is always 0 — the project does not track revalidation
+    as a column on strategy_rules. If a revalidation log table is added,
+    this can be updated.
+    """
+    sql = """
+        SELECT
+            s.id AS session_id,
+            s.session_date::text AS session_date,
+            (SELECT COUNT(*) FROM strategy_rules sr
+                WHERE sr.created_at::date = s.session_date) AS rules_proposed,
+            (SELECT COUNT(*) FROM strategy_rules sr
+                WHERE sr.retired_at::date = s.session_date) AS rules_retired,
+            EXISTS(
+                SELECT 1 FROM strategy_state ss
+                WHERE ss.created_at::date = s.session_date
+            ) AS identity_updated,
+            COALESCE((
+                SELECT array_length(regexp_split_to_array(sm.content, '\\s+'), 1)
+                FROM strategy_memos sm
+                WHERE sm.session_date = s.session_date
+                ORDER BY sm.created_at DESC LIMIT 1
+            ), 0) AS memo_word_count
+        FROM sessions s
+        ORDER BY s.session_date DESC
+        LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (limit,))
+        rows = cur.fetchall()
+    return [
+        {
+            "session_id": r["session_id"],
+            "session_date": r["session_date"],
+            "rules_proposed": r["rules_proposed"],
+            "rules_retired": r["rules_retired"],
+            "rules_revalidated": 0,
+            "identity_updated": bool(r["identity_updated"]),
+            "memo_word_count": r["memo_word_count"],
+        }
+        for r in rows
+    ]
+
+
+def tool_get_session_summary_window(days: int = 14) -> list[dict]:
+    """Read-only: per-session decisions/stage failures/cost within a window.
+
+    Uses the `session_costs` view (defined in db/init/024_session_stage_token_usage.sql)
+    for total_cost_usd. avg_outcome_7d_pct: mean percentage outcome across the session's decisions.
+    """
+    sql = """
+        SELECT
+            sc.session_id,
+            sc.session_date::text AS session_date,
+            COALESCE((
+                SELECT COUNT(*) FROM decisions d
+                WHERE d.session_id = sc.session_id
+            ), 0) AS decisions_count,
+            COALESCE((
+                SELECT AVG(d.outcome_7d) FROM decisions d
+                WHERE d.session_id = sc.session_id
+            ), 0)::numeric AS avg_outcome_7d_pct,
+            COALESCE((
+                SELECT COUNT(*) FROM session_stages st
+                WHERE st.session_id = sc.session_id AND st.status = 'failed'
+            ), 0) AS stage_failures,
+            COALESCE(sc.total_cost_usd, 0)::numeric AS cost_usd
+        FROM session_costs sc
+        WHERE sc.session_date >= CURRENT_DATE - INTERVAL '1 day' * %s
+        ORDER BY sc.session_date DESC
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+    return [
+        {
+            "session_id": r["session_id"],
+            "session_date": r["session_date"],
+            "decisions_count": r["decisions_count"],
+            "avg_outcome_7d_pct": float(r["avg_outcome_7d_pct"]),
+            "stage_failures": r["stage_failures"],
+            "cost_usd": float(r["cost_usd"]),
+        }
+        for r in rows
+    ]
+
+
+def tool_get_executor_behavior_summary(days: int = 14) -> dict:
+    """Read-only: sizing buckets, ticker concentration, round-trip count, hold rate."""
+    with get_cursor() as cur:
+        # Size histogram. Bucket by trade notional |quantity * price|.
+        cur.execute(
+            """
+            SELECT
+                CASE
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 100 THEN 'small'
+                    WHEN ABS(COALESCE(quantity, 0) * COALESCE(price, 0)) < 300 THEN 'medium'
+                    ELSE 'large'
+                END AS bucket,
+                COUNT(*) AS n
+            FROM decisions
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            GROUP BY bucket
+            """,
+            (days,),
+        )
+        size_rows = cur.fetchall()
+
+        # Ticker concentration (positions has no sector column).
+        cur.execute(
+            """
+            SELECT ticker, COUNT(*) AS n
+            FROM decisions
+            WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s
+            GROUP BY ticker
+            ORDER BY n DESC
+            LIMIT 20
+            """,
+            (days,),
+        )
+        ticker_rows = cur.fetchall()
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM decisions WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s",
+            (days,),
+        )
+        total = cur.fetchone()["n"]
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM decisions WHERE date >= CURRENT_DATE - INTERVAL '1 day' * %s AND action = 'hold'",
+            (days,),
+        )
+        holds = cur.fetchone()["n"]
+
+    round_trips = analyze_round_trips(days=days, gap_days=7, min_pairs=2)
+    return {
+        "window_days": days,
+        "decision_count": total or 0,
+        "hold_rate": (holds / total) if total else 0.0,
+        "size_histogram": {r["bucket"]: r["n"] for r in size_rows},
+        "ticker_concentration": {r["ticker"]: r["n"] for r in ticker_rows},
+        "round_trip_count": sum(t.pair_count for t in round_trips),
+    }
 
 
 # --- Tool Definitions for Claude ---
@@ -973,8 +1432,21 @@ TOOL_DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_strategy_identity_with_history",
+        "description": "Read-only. Current strategy identity plus the last N prior versions with timestamps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"history_limit": {"type": "integer", "default": 5}},
+        },
+    },
+    {
         "name": "get_strategy_rules",
         "description": "Active strategy rules (constraints and preferences).",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_active_rules",
+        "description": "Read-only. Active strategy rules (supervisor alias for get_strategy_rules).",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -987,6 +1459,97 @@ TOOL_DEFINITIONS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "get_retired_rules",
+        "description": "Read-only. List the most recently retired strategy rules.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 50}},
+        },
+    },
+    {
+        "name": "get_rule_bind_history",
+        "description": "Read-only. Decisions that cited a given rule within the window.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+                "days": {"type": "integer", "default": 30},
+            },
+            "required": ["rule_id"],
+        },
+    },
+    {
+        "name": "get_theses",
+        "description": "Read-only. Theses filtered by status (all|active|closed).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["all", "active", "closed"], "default": "all"},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    },
+    {
+        "name": "get_thesis_lineage",
+        "description": "Read-only. Decisions tagged with a thesis, with outcomes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"thesis_id": {"type": "integer"}},
+            "required": ["thesis_id"],
+        },
+    },
+    {
+        "name": "get_recent_decisions",
+        "description": "Read-only. Compact recent decisions for behavior review.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "default": 14}},
+        },
+    },
+    {
+        "name": "get_decision_detail",
+        "description": "Read-only. Full decision detail plus all referenced signal IDs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"decision_id": {"type": "integer"}},
+            "required": ["decision_id"],
+        },
+    },
+    {
+        "name": "get_flip_flop_report",
+        "description": "Read-only. Tickers with N+ opposing-action pairs in the window.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "default": 30},
+                "min_reversals": {"type": "integer", "default": 3},
+            },
+        },
+    },
+    {
+        "name": "get_executor_behavior_summary",
+        "description": "Read-only. Sizing, ticker concentration, round trips, hold rate.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "default": 14}},
+        },
+    },
+    {
+        "name": "get_session_memos",
+        "description": "Read-only. Most recent strategy memos.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 10}}},
+    },
+    {
+        "name": "get_reflection_actions",
+        "description": "Read-only. Per-session reflection-stage actions taken.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 10}}},
+    },
+    {
+        "name": "get_session_summary",
+        "description": "Read-only. Per-session decisions, average outcome (% over 7d), stage failures, cost within a window.",
+        "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "default": 14}}},
     },
 ]
 
@@ -1008,6 +1571,19 @@ TOOL_HANDLERS = {
     "get_recent_playbooks": tool_get_recent_playbooks,
     "write_playbook": tool_write_playbook,
     "get_strategy_identity": tool_get_strategy_identity,
+    "get_strategy_identity_with_history": tool_get_strategy_identity_with_history,
     "get_strategy_rules": tool_get_strategy_rules,
+    "get_active_rules": tool_get_strategy_rules,
     "get_strategy_history": tool_get_strategy_history,
+    "get_retired_rules": tool_get_retired_rules,
+    "get_rule_bind_history": tool_get_rule_bind_history,
+    "get_theses": tool_get_theses,
+    "get_thesis_lineage": tool_get_thesis_lineage,
+    "get_recent_decisions": tool_get_recent_decisions,
+    "get_decision_detail": tool_get_decision_detail,
+    "get_flip_flop_report": tool_get_flip_flop_report,
+    "get_executor_behavior_summary": tool_get_executor_behavior_summary,
+    "get_session_memos": tool_get_session_memos,
+    "get_reflection_actions": tool_get_reflection_actions,
+    "get_session_summary": tool_get_session_summary_window,
 }

@@ -1457,3 +1457,132 @@ class TestPlaybookActionExpiry:
 
         assert mock_trade.called, "trader stage should still run after sweep failure"
         assert result.idempotent_skip is None
+
+
+# ---------------------------------------------------------------------------
+# Stage 0.5 — Supervisor (observer-only critic, runs after learning, before pipeline)
+# ---------------------------------------------------------------------------
+
+
+class TestSupervisorStage:
+    """Stage 0.5 runs after learning refresh and before the news pipeline.
+
+    It is observer-only: a failure here must not abort the session.
+    """
+
+    def test_supervisor_runs_between_learning_and_pipeline(self):
+        """Ordering: learning → supervisor → pipeline."""
+        calls = []
+
+        with patch("v2.session.run_backfill") as mock_backfill, \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_supervisor") as mock_supervisor, \
+             patch("v2.session.run_pipeline") as mock_pipeline, \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            mock_backfill.side_effect = lambda **kw: calls.append("learning")
+            mock_supervisor.side_effect = lambda **kw: calls.append("supervisor") or 1
+            mock_pipeline.side_effect = lambda **kw: calls.append("pipeline")
+
+            run_session(dry_run=False)
+
+        assert "supervisor" in calls, "supervisor stage did not run"
+        assert calls.index("learning") < calls.index("supervisor"), \
+            "supervisor must run after learning"
+        assert calls.index("supervisor") < calls.index("pipeline"), \
+            "supervisor must run before pipeline"
+
+    def test_supervisor_stage_failure_does_not_abort_session(self):
+        """A supervisor exception must be captured in result.supervisor_error,
+        and all subsequent stages still run."""
+        from v2.session import SessionResult, _run_supervisor_stage
+
+        result = SessionResult()
+
+        with patch("v2.session.run_supervisor", side_effect=RuntimeError("boom")), \
+             patch("v2.session._start_stage"), \
+             patch("v2.session._fail_stage"), \
+             patch("v2.session._complete_stage"):
+
+            _run_supervisor_stage(result, session_id=1, completed_stages=set(), skip=False)
+
+        assert result.supervisor_error == "boom"
+        assert result.supervisor_memo_id is None
+
+    def test_supervisor_stage_records_memo_id_on_success(self):
+        """When run_supervisor returns a memo id it must land in result.supervisor_memo_id."""
+        from v2.session import SessionResult, _run_supervisor_stage
+
+        result = SessionResult()
+
+        with patch("v2.session.run_supervisor", return_value=42), \
+             patch("v2.session._start_stage"), \
+             patch("v2.session._complete_stage"), \
+             patch("v2.session._fail_stage"):
+
+            _run_supervisor_stage(result, session_id=1, completed_stages=set(), skip=False)
+
+        assert result.supervisor_memo_id == 42
+        assert result.supervisor_error is None
+
+    def test_supervisor_stage_skipped_when_skip_flag_set(self):
+        """skip=True must set skipped_supervisor and not call run_supervisor."""
+        from v2.session import SessionResult, _run_supervisor_stage
+
+        result = SessionResult()
+
+        with patch("v2.session.run_supervisor") as mock_sup:
+            _run_supervisor_stage(result, session_id=1, completed_stages=set(), skip=True)
+
+        mock_sup.assert_not_called()
+        assert result.skipped_supervisor is True
+
+    def test_supervisor_stage_skipped_when_already_completed(self):
+        """If 'supervisor' is in completed_stages it must be skipped."""
+        from v2.session import SessionResult, _run_supervisor_stage
+
+        result = SessionResult()
+
+        with patch("v2.session.run_supervisor") as mock_sup:
+            _run_supervisor_stage(result, session_id=1,
+                                  completed_stages={"supervisor"}, skip=False)
+
+        mock_sup.assert_not_called()
+        assert result.skipped_supervisor is True
+
+    def test_skip_supervisor_flag_wired_to_run_session(self):
+        """run_session(skip_supervisor=True) must not call run_supervisor."""
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_supervisor") as mock_sup, \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage"):
+
+            result = run_session(dry_run=False, skip_supervisor=True)
+
+        mock_sup.assert_not_called()
+        assert result.skipped_supervisor is True
+
+    def test_supervisor_error_is_in_has_errors(self):
+        """supervisor_error must flow through has_errors so the session is marked failed."""
+        from v2.session import SessionResult
+
+        result = SessionResult(supervisor_error="something broke")
+        assert result.has_errors is True
+
+    def test_default_session_result_supervisor_fields(self):
+        """SessionResult must have all three supervisor fields with sane defaults."""
+        from v2.session import SessionResult
+
+        result = SessionResult()
+        assert result.supervisor_memo_id is None
+        assert result.supervisor_error is None
+        assert result.skipped_supervisor is False
