@@ -18,6 +18,7 @@ from collections import Counter
 
 from v2 import claude_client
 from v2 import tools as v2_tools
+from v2.database import trading_db as db
 from v2.database.connection import get_cursor
 from v2.pricing import UnknownModelError, stage_cost_usd
 
@@ -71,8 +72,14 @@ this week, here's why" memo is more valuable than a padded one.
 
 Output: a single markdown memo with sections matching the four areas
 above. Skip a section entirely if you have nothing to say about it.
-End with a "Watchlist" section: 1-5 specific things to revisit on
-the next supervisor run.
+End with a "Watchlist" section: 1-5 specific things to revisit. For EACH
+watchlist entry, also call record_watchlist_item with an owner_stage:
+- owner_stage="reflection" for rule lifecycle and identity items (retire/
+  amend/revalidate a rule, identity drift).
+- owner_stage="ideation" for thesis and playbook items (stale/contradictory
+  theses, playbook conditionals that never clear).
+The markdown Watchlist section and the recorded items must match. The owning
+stage will be forced to resolve each item this same session.
 """
 
 
@@ -85,6 +92,38 @@ STRATEGY_MUTATOR_NAMES: frozenset[str] = frozenset({
     "update_strategy_identity",
     "write_strategy_memo",
 })
+
+
+RECORD_WATCHLIST_TOOL_DEF: dict = {
+    "name": "record_watchlist_item",
+    "description": (
+        "Record ONE watchlist item for a specific acting stage to resolve next. "
+        "Call this once per item in your Watchlist section. owner_stage MUST be "
+        "'reflection' for rule/identity items, or 'ideation' for thesis/playbook "
+        "items. This writes only to the supervisor's own watchlist table — it does "
+        "NOT change strategy state."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Short item label."},
+            "detail": {"type": "string", "description": "What to check / what's wrong."},
+            "owner_stage": {"type": "string", "enum": ["reflection", "ideation"]},
+        },
+        "required": ["title", "detail", "owner_stage"],
+    },
+}
+
+
+def _make_record_watchlist_handler(buffer: list[dict]):
+    """Handler that buffers items in-memory; persisted after the memo INSERT
+    (the source_memo_id FK isn't known until the memo row exists)."""
+    def _handler(title: str, detail: str, owner_stage: str) -> str:
+        if owner_stage not in {"reflection", "ideation"}:
+            return "Error: owner_stage must be 'reflection' or 'ideation'"
+        buffer.append({"title": title, "detail": detail, "owner_stage": owner_stage})
+        return f"recorded watchlist item for {owner_stage}: {title}"
+    return _handler
 
 
 # Claude-facing tool name → Python handler.
@@ -120,7 +159,8 @@ def build_supervisor_tool_defs() -> list[dict]:
     raise on first call and the cause will be obvious from the traceback.
     """
     wanted = set(SUPERVISOR_TOOL_HANDLERS.keys())
-    return [td for td in v2_tools.TOOL_DEFINITIONS if td.get("name") in wanted]
+    read_defs = [td for td in v2_tools.TOOL_DEFINITIONS if td.get("name") in wanted]
+    return read_defs + [RECORD_WATCHLIST_TOOL_DEF]
 
 
 def _summarize_tool_calls(messages: list) -> list[dict]:
@@ -198,6 +238,11 @@ def run_supervisor(
     client = claude_client.get_claude_client()
     tool_defs = build_supervisor_tool_defs()
     initial = "Begin your strategy review. Investigate, cite IDs, then write the memo."
+    watchlist_buffer: list[dict] = []
+    handlers = {
+        **SUPERVISOR_TOOL_HANDLERS,
+        "record_watchlist_item": _make_record_watchlist_handler(watchlist_buffer),
+    }
 
     try:
         with claude_client.capture_usage() as usage:
@@ -207,7 +252,7 @@ def run_supervisor(
                 system=STRATEGY_SUPERVISOR_SYSTEM,
                 initial_message=initial,
                 tools=tool_defs,
-                tool_handlers=SUPERVISOR_TOOL_HANDLERS,
+                tool_handlers=handlers,
                 max_turns=max_turns,
                 stage_name="supervisor",
                 purpose="supervisor_loop",
@@ -253,9 +298,13 @@ def run_supervisor(
     if dry_run:
         print("=== SUPERVISOR MEMO (dry-run, not persisted) ===")
         print(content or f"[no final text — status={status}]")
+        if watchlist_buffer:
+            print(f"=== {len(watchlist_buffer)} watchlist item(s) (dry-run, not persisted) ===")
+            for it in watchlist_buffer:
+                print(f"  [{it['owner_stage']}] {it['title']}")
         return None
 
-    return _insert_memo(
+    memo_id = _insert_memo(
         model=model,
         content=content,
         status=status,
@@ -266,6 +315,15 @@ def run_supervisor(
         cost_usd=cost_usd,
         error_message=error_message,
     )
+    for it in watchlist_buffer:
+        try:
+            db.record_watchlist_item(
+                source_memo_id=memo_id, title=it["title"],
+                detail=it["detail"], owner_stage=it["owner_stage"],
+            )
+        except Exception:
+            log.exception("Failed to persist watchlist item %r", it.get("title"))
+    return memo_id
 
 
 def main() -> int:

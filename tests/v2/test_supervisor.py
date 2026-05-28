@@ -230,3 +230,58 @@ def test_mutator_set_matches_strategy_module_exports():
         f"In supervisor but not strategy: {set(STRATEGY_MUTATOR_NAMES) - expected_claude_names}. "
         f"In strategy but not supervisor: {expected_claude_names - set(STRATEGY_MUTATOR_NAMES)}."
     )
+
+
+def test_record_watchlist_handler_buffers_and_validates():
+    buf = []
+    handler = sup._make_record_watchlist_handler(buf)
+    out = handler(title="Retire Rule 43", detail="auto-lift fired", owner_stage="reflection")
+    assert buf == [{"title": "Retire Rule 43", "detail": "auto-lift fired",
+                    "owner_stage": "reflection"}]
+    assert "recorded" in out.lower()
+    err = handler(title="x", detail="y", owner_stage="trading")
+    assert "Error" in err
+    assert len(buf) == 1  # bad item not buffered
+
+
+def test_record_watchlist_tool_in_supervisor_defs():
+    names = {d["name"] for d in sup.build_supervisor_tool_defs()}
+    assert "record_watchlist_item" in names
+
+
+def test_run_supervisor_persists_buffered_items(fake_loop_result, fake_usage):
+    def fake_loop(*args, **kwargs):
+        handler = kwargs["tool_handlers"]["record_watchlist_item"]
+        handler(title="Close thesis 267", detail="Rule 43 grounded", owner_stage="ideation")
+        return fake_loop_result
+    with patch("v2.supervisor.claude_client.run_agentic_loop", side_effect=fake_loop), \
+         patch("v2.supervisor.claude_client.capture_usage") as cu, \
+         patch("v2.supervisor.claude_client.get_claude_client"), \
+         patch("v2.supervisor.claude_client.extract_final_text", return_value="## Watchlist\n- x"), \
+         patch("v2.supervisor._compute_cost_safely", return_value=0.5), \
+         patch("v2.supervisor._insert_memo", return_value=99) as ins, \
+         patch("v2.supervisor.db.record_watchlist_item", return_value=1) as rec:
+        cu.return_value.__enter__.return_value = fake_usage
+        memo_id = sup.run_supervisor()
+    assert memo_id == 99
+    ins.assert_called_once()
+    rec.assert_called_once_with(
+        source_memo_id=99, title="Close thesis 267",
+        detail="Rule 43 grounded", owner_stage="ideation",
+    )
+
+
+def test_run_supervisor_dry_run_does_not_persist_items(fake_loop_result, fake_usage):
+    def fake_loop(*args, **kwargs):
+        kwargs["tool_handlers"]["record_watchlist_item"](
+            title="t", detail="d", owner_stage="reflection")
+        return fake_loop_result
+    with patch("v2.supervisor.claude_client.run_agentic_loop", side_effect=fake_loop), \
+         patch("v2.supervisor.claude_client.capture_usage") as cu, \
+         patch("v2.supervisor.claude_client.get_claude_client"), \
+         patch("v2.supervisor.claude_client.extract_final_text", return_value="memo"), \
+         patch("v2.supervisor._compute_cost_safely", return_value=0.0), \
+         patch("v2.supervisor.db.record_watchlist_item") as rec:
+        cu.return_value.__enter__.return_value = fake_usage
+        sup.run_supervisor(dry_run=True)
+    rec.assert_not_called()
