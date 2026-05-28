@@ -10,6 +10,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_watchlist_db: use the real db.get_open_watchlist_items (opt out of the autouse watchlist patch)",
+    )
+
 from trading.agent import AgentResponse, TradingDecision
 from trading.news import NewsItem
 

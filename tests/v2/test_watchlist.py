@@ -38,6 +38,7 @@ def test_record_watchlist_item_rejects_bad_owner_stage(fake_cursor):
         )
 
 
+@pytest.mark.real_watchlist_db
 def test_get_open_watchlist_items_filters_by_stage(fake_cursor):
     cm, cur = fake_cursor
     cur.fetchall.return_value = [{"id": 1, "title": "t", "detail": "d"}]

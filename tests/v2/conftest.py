@@ -84,14 +84,15 @@ def _block_social_llm_and_session_db_calls(monkeypatch):
 # --- Core DB Fixtures ---
 
 @pytest.fixture(autouse=True)
-def _patch_watchlist_db(monkeypatch):
-    """Default open-watchlist queries to empty in tests.
-
-    Tests that exercise watchlist behaviour patch
-    ``v2.watchlist.db.get_open_watchlist_items`` explicitly; this fixture
-    ensures that tests which don't care about the watchlist don't hit the
-    real database and aren't broken by leftover open items in the dev DB.
-    """
+def _patch_watchlist_db(request, monkeypatch):
+    """Default open-watchlist queries to empty in tests so unrelated tests
+    don't hit the real DB or get broken by leftover open items. Tests that
+    need the REAL db.get_open_watchlist_items (e.g. the SQL-shape unit test)
+    opt out with @pytest.mark.real_watchlist_db. Tests exercising watchlist
+    behaviour patch v2.watchlist.db.get_open_watchlist_items explicitly, which
+    overrides this default."""
+    if request.node.get_closest_marker("real_watchlist_db"):
+        return
     monkeypatch.setattr(
         "v2.watchlist.db.get_open_watchlist_items",
         lambda stage: [],
