@@ -89,7 +89,7 @@ def test_amend_strategy_rule_updates_in_place(fake_cursor):
     with patch("v2.database.trading_db.get_cursor", return_value=cm):
         ok = db.amend_strategy_rule(
             rule_id=48, new_rule_text="updated text",
-            new_evidence="beat-rate now 61% over 24 samples", reason="evidence refresh",
+            new_evidence="beat-rate now 61% over 24 samples",
         )
     assert ok is True
     sql = cur.execute.call_args[0][0]

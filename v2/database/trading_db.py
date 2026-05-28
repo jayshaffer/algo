@@ -1082,7 +1082,7 @@ def resolve_watchlist_item(
 
 
 def amend_strategy_rule(
-    rule_id: int, new_rule_text: str, new_evidence: str, reason: str
+    rule_id: int, new_rule_text: str, new_evidence: str
 ) -> bool:
     """Update an active rule's text/evidence in place (no retire-and-replace).
     Returns True if the rule was active and updated."""
