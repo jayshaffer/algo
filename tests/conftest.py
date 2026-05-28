@@ -149,6 +149,20 @@ def claude_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
 
+@pytest.fixture(autouse=True)
+def _fake_anthropic_key(request, monkeypatch):
+    """Defense in depth: overwrite any real ANTHROPIC_API_KEY with a fake
+    sentinel for every (non-integration) test. If a code path slips past its
+    mocks and builds a real client, the call fails with 401 rather than
+    billing the live account. See the 2026-05-28 incident: an unmocked
+    supervisor path in test_session.py spent ~$626 of real Opus calls. Tests
+    that assert the missing-key path delete the var themselves (raising=False),
+    which overrides this. Integration tests opt out — they may use real creds."""
+    if request.node.get_closest_marker("integration"):
+        return
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake-test-key-not-real")
+
+
 # ---------------------------------------------------------------------------
 # Sample data factories
 # ---------------------------------------------------------------------------
