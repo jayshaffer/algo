@@ -322,7 +322,7 @@ def _print_cost_summary(label, result, model, created, updated, closed, summary,
 
 
 def run_ideation_claude(
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-8",
     max_turns: int = 20,
     session_id: int | None = None,
 ) -> ClaudeIdeationResult:
@@ -414,7 +414,7 @@ be reasoned about or learned from."""
 
 
 def run_strategist_loop(
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-8",
     max_turns: int = 25,
     system_prompt: str = None,
     attribution_constraints: str = "",
@@ -477,7 +477,7 @@ When you've completed your work, provide a summary of your findings and actions.
 
 
 def run_strategist_session(
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-8",
     max_turns: int = 25,
     attribution_constraints: str = "",
 ) -> ClaudeIdeationResult:
@@ -494,7 +494,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run Claude strategist session")
     parser.add_argument(
         "--model",
-        default="claude-opus-4-6",
+        default="claude-opus-4-8",
         help="Claude model to use",
     )
     parser.add_argument(
