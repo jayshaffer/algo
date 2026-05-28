@@ -11,11 +11,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from functools import partial
 
+from v2 import watchlist as wl
+
 from .attribution import get_attribution_summary
 from .claude_client import AgentPurpose, get_claude_client, run_agentic_loop
 from .database.trading_db import (
     get_active_strategy_rules,
     get_current_strategy_state,
+    get_open_watchlist_items,
     get_recent_decisions,
     get_rule_gate_revalidation_candidates,
     insert_strategy_memo,
@@ -167,7 +170,14 @@ Rules have a minimum tenure of 5 days. You cannot retire a rule until it has bee
 
 If the initial context lists gated rules, you MUST call revalidate_rule for each gated rule before writing the final memo. A gated rule is an active execution constraint with no lift_condition that has repeatedly appeared as the binding reason for holds or deferrals. Revalidation must either keep the rule with a numeric lift_condition, narrow the rule text and add a numeric lift_condition, or retire the rule. If retirement is blocked by tenure, keep or narrow it with a lift_condition instead.
 
-You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo."""
+You can retire at most 2 rules per session and propose at most 3 new rules per session. If more rules need attention, prioritize the most clearly unsupported ones and note the rest in your memo.
+
+## Supervisor Watchlist Gate
+
+If the initial context lists a SUPERVISOR WATCHLIST, you MUST call
+resolve_watchlist_item for every listed item before writing your memo —
+'acted' if you made a change in response, or 'dismissed' with a reason if
+no change is warranted. You cannot finish with an open item."""
 
 
 # --- Write Tool Handlers ---
@@ -605,6 +615,7 @@ STRATEGY_TOOL_DEFINITIONS = [
             "required": ["memo_type", "content"],
         },
     },
+    wl.RESOLVE_WATCHLIST_TOOL_DEF,
 ]
 
 STRATEGY_TOOL_HANDLERS = {
@@ -617,6 +628,8 @@ STRATEGY_TOOL_HANDLERS = {
     "revalidate_rule": tool_revalidate_rule,
     "retire_rule": tool_retire_rule,
     "write_strategy_memo": tool_write_strategy_memo,
+    # Bound to (session_id, stage="reflection") at runtime in run_strategy_reflection.
+    "resolve_watchlist_item": wl.make_resolve_handler(session_id=None, stage="reflection"),
 }
 
 
@@ -731,11 +744,14 @@ def run_strategy_reflection(
         logger.warning("Could not load rule revalidation evidence: %s", e)
         rule_revalidation_candidates = []
     gated_rule_ids = _gated_rule_ids(rule_revalidation_candidates)
+    open_watchlist = get_open_watchlist_items("reflection")
     initial_parts = []
     if trading_context:
         initial_parts.append(trading_context)
         initial_parts.append("")
     initial_parts.append(_format_rule_revalidation_context(rule_revalidation_candidates))
+    initial_parts.append("")
+    initial_parts.append(wl.format_open_watchlist_items(open_watchlist))
     initial_parts.append("")
     initial_parts.append(
         "Begin your strategy reflection. Start by:\n"
@@ -763,6 +779,9 @@ def run_strategy_reflection(
         "write_strategy_memo": partial(
             tool_write_strategy_memo, session_id=session_id
         ),
+        "resolve_watchlist_item": wl.make_resolve_handler(
+            session_id=session_id, stage="reflection"
+        ),
     }
 
     result = run_agentic_loop(
@@ -785,6 +804,7 @@ def run_strategy_reflection(
             "Reflection finished without revalidating gated rule(s): "
             + ", ".join(str(rule_id) for rule_id in missing_revalidations)
         )
+    wl.assert_watchlist_resolved("reflection")
 
     logger.info(
         "Strategy reflection complete: %d rules proposed, %d retired, "

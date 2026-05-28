@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 try:
     from datetime import UTC
 except ImportError:  # pragma: no cover - Python < 3.11
@@ -13,6 +15,7 @@ from tests.v2.conftest import (
     make_decision_row,
     make_strategy_state_row,
 )
+from v2 import strategy as strat
 from v2.strategy import run_strategy_reflection
 
 
@@ -782,8 +785,12 @@ class TestRunStrategyReflection:
         passed_handlers = call_kwargs.kwargs["tool_handlers"]
         assert "get_session_summary" in passed_handlers
         assert "write_strategy_memo" in passed_handlers
+        assert "resolve_watchlist_item" in passed_handlers
+        # These three handlers are session-bound at runtime (partial/closure);
+        # the remaining handlers must be the exact same objects as the statics.
+        _session_bound = {"get_session_summary", "write_strategy_memo", "resolve_watchlist_item"}
         for name, fn in STRATEGY_TOOL_HANDLERS.items():
-            if name in ("get_session_summary", "write_strategy_memo"):
+            if name in _session_bound:
                 continue
             assert passed_handlers[name] is fn
         assert call_kwargs.kwargs["max_turns"] == 5
@@ -1177,3 +1184,34 @@ class TestIdentityUpdateGuard:
         assert "version 6" in result
         # clear is now folded into insert_strategy_state; one call covers both
         mock_insert.assert_called_once()
+
+
+class TestReflectionWatchlistGate:
+    """Task 6: reflection ingests supervisor watchlist items and hard-gates on them."""
+
+    def test_reflection_registers_resolve_tool_and_gates(self, monkeypatch):
+        monkeypatch.setattr(strat, "get_rule_gate_revalidation_candidates", lambda days=30: [])
+        monkeypatch.setattr(strat, "build_formation_context", lambda: "")
+        monkeypatch.setattr(strat, "get_claude_client", lambda: MagicMock())
+        fake_result = MagicMock(messages=[], input_tokens=1, output_tokens=1, turns_used=1)
+        monkeypatch.setattr(strat, "run_agentic_loop", lambda **k: fake_result)
+        monkeypatch.setattr(strat, "_count_actions", lambda msgs: (0, 0, False, True))
+        monkeypatch.setattr(
+            "v2.watchlist.db.get_open_watchlist_items",
+            lambda stage: [{"id": 9, "title": "Retire Rule 43", "detail": "d"}]
+            if stage == "reflection" else [],
+        )
+        with pytest.raises(RuntimeError) as exc:
+            strat.run_strategy_reflection(session_id=5)
+        assert "9" in str(exc.value)
+
+    def test_reflection_passes_when_items_resolved(self, monkeypatch):
+        monkeypatch.setattr(strat, "get_rule_gate_revalidation_candidates", lambda days=30: [])
+        monkeypatch.setattr(strat, "build_formation_context", lambda: "")
+        monkeypatch.setattr(strat, "get_claude_client", lambda: MagicMock())
+        fake_result = MagicMock(messages=[], input_tokens=1, output_tokens=1, turns_used=1)
+        monkeypatch.setattr(strat, "run_agentic_loop", lambda **k: fake_result)
+        monkeypatch.setattr(strat, "_count_actions", lambda msgs: (0, 0, False, True))
+        monkeypatch.setattr("v2.watchlist.db.get_open_watchlist_items", lambda stage: [])
+        res = strat.run_strategy_reflection(session_id=5)  # no raise
+        assert res.memo_written is True
