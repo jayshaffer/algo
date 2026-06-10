@@ -10,9 +10,35 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
+CMD_DESC="$*"
+FAILURE_LOG="$SCRIPT_DIR/logs/session_failures.log"
+
+# Failure alerting: every failure mode used to be silent — the EXIT trap
+# tore the containers down and cron discarded the nonzero exit. On failure
+# we now append to logs/session_failures.log and, when ALGO_ALERT_WEBHOOK_URL
+# is set (Slack/Discord/ntfy-style JSON webhook), POST a short alert.
+notify_failure() {
+    local status="$1"
+    local msg="[$(date -Is)] run-docker.sh failed (exit ${status}): ${CMD_DESC}"
+    mkdir -p "$SCRIPT_DIR/logs"
+    echo "$msg" | tee -a "$FAILURE_LOG" >&2
+    if [ -n "${ALGO_ALERT_WEBHOOK_URL:-}" ]; then
+        curl -fsS -m 10 -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\": \"Pinchy: session command failed (exit ${status}): ${CMD_DESC}\"}" \
+            "$ALGO_ALERT_WEBHOOK_URL" >/dev/null \
+            || echo "[$(date -Is)] alert webhook POST failed" | tee -a "$FAILURE_LOG" >&2
+    fi
+}
+
 cleanup() {
+    local status=$?
     echo "Stopping containers..."
     docker compose down
+    if [ "$status" -ne 0 ]; then
+        notify_failure "$status"
+    fi
+    exit "$status"
 }
 
 trap cleanup EXIT

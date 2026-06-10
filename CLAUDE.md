@@ -64,11 +64,16 @@ The session orchestrator runs stages sequentially. Each stage is independent —
 | Stage | Module | Purpose |
 |-------|--------|---------|
 | 0 | `backfill.py`, `attribution.py` | Learning refresh: backfill decision outcomes, compute signal attribution |
+| 0.5 | `supervisor.py` | Strategy supervisor: observer-only critic, records watchlist items the acting stages must resolve |
 | 1 | `pipeline.py` | News pipeline: fetch from Alpaca, classify with Haiku, store signals |
 | 2 | `ideation_claude.py` | Strategist: thesis management + playbook generation (agentic loop with tools) |
 | 3 | `trader.py` | Executor: decisions from playbook + order execution |
 | 4 | `strategy.py` | Reflection: update strategy identity, rules, and write session memo |
 | 5 | `dashboard_publish.py` | Public dashboard publish |
+
+A session is idempotent per market date: if ANY session row already exists
+for the date (completed, failed, or running), a re-run is a no-op unless
+`--force` is passed. Deliberate retries after a failure need `--force`.
 
 The dashboard renders permalinks at `/mistakes/` and `/attribution/`
 (surfacing closed losers + retired rules, and best/worst signal types
@@ -90,7 +95,7 @@ prior identity.
 - **`context.py`** — Context builder. Aggregates positions, signals, theses, playbook, and attribution into compressed LLM context.
 - **`ideation_claude.py`** — Strategist stage. Agentic loop where Claude manages theses and generates playbooks using database tools.
 - **`strategy.py`** — Post-session reflection. Claude reviews outcomes, updates trading identity, proposes/retires rules, writes memos.
-- **`supervisor.py`** — Observer-only strategy critic. Read-only DB tool registry + Opus loop, persists one markdown memo per run to `supervisor_memos`. Run with `task supervise` (or `task supervise:dry-run`). Spec: `docs/superpowers/specs/2026-05-27-strategy-supervisor-design.md`.
+- **`supervisor.py`** — Observer-only strategy critic. Read-only DB tool registry + agentic loop (pinned to `claude-fable-5`), persists one markdown memo per run to `supervisor_memos`. Run with `task supervise` (or `task supervise:dry-run`). Spec: `docs/superpowers/specs/2026-05-27-strategy-supervisor-design.md`.
 - **`attribution.py`** — Computes which signal types are predictive by joining decisions with their source signals.
 - **`patterns.py`** — Pattern analysis: signal performance, sentiment performance metrics.
 - **`tools.py`** — Tool definitions and handlers for the agentic loops (portfolio state, theses, history, attribution, etc.).
@@ -124,6 +129,13 @@ The strategist maintains continuity between sessions via:
 - `sessions` / `session_stages` — Session tracking and stage completion
 - `supervisor_memos` — Free-form markdown critiques from `python -m v2.supervisor`
 
+**Migration convention:** `db/init/` only runs on a FRESH Postgres volume —
+long-lived prod/paper volumes never re-run it. Every new `db/init/NNN_*.sql`
+file MUST get a `db/migrations/*.sql` mirror, applied to live DBs with
+`task db:migrate` / `task paper:db:migrate` (tracked in `schema_migrations`).
+Skipping the mirror is how prod silently missed the fable-5 pricing row and
+the opus repricing (init/036–037) until 2026-06-10.
+
 ## Commands
 
 ```bash
@@ -133,14 +145,20 @@ docker compose up -d
 # Run full daily session
 docker compose exec trading python -m v2.session
 
-# Run individual stages
-docker compose exec trading python -m v2.session --stage pipeline
-docker compose exec trading python -m v2.session --stage ideation
-docker compose exec trading python -m v2.session --stage trading --dry-run
-docker compose exec trading python -m v2.session --stage strategy
+# Skip individual stages (there is no --stage flag; stages are opted OUT of)
+docker compose exec trading python -m v2.session --skip-supervisor
+docker compose exec trading python -m v2.session --skip-pipeline --skip-ideation
+docker compose exec trading python -m v2.session --dry-run   # also skips ideation/strategy/dashboard
+
+# Re-run a session for a date that already has a session row (any status)
+docker compose exec trading python -m v2.session --force
 
 # Run learning loop standalone
 docker compose exec trading python -m v2.learn
+
+# Apply pending DB migrations to a long-lived volume (tracked in schema_migrations)
+task db:migrate          # prod
+task paper:db:migrate    # paper
 
 # View public dashboard
 # Published via Cloudflare Pages by stage 5
@@ -159,5 +177,8 @@ Required in `.env`:
 Optional knobs (read at module import — container restart required after changing):
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
+- `ALGO_DAILY_LOSS_LIMIT_PCT` — daily-loss circuit breaker (default `3.0`). Halts the trading stage when account equity is down more than this % vs the previous close (Alpaca `last_equity`); re-checked after every fill. `<= 0` disables.
+- `ALGO_LOOP_COST_CEILING_USD` — per-agentic-loop cost ceiling (default `30`). The strategist/reflection/supervisor loops abort with `stop_reason="cost_ceiling"` once cumulative token cost (priced via `model_pricing`) crosses the cap. `<= 0` disables.
+- `ALGO_ALERT_WEBHOOK_URL` — optional JSON webhook (Slack/Discord/ntfy-style). `run-docker.sh` POSTs a short alert when a cron session exits nonzero; failures also append to `logs/session_failures.log`.
 
 **Audit:** the audit runs as a Claude Code `/loop 24h` session driven by `docs/audit-playbook.md`. It files Jira tickets via the Atlassian MCP (no `JIRA_*` env vars required). See spec `docs/superpowers/specs/2026-05-12-audit-loop-mcp-design.md`.

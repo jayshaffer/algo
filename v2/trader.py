@@ -55,6 +55,7 @@ from .risk import (
     MAX_SECTOR_PCT,
     SECTOR_MAP,
     check_churn_gate,
+    check_daily_loss_limit,
     check_sector_cap_for_buy,
     check_sector_concentration,
 )
@@ -379,16 +380,22 @@ def _execute_decision_order(
     logger.info("  %s - Success", status)
 
     # Thesis lifecycle on fill: buys leave active, full sells close,
-    # partial sells keep active.
+    # partial sells keep active. Keyed off the ACTUAL filled quantity, not
+    # the submitted one — a partially-filled exit (timeout + cancel) leaves
+    # real shares held, and closing the thesis would orphan that position
+    # for every subsequent session.
     if decision.thesis_id and not dry_run and decision.action == "sell":
         try:
+            filled_qty = decision.quantity
+            if result is not None and getattr(result, "filled_qty", None) is not None:
+                filled_qty = Decimal(str(result.filled_qty))
             held_before = positions.get(decision.ticker, Decimal(0))
-            remaining = held_before - decision.quantity
+            remaining = held_before - filled_qty
             if remaining <= Decimal("0.0001"):
                 close_thesis(
                     thesis_id=decision.thesis_id,
                     status="closed",
-                    reason=f"Position exited: sold {decision.quantity} shares @ ${fill_price}",
+                    reason=f"Position exited: sold {filled_qty} shares @ ${fill_price}",
                 )
                 logger.info("  Thesis %d closed (position exited)", decision.thesis_id)
             else:
@@ -408,27 +415,31 @@ def _refresh_buying_power(
     portfolio_value: Decimal,
     trade_value: Decimal,
     dry_run: bool,
-) -> tuple[Decimal, Decimal]:
+) -> tuple[Decimal, Decimal, dict | None]:
     """After a fill, refresh buying power / portfolio value from Alpaca (real
     trades) or adjust locally (dry run).
+
+    The third element is the full refreshed account dict (None when the
+    refresh failed or was skipped) so the caller can re-run account-level
+    risk checks — the daily-loss breaker — against live state mid-loop.
     """
     if not dry_run:
         try:
             refreshed = get_account_info()
-            return refreshed["buying_power"], refreshed["portfolio_value"]
+            return refreshed["buying_power"], refreshed["portfolio_value"], refreshed
         except Exception as e:
             logger.warning("Could not refresh buying power: %s — using local estimate", e)
             if decision.action == "buy":
                 buying_power -= trade_value
             elif decision.action == "sell":
                 buying_power += trade_value
-            return buying_power, portfolio_value
+            return buying_power, portfolio_value, None
     # Dry run: use local estimate
     if decision.action == "buy":
         buying_power -= trade_value
     elif decision.action == "sell":
         buying_power += trade_value
-    return buying_power, portfolio_value
+    return buying_power, portfolio_value, None
 
 
 def _handle_thesis_invalidations(invalidations, errors: list[str]) -> None:
@@ -950,9 +961,31 @@ def _execute_decisions(
             new_held = held - decision.quantity
             positions[decision.ticker] = new_held if new_held > Decimal(0) else Decimal(0)
 
-        buying_power, portfolio_value = _refresh_buying_power(
+        buying_power, portfolio_value, refreshed_info = _refresh_buying_power(
             decision, buying_power, portfolio_value, outcome.trade_value, dry_run,
         )
+
+        # Re-run the daily-loss breaker against live account state after each
+        # fill. The session-start check catches an overnight gap; this one
+        # stops a session that bleeds its way through the limit mid-loop.
+        if refreshed_info is not None:
+            loss_breach = check_daily_loss_limit(
+                refreshed_info.get("equity"), refreshed_info.get("last_equity"),
+            )
+            if loss_breach:
+                errors.append(f"Mid-session halt: {loss_breach}")
+                logger.error("HALT mid-session: %s", loss_breach)
+                record_event(
+                    session_id=session_id,
+                    stage_name="trading",
+                    event_type="risk_block",
+                    payload={
+                        "reason_code": "daily_loss_limit",
+                        "reason_text": loss_breach,
+                        "trades_executed": totals.trades_executed,
+                    },
+                )
+                break
 
     return totals, order_ids, order_results, decision_account_states
 
@@ -1265,6 +1298,23 @@ def run_trading_session(
     account_info, snapshot_id = _snapshot_account(errors)
     if account_info is None:
         return _empty_result(timestamp, positions_synced, orders_synced, 0, errors)
+
+    # Daily-loss circuit breaker: halt the entire stage when equity has
+    # already dropped past the limit vs the previous close. Recorded as an
+    # error so the session is marked failed and the halt is loud.
+    loss_breach = check_daily_loss_limit(
+        account_info.get("equity"), account_info.get("last_equity"),
+    )
+    if loss_breach:
+        errors.append(loss_breach)
+        logger.error("HALT: %s", loss_breach)
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="risk_block",
+            payload={"reason_code": "daily_loss_limit", "reason_text": loss_breach},
+        )
+        return _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors)
 
     # Step 3: Build executor input (structured, not string)
     logger.info("[Step 3] Building executor input")

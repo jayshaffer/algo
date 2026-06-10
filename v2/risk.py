@@ -1,4 +1,5 @@
 """Portfolio-level risk checks."""
+import os
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -30,6 +31,12 @@ MAX_POSITION_PCT = Decimal("0.10")  # max single-ticker exposure as a fraction o
 CHURN_PAIR_THRESHOLD = 6
 CHURN_WINDOW_DAYS = 30
 CHURN_PAIR_WINDOW_DAYS = 7
+
+# Daily-loss circuit breaker: halt all trading when account equity has
+# dropped more than this percentage versus the previous close (Alpaca
+# last_equity). Read at module import like the other ALGO_* knobs —
+# container restart required after changing. Set <= 0 to disable.
+DAILY_LOSS_LIMIT_PCT = Decimal(os.environ.get("ALGO_DAILY_LOSS_LIMIT_PCT", "3.0"))
 
 
 def check_sector_concentration(
@@ -100,6 +107,36 @@ def check_sector_cap_for_buy(
         return (
             f"Sector '{sector}' projected exposure {pct:.0%} would exceed "
             f"{cap:.0%} cap (${projected:,.0f} of ${portfolio_value:,.0f})"
+        )
+    return None
+
+
+def check_daily_loss_limit(
+    equity: Decimal | None,
+    last_equity: Decimal | None,
+    limit_pct: Decimal | None = None,
+) -> str | None:
+    """Kill switch: returns a breach message when equity has dropped more
+    than `limit_pct`% versus the previous close, else None.
+
+    Inputs come from Alpaca account info (`equity`, `last_equity`). Missing
+    or non-positive last_equity skips the check — fail open here because the
+    breaker is a backstop, not the primary control, and a transient data gap
+    must not permanently halt the system. The caller halts the trading stage
+    (and re-checks after each fill) when a message is returned.
+    """
+    if limit_pct is None:
+        limit_pct = DAILY_LOSS_LIMIT_PCT
+    if limit_pct <= 0:
+        return None
+    if equity is None or last_equity is None or last_equity <= 0:
+        return None
+    loss_pct = (equity - last_equity) / last_equity * Decimal(100)
+    if loss_pct <= -limit_pct:
+        return (
+            f"Daily loss limit: equity ${equity:,.0f} is {loss_pct:.2f}% vs "
+            f"previous close ${last_equity:,.0f} (limit -{limit_pct}%). "
+            "Trading halted for the session."
         )
     return None
 

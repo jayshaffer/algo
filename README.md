@@ -18,15 +18,16 @@ Built and maintained by [Jay Shaffer](https://github.com/jayshaffer). Claude (So
 
 ## How it works
 
-The system runs once a day after the US market close. Each session is a sequence of five stages that share state via Postgres:
+The system runs once a day after the US market close. Each session is a sequence of seven stages that share state via Postgres:
 
 | Stage | Module | What it does |
 |-------|--------|--------------|
 | 0 | `backfill.py`, `attribution.py` | Look up 7-day and 30-day outcomes for recent decisions; recompute which signal types are predicting P&L |
+| 0.5 | `supervisor.py` | Strategy supervisor: an observer-only critic reads the fresh attribution and records watchlist items the later stages must resolve |
 | 1 | `pipeline.py` | Fetch broad market news, filter by relevance with embeddings, classify with Haiku, store as signals |
 | 2 | `ideation_claude.py` | Strategist loop: Opus manages trade theses and writes today's playbook using 11 DB-backed tools |
 | 3 | `trader.py` | Executor loop: Haiku reads the playbook plus current portfolio state and produces buy/sell/hold decisions; orders go to Alpaca |
-| 4 | `strategy.py` | Reflection: Opus reviews the day's outcomes, proposes or retires trading rules, writes a session memo |
+| 4 | `strategy.py` | Reflection: Sonnet reviews the day's outcomes, proposes or retires trading rules, writes a session memo |
 | 5 | `dashboard_publish.py` | Render the static public site, upload to Cloudflare Pages |
 
 The strategist and executor are deliberately split. The strategist is slower, smarter, and writes a daily playbook (a list of structured actions: buy this much of X if Y triggers). The executor is fast, follows the playbook, and is the only stage that can move money. This split is the cheapest way to keep the smart model from over-trading and the cheap model from making strategic mistakes.

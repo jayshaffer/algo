@@ -143,6 +143,8 @@ def get_account_info() -> dict:
         "long_market_value": Decimal(account.long_market_value),
         "short_market_value": Decimal(account.short_market_value),
         "equity": Decimal(account.equity),
+        # Previous-close equity; input to the daily-loss circuit breaker.
+        "last_equity": Decimal(account.last_equity),
         "daytrade_count": account.daytrade_count,
         "pattern_day_trader": account.pattern_day_trader,
     }

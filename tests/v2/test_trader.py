@@ -504,7 +504,7 @@ class TestDecisionRejectionTelemetry:
              patch("v2.trader.execute_market_order") as mock_order, \
              patch("v2.trader.wait_for_fill") as mock_wait, \
              patch("v2.trader._refresh_buying_power",
-                   return_value=(Decimal("10000"), Decimal("50000"))), \
+                   return_value=(Decimal("10000"), Decimal("50000"), None)), \
              patch("v2.trader.close_thesis", side_effect=fake_close_thesis), \
              patch("v2.trader.check_decision_exists", return_value=None):
             order_result = MagicMock(success=True, order_id="O1",
@@ -529,6 +529,151 @@ class TestDecisionRejectionTelemetry:
         assert positions["AAPL"] == Decimal("0"), (
             f"positions['AAPL'] should be 0 after both sells, got {positions['AAPL']}"
         )
+
+
+class TestDailyLossCircuitBreaker:
+    """Kill switch: a session that opens (or goes) more than the daily loss
+    limit under the previous close must stop trading instead of letting the
+    executor keep bleeding capital."""
+
+    def test_session_halts_before_decisions_when_limit_breached(self, mock_db, mock_cursor):
+        account = {
+            **_DEFAULT_ACCOUNT,
+            "equity": Decimal("95000"),
+            "last_equity": Decimal("100000"),  # -5% vs 3% default limit
+        }
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, overrides={
+                "get_account_info": MagicMock(return_value=account),
+            })
+            result = run_trading_session(dry_run=True)
+
+        assert any("daily loss" in e.lower() for e in result.errors)
+        mocks["get_trading_decisions"].assert_not_called()
+        assert result.decisions_made == 0
+
+    def test_session_proceeds_when_within_limit(self, mock_db, mock_cursor):
+        account = {
+            **_DEFAULT_ACCOUNT,
+            "equity": Decimal("99500"),
+            "last_equity": Decimal("100000"),  # -0.5%
+        }
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, overrides={
+                "get_account_info": MagicMock(return_value=account),
+            })
+            result = run_trading_session(dry_run=True)
+
+        mocks["get_trading_decisions"].assert_called_once()
+        assert not any("daily loss" in e.lower() for e in result.errors)
+
+    def test_mid_loop_breach_stops_remaining_trades(self):
+        """After a fill, the refreshed account state is re-checked; a breach
+        mid-loop halts the remaining decisions."""
+        from v2.trader import _execute_decisions
+
+        decisions = [
+            _make_decision(ticker="AAPL", playbook_action_id=None),
+            _make_decision(ticker="MSFT", playbook_action_id=None),
+        ]
+        response = AgentResponse(
+            decisions=decisions, thesis_invalidations=[],
+            market_summary="", risk_assessment="",
+        )
+        account_info = {
+            "buying_power": Decimal("50000"),
+            "portfolio_value": Decimal("100000"),
+        }
+        breached = {
+            "buying_power": Decimal("45000"),
+            "portfolio_value": Decimal("94000"),
+            "equity": Decimal("94000"),
+            "last_equity": Decimal("100000"),  # -6% after the first fill
+        }
+        errors: list[str] = []
+
+        order_result = MagicMock(
+            success=True, order_id="O1", error=None,
+            filled_qty=Decimal("3"), filled_avg_price=Decimal("150"),
+        )
+        with patch("v2.trader.get_latest_price_with_reason",
+                   return_value=(Decimal("150"), None)), \
+             patch("v2.trader.check_churn_gate", return_value=None), \
+             patch("v2.trader.check_decision_exists", return_value=None), \
+             patch("v2.trader.execute_market_order", return_value=order_result) as mock_exec, \
+             patch("v2.trader.wait_for_fill", return_value=order_result), \
+             patch("v2.trader.get_account_info", return_value=breached):
+            _execute_decisions(
+                response, {}, account_info, MagicMock(),
+                False, errors, date(2026, 6, 10),
+            )
+
+        assert mock_exec.call_count == 1, (
+            "Second decision must not execute after the daily loss limit "
+            "was breached mid-session"
+        )
+        assert any("daily loss" in e.lower() for e in errors)
+
+
+class TestThesisClosureUsesFilledQty:
+    """Thesis lifecycle must key off what actually filled, not what was
+    submitted. A partially-filled exit leaves real shares held; closing the
+    thesis would orphan that position."""
+
+    def _run_single_sell(self, filled_qty):
+        from v2.trader import _execute_decisions
+
+        decision = ExecutorDecision(
+            ticker="AAPL", action="sell",
+            reasoning="exit", thesis_id=42,
+            intent_type="exit_full", intent_magnitude=None,
+            playbook_action_id=None, is_off_playbook=False,
+            confidence="high",
+        )
+        response = AgentResponse(
+            decisions=[decision], thesis_invalidations=[],
+            market_summary="", risk_assessment="",
+        )
+        positions = {"AAPL": Decimal("100")}
+        account_info = {
+            "buying_power": Decimal("10000"),
+            "portfolio_value": Decimal("50000"),
+        }
+        errors: list[str] = []
+        closed: list[int] = []
+
+        order_result = MagicMock(
+            success=True, order_id="O1", error=None,
+            filled_qty=filled_qty, filled_avg_price=Decimal("150"),
+        )
+        with patch("v2.trader.get_latest_price_with_reason",
+                   return_value=(Decimal("150"), None)), \
+             patch("v2.trader.check_churn_gate", return_value=None), \
+             patch("v2.trader.check_decision_exists", return_value=None), \
+             patch("v2.trader._precheck_sell_against_alpaca", return_value=True), \
+             patch("v2.trader.execute_market_order", return_value=order_result), \
+             patch("v2.trader.wait_for_fill", return_value=order_result), \
+             patch("v2.trader._refresh_buying_power",
+                   return_value=(Decimal("10000"), Decimal("50000"), None)), \
+             patch("v2.trader.close_thesis",
+                   side_effect=lambda *, thesis_id, status, reason: closed.append(thesis_id)):
+            _execute_decisions(
+                response, positions, account_info, MagicMock(),
+                False, errors, date(2026, 6, 10),
+            )
+        return closed
+
+    def test_partial_fill_keeps_thesis_open(self):
+        # exit_full submits 100 shares but only 40 fill before timeout/cancel.
+        closed = self._run_single_sell(filled_qty=Decimal("40"))
+        assert closed == [], (
+            "Thesis must stay open when only 40 of 100 shares actually "
+            "filled — 60 shares are still held"
+        )
+
+    def test_full_fill_closes_thesis(self):
+        closed = self._run_single_sell(filled_qty=Decimal("100"))
+        assert closed == [42]
 
 
 class TestSessionDateConsistency:
@@ -989,11 +1134,13 @@ class TestRefreshBuyingPowerLocalEstimate:
         trade_value = Decimal("250")
 
         with patch("v2.trader.get_account_info", side_effect=Exception("api down")):
-            bp_after, pv_after = _refresh_buying_power(
+            bp_after, pv_after, refreshed = _refresh_buying_power(
                 self._decision("sell"), bp_before, pv_before, trade_value, dry_run=False,
             )
         assert bp_after == bp_before + trade_value
         assert pv_after == pv_before
+        # No live account state available on the fallback path.
+        assert refreshed is None
 
     def test_sell_credits_buying_power_dry_run(self):
         from v2.trader import _refresh_buying_power
@@ -1001,11 +1148,12 @@ class TestRefreshBuyingPowerLocalEstimate:
         pv_before = Decimal("10000")
         trade_value = Decimal("250")
 
-        bp_after, pv_after = _refresh_buying_power(
+        bp_after, pv_after, refreshed = _refresh_buying_power(
             self._decision("sell"), bp_before, pv_before, trade_value, dry_run=True,
         )
         assert bp_after == bp_before + trade_value
         assert pv_after == pv_before
+        assert refreshed is None
 
     def test_buy_still_debits_buying_power(self):
         from v2.trader import _refresh_buying_power
@@ -1013,7 +1161,7 @@ class TestRefreshBuyingPowerLocalEstimate:
         trade_value = Decimal("250")
 
         with patch("v2.trader.get_account_info", side_effect=Exception("api down")):
-            bp_after, _ = _refresh_buying_power(
+            bp_after, _, _ = _refresh_buying_power(
                 self._decision("buy"), bp_before, Decimal("10000"), trade_value, dry_run=False,
             )
         assert bp_after == bp_before - trade_value

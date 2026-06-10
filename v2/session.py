@@ -168,16 +168,27 @@ def _check_and_record_session(force: bool, session_date) -> tuple[int | None, se
     Per-run sessions: every invocation creates a new sessions row.
     completed_stages is always the empty set — no resume across runs.
 
-    Idempotency: if force=False and a session of session_type='daily'
-    is already 'completed' for this date, we skip with early_error set.
-    --force bypasses that gate.
+    Idempotency: if force=False and ANY session already exists for this
+    date — completed, failed, or running — we skip with early_error set.
+    Failed sessions gate too: a cron double-fire after a partial failure
+    would otherwise expire the first run's pending playbook actions and
+    re-run the strategist, duplicating playbooks/theses for the date.
+    Deliberate retries use --force.
     """
     if not force:
         try:
             existing = get_session_for_date(session_date)
-            if existing and existing["status"] == "completed":
-                logger.warning("Session already completed for %s. Use --force to override.", session_date)
-                return None, set(), f"Session already completed for {session_date}"
+            if existing:
+                status = existing.get("status")
+                if status == "completed":
+                    msg = f"Session already completed for {session_date}"
+                else:
+                    msg = (
+                        f"Session already exists for {session_date} "
+                        f"(status={status}); re-run with --force to retry"
+                    )
+                logger.warning("%s. Use --force to override.", msg)
+                return None, set(), msg
         except Exception as e:
             logger.warning("Could not check session status: %s — proceeding", e)
     try:
