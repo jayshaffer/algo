@@ -12,9 +12,16 @@ from dataclasses import dataclass
 import anthropic
 
 from .database.trading_db import insert_llm_call_context
+from .pricing import stage_cost_usd
 from .telemetry import record_event
 
 logger = logging.getLogger(__name__)
+
+# Runaway-cost guard for agentic loops. Cumulative token cost (priced via
+# the model_pricing table) is checked after every turn; crossing the ceiling
+# aborts the loop with stop_reason="cost_ceiling". Read at module import —
+# container restart required after changing. Set <= 0 to disable.
+LOOP_COST_CEILING_USD = float(os.environ.get("ALGO_LOOP_COST_CEILING_USD", "30"))
 
 # Retry configuration for Claude API calls
 API_MAX_RETRIES = 3
@@ -445,8 +452,16 @@ def run_agentic_loop(
     session_id: int | None = None,
     stage_name: str | None = None,
     purpose: str = AgentPurpose.STRATEGIST_LOOP,
+    max_cost_usd: float | None = None,
 ) -> AgenticLoopResult:
-    """Run an agentic loop where Claude uses tools until it completes its task."""
+    """Run an agentic loop where Claude uses tools until it completes its task.
+
+    `max_cost_usd` caps the loop's cumulative token cost (USD, priced via
+    model_pricing); None uses the module default LOOP_COST_CEILING_USD and
+    <= 0 disables the check. Crossing the ceiling stops the loop with
+    stop_reason="cost_ceiling" — callers' output validation (e.g. the
+    strategist's missing-playbook check) then fails the stage loudly.
+    """
     messages = [{"role": "user", "content": initial_message}]
     total_input_tokens = 0
     total_output_tokens = 0
@@ -464,6 +479,8 @@ def run_agentic_loop(
 
     max_tokens_recoveries = 0
     context_length_recoveries = 0
+    cost_ceiling = LOOP_COST_CEILING_USD if max_cost_usd is None else max_cost_usd
+    cost_unpriceable_warned = False
 
     for turn in range(max_turns):
         logger.info(f"Agentic loop turn {turn + 1}/{max_turns}")
@@ -518,6 +535,46 @@ def run_agentic_loop(
         total_output_tokens += response.usage.output_tokens
         total_cache_creation += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
         total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+
+        # Cost ceiling: abort before spending another turn once cumulative
+        # cost crosses the cap. Unpriceable models (no model_pricing row,
+        # DB unreachable) skip the check — cost telemetry must never crash
+        # a session — but get one loud warning.
+        if cost_ceiling > 0:
+            try:
+                loop_cost = stage_cost_usd(
+                    model, total_input_tokens, total_output_tokens,
+                    total_cache_creation, total_cache_read,
+                )
+            except Exception as e:
+                loop_cost = None
+                if not cost_unpriceable_warned:
+                    cost_unpriceable_warned = True
+                    logger.warning(
+                        "Cost ceiling check disabled for this loop — could not "
+                        "price model %s: %s", model, e,
+                    )
+            if loop_cost is not None and loop_cost >= cost_ceiling:
+                stop_reason = "cost_ceiling"
+                logger.error(
+                    "Agentic loop aborted on turn %d: cumulative cost $%.2f "
+                    "crossed the $%.2f ceiling (ALGO_LOOP_COST_CEILING_USD)",
+                    turn + 1, loop_cost, cost_ceiling,
+                )
+                record_event(
+                    session_id=session_id,
+                    stage_name=stage_name or "unknown",
+                    event_type="loop_abort",
+                    payload={
+                        "reason": "cost_ceiling",
+                        "turn": turn + 1,
+                        "model": model,
+                        "cost_usd": round(loop_cost, 4),
+                        "ceiling_usd": cost_ceiling,
+                    },
+                )
+                messages.append({"role": "assistant", "content": response.content})
+                break
 
         # Drop the truncated turn (incomplete tool_use blocks would break the next call) and retry once with a concision nudge.
         if response.stop_reason == "max_tokens" and max_tokens_recoveries < 1:

@@ -1105,3 +1105,137 @@ class TestAgenticLoopPerTurnTelemetry:
             f"loop_completion missing cache_creation_tokens: {payload}"
         assert payload["cache_read_tokens"] == 300, \
             f"loop_completion missing cache_read_tokens: {payload}"
+
+
+class TestLoopCostCeiling:
+    """Runaway-cost guard: the loop tracks cumulative token cost via the
+    model_pricing table and aborts cleanly when it crosses the ceiling.
+    Token usage was previously tracked for observability only — a pathological
+    loop could burn through hundreds of dollars before max_turns tripped."""
+
+    def _tool_response(self):
+        return _make_response(
+            content=[_tool_use_block("t1", "noop", {})],
+            stop_reason="tool_use",
+            input_tokens=100_000,
+            output_tokens=10_000,
+        )
+
+    def test_aborts_when_ceiling_exceeded(self):
+        from unittest.mock import patch
+
+        responses = [self._tool_response() for _ in range(5)]
+        client = _make_stream_mock(responses)
+
+        with patch("v2.claude_client.stage_cost_usd", return_value=999.0):
+            result = run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[{"name": "noop"}],
+                tool_handlers={"noop": lambda **k: "ok"},
+                max_turns=5,
+                max_cost_usd=10.0,
+            )
+
+        assert result.stop_reason == "cost_ceiling"
+        assert client.messages.stream.call_count == 1, (
+            "Loop must stop after the turn that crossed the ceiling, not "
+            "keep calling the API"
+        )
+
+    def test_continues_when_under_ceiling(self):
+        from unittest.mock import patch
+
+        responses = [
+            self._tool_response(),
+            _make_response(content=[_text_block("done")], stop_reason="end_turn"),
+        ]
+        client = _make_stream_mock(responses)
+
+        with patch("v2.claude_client.stage_cost_usd", return_value=0.05):
+            result = run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[{"name": "noop"}],
+                tool_handlers={"noop": lambda **k: "ok"},
+                max_turns=5,
+                max_cost_usd=10.0,
+            )
+
+        assert result.stop_reason == "end_turn"
+        assert client.messages.stream.call_count == 2
+
+    def test_unpriceable_model_does_not_break_loop(self):
+        """If the model has no pricing row (or the DB is unreachable), the
+        ceiling check is skipped — never crash a session over cost telemetry."""
+        from unittest.mock import patch
+
+        responses = [
+            self._tool_response(),
+            _make_response(content=[_text_block("done")], stop_reason="end_turn"),
+        ]
+        client = _make_stream_mock(responses)
+
+        with patch("v2.claude_client.stage_cost_usd",
+                   side_effect=Exception("no pricing row")):
+            result = run_agentic_loop(
+                client=client,
+                model="unpriced-model",
+                system="sys",
+                initial_message="hi",
+                tools=[{"name": "noop"}],
+                tool_handlers={"noop": lambda **k: "ok"},
+                max_turns=5,
+                max_cost_usd=10.0,
+            )
+
+        assert result.stop_reason == "end_turn"
+
+    def test_default_ceiling_applies_without_explicit_param(self):
+        from unittest.mock import patch
+
+        import v2.claude_client as cc
+
+        responses = [self._tool_response() for _ in range(3)]
+        client = _make_stream_mock(responses)
+
+        with patch("v2.claude_client.stage_cost_usd", return_value=999.0), \
+             patch.object(cc, "LOOP_COST_CEILING_USD", 10.0):
+            result = run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[{"name": "noop"}],
+                tool_handlers={"noop": lambda **k: "ok"},
+                max_turns=3,
+            )
+
+        assert result.stop_reason == "cost_ceiling"
+
+    def test_nonpositive_ceiling_disables_check(self):
+        from unittest.mock import patch
+
+        responses = [
+            self._tool_response(),
+            _make_response(content=[_text_block("done")], stop_reason="end_turn"),
+        ]
+        client = _make_stream_mock(responses)
+
+        with patch("v2.claude_client.stage_cost_usd", return_value=999.0):
+            result = run_agentic_loop(
+                client=client,
+                model="m",
+                system="sys",
+                initial_message="hi",
+                tools=[{"name": "noop"}],
+                tool_handlers={"noop": lambda **k: "ok"},
+                max_turns=5,
+                max_cost_usd=0,
+            )
+
+        assert result.stop_reason == "end_turn"

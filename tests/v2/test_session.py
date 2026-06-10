@@ -432,8 +432,40 @@ class TestSessionIdempotency:
 
         mock_pipeline.assert_called_once()
 
-    def test_allows_session_when_previous_failed(self):
-        """Should allow re-run if previous session failed."""
+    def test_blocks_rerun_when_previous_failed(self):
+        """A failed prior session gates the re-run too: a cron double-fire
+        after a partial failure would otherwise re-run the strategist and
+        duplicate playbooks/theses for the date. Deliberate retries use
+        --force."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline") as mock_pipeline:
+
+            mock_get.return_value = {"id": 1, "status": "failed"}
+
+            result = run_session(dry_run=False)
+
+        mock_pipeline.assert_not_called()
+        assert result.idempotent_skip is not None
+        assert "force" in result.idempotent_skip.lower()
+        assert result.has_errors is False
+
+    def test_blocks_rerun_when_previous_still_running(self):
+        """A concurrent (status='running') session also gates the re-run."""
+        with patch("v2.session.get_session_for_date") as mock_get, \
+             patch("v2.session.run_pipeline") as mock_pipeline:
+
+            mock_get.return_value = {"id": 1, "status": "running"}
+
+            result = run_session(dry_run=False)
+
+        mock_pipeline.assert_not_called()
+        assert result.idempotent_skip is not None
+
+    def test_force_overrides_failed_session_gate(self):
+        """--force is the deliberate-retry path after a failed session."""
         with patch("v2.session.get_session_for_date") as mock_get, \
              patch("v2.session.insert_session_record", return_value=2), \
              patch("v2.session.complete_session"), \
@@ -448,7 +480,7 @@ class TestSessionIdempotency:
 
             mock_get.return_value = {"id": 1, "status": "failed"}
 
-            result = run_session(dry_run=False)
+            result = run_session(dry_run=False, force=True)
 
         mock_pipeline.assert_called_once()
 
@@ -495,14 +527,26 @@ class TestSessionIdempotency:
         assert err is not None
         mock_insert.assert_not_called()
 
-    def test_no_force_creates_new_session_when_prior_was_failed(self):
-        """A failed prior session does not gate; a fresh run gets its own
-        session row (no resume, no stage skipping)."""
+    def test_no_force_blocks_when_prior_was_failed(self):
+        """Any prior session row for the date gates the run — including a
+        failed one. The previous contract (failed → re-run freely) let a cron
+        double-fire after a partial failure expire the morning's playbook
+        actions and write duplicate strategist output."""
 
+        from v2.session import _check_and_record_session
+        with patch("v2.session.insert_session_record") as mock_insert, \
+             patch("v2.session.get_session_for_date", return_value={"id": 5, "status": "failed"}):
+            session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
+        assert session_id is None
+        assert err is not None
+        assert "force" in err.lower()
+        mock_insert.assert_not_called()
+
+    def test_force_creates_new_session_when_prior_was_failed(self):
         from v2.session import _check_and_record_session
         with patch("v2.session.insert_session_record", return_value=12) as mock_insert, \
              patch("v2.session.get_session_for_date", return_value={"id": 5, "status": "failed"}):
-            session_id, completed, err = _check_and_record_session(force=False, session_date=date(2026, 5, 13))
+            session_id, completed, err = _check_and_record_session(force=True, session_date=date(2026, 5, 13))
         assert session_id == 12
         assert completed == set()
         assert err is None
@@ -511,8 +555,8 @@ class TestSessionIdempotency:
 
 class TestPerStageResume:
     def test_no_resume_all_stages_run_after_prior_failure(self):
-        """Per-run sessions: a re-run after a failed prior session does NOT skip
-        any stages — every invocation runs every stage from scratch.
+        """Per-run sessions: a forced re-run after a failed prior session does
+        NOT skip any stages — every invocation runs every stage from scratch.
         """
         with patch("v2.session.get_session_for_date") as mock_get, \
              patch("v2.session.insert_session_record", return_value=2), \
@@ -530,7 +574,7 @@ class TestPerStageResume:
 
             mock_get.return_value = {"id": 1, "status": "failed"}
 
-            result = run_session(dry_run=False)
+            result = run_session(dry_run=False, force=True)
 
         mock_pipeline.assert_called_once()
         mock_strat.assert_called_once()

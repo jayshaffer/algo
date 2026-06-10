@@ -805,3 +805,147 @@ class TestDryRunPrice:
         from v2.executor import execute_market_order
         result = execute_market_order("AAPL", "buy", Decimal("5"), dry_run=True)
         assert result.filled_avg_price is None  # backwards compatible
+
+
+class TestGetAccountInfo:
+    @patch("v2.executor.get_trading_client")
+    def test_returns_decimal_fields_including_last_equity(self, mock_get_client):
+        from types import SimpleNamespace
+
+        from v2.executor import get_account_info
+
+        account = SimpleNamespace(
+            id="acct-1", status="ACTIVE",
+            cash="42000.50", portfolio_value="104523.47",
+            buying_power="84000.00", long_market_value="62000.00",
+            short_market_value="0", equity="104523.47",
+            last_equity="103000.00",
+            daytrade_count=0, pattern_day_trader=False,
+        )
+        mock_get_client.return_value.get_account.return_value = account
+
+        info = get_account_info()
+
+        assert info["portfolio_value"] == Decimal("104523.47")
+        assert info["equity"] == Decimal("104523.47")
+        # Daily-loss circuit breaker input: previous close equity.
+        assert info["last_equity"] == Decimal("103000.00")
+        assert info["pattern_day_trader"] is False
+
+
+class TestSyncPositionsFromAlpaca:
+    @patch("v2.executor.delete_position")
+    @patch("v2.executor.upsert_position")
+    @patch("v2.executor.db_get_positions")
+    @patch("v2.executor.get_trading_client")
+    def test_upserts_alpaca_positions_and_deletes_stale(
+        self, mock_get_client, mock_db_positions, mock_upsert, mock_delete,
+    ):
+        from types import SimpleNamespace
+
+        from v2.executor import sync_positions_from_alpaca
+
+        mock_get_client.return_value.get_all_positions.return_value = [
+            SimpleNamespace(symbol="AAPL", qty="10", avg_entry_price="150.25"),
+        ]
+        # DB still holds MSFT, which Alpaca no longer reports.
+        mock_db_positions.return_value = [
+            {"ticker": "AAPL", "shares": Decimal("8"), "avg_cost": Decimal("140")},
+            {"ticker": "MSFT", "shares": Decimal("5"), "avg_cost": Decimal("300")},
+        ]
+
+        synced = sync_positions_from_alpaca()
+
+        assert synced == 1
+        mock_upsert.assert_called_once_with(
+            ticker="AAPL", shares=Decimal("10"), avg_cost=Decimal("150.25"),
+        )
+        mock_delete.assert_called_once_with("MSFT")
+
+    @patch("v2.executor.delete_position")
+    @patch("v2.executor.upsert_position")
+    @patch("v2.executor.db_get_positions")
+    @patch("v2.executor.get_trading_client")
+    def test_empty_alpaca_clears_all_db_positions(
+        self, mock_get_client, mock_db_positions, mock_upsert, mock_delete,
+    ):
+        from v2.executor import sync_positions_from_alpaca
+
+        mock_get_client.return_value.get_all_positions.return_value = []
+        mock_db_positions.return_value = [
+            {"ticker": "AAPL", "shares": Decimal("8"), "avg_cost": Decimal("140")},
+        ]
+
+        synced = sync_positions_from_alpaca()
+
+        assert synced == 0
+        mock_upsert.assert_not_called()
+        mock_delete.assert_called_once_with("AAPL")
+
+
+class TestSyncOrdersFromAlpaca:
+    @patch("v2.executor.delete_open_order")
+    @patch("v2.executor.upsert_open_order")
+    @patch("v2.executor.db_get_open_orders")
+    @patch("v2.executor.get_trading_client")
+    def test_mirrors_open_orders_and_drops_resolved(
+        self, mock_get_client, mock_db_orders, mock_upsert, mock_delete,
+    ):
+        from datetime import datetime
+        from types import SimpleNamespace
+
+        from v2.executor import sync_orders_from_alpaca
+
+        submitted = datetime(2026, 6, 10, 14, 30)
+        order = SimpleNamespace(
+            id="ord-live-1", symbol="AAPL",
+            side=SimpleNamespace(value="buy"),
+            order_type=SimpleNamespace(value="market"),
+            qty="5", filled_qty="2",
+            limit_price=None, stop_price=None,
+            status=SimpleNamespace(value="partially_filled"),
+            submitted_at=submitted,
+        )
+        mock_get_client.return_value.get_orders.return_value = [order]
+        # DB holds a stale order Alpaca no longer reports as open.
+        mock_db_orders.return_value = [
+            {"order_id": "ord-stale-9", "ticker": "MSFT"},
+        ]
+
+        synced = sync_orders_from_alpaca()
+
+        assert synced == 1
+        mock_upsert.assert_called_once_with(
+            order_id="ord-live-1", ticker="AAPL", side="buy",
+            order_type="market", qty=Decimal("5"), filled_qty=Decimal("2"),
+            limit_price=None, stop_price=None, status="partially_filled",
+            submitted_at=submitted,
+        )
+        mock_delete.assert_called_once_with("ord-stale-9")
+
+
+class TestTakeAccountSnapshot:
+    @patch("v2.executor.insert_account_snapshot")
+    @patch("v2.executor.get_account_info")
+    def test_passes_account_fields_through(self, mock_info, mock_insert):
+        from datetime import date as date_cls
+
+        from v2.executor import take_account_snapshot
+
+        mock_info.return_value = {
+            "cash": Decimal("42000.50"),
+            "portfolio_value": Decimal("104523.47"),
+            "buying_power": Decimal("84000.00"),
+            "long_market_value": Decimal("62000.00"),
+            "short_market_value": Decimal("0"),
+        }
+        mock_insert.return_value = 77
+
+        snapshot_id = take_account_snapshot()
+
+        assert snapshot_id == 77
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["snapshot_date"] == date_cls.today()
+        assert kwargs["cash"] == Decimal("42000.50")
+        assert kwargs["portfolio_value"] == Decimal("104523.47")
+        assert kwargs["buying_power"] == Decimal("84000.00")
