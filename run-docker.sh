@@ -13,6 +13,17 @@ fi
 CMD_DESC="$*"
 FAILURE_LOG="$SCRIPT_DIR/logs/session_failures.log"
 
+# C.5: operator kill switch. `touch HALT` stops cron sessions cold; `rm HALT`
+# resumes. Checked before the EXIT trap is installed, so a halt neither tears
+# down containers nor fires the failure alert below — a deliberate halt is not
+# a failure and exits 0. In-container twin: ALGO_TRADING_HALTED (v2/session.py),
+# which also covers `task session` and manual runs that bypass this script.
+# See docs/runbook-recovery.md "Halt / Resume".
+if [ -f "$SCRIPT_DIR/HALT" ]; then
+    echo "[$(date -Is)] HALT sentinel present — skipping: $CMD_DESC"
+    exit 0
+fi
+
 # Failure alerting: every failure mode used to be silent — the EXIT trap
 # tore the containers down and cron discarded the nonzero exit. On failure
 # we now append to logs/session_failures.log and, when ALGO_ALERT_WEBHOOK_URL

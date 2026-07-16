@@ -7,6 +7,12 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Paper trading session (12:30 PM MST / 2:30 PM ET, Mon-Fri)
 30 12 * * 1-5 cd /home/jay/dev/algo/ && task paper:session
 
+# HIATUS since 2026-06 — the two jobs below are deliberately commented out.
+# See the HALT file in the repo root for why, and docs/runbook-recovery.md
+# "Halt / Resume" for the procedure. The HALT sentinel makes them no-ops even
+# if uncommented; both must be reversed to resume. This mirrors the installed
+# crontab rather than drifting from it (audit 0.1).
+#
 # Daily session (1 PM MST / 3 PM ET, Mon-Fri)
 # Stage 0: backfill outcomes + compute attribution + build constraints
 # Stage 1: news pipeline (fetch, Haiku classify, store)
@@ -14,10 +20,10 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Stage 3: Claude Haiku executor (validate, execute, log)
 # Stage 4: strategy reflection (memo, identity, rule proposals)
 # Stage 5: dashboard publish
-0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
+# 0 13 * * 1-5 /home/jay/dev/algo/run-docker.sh trading python -m v2.session
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
-0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
+# 0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
 
 # Nightly DB backups (8 PM MST, Mon-Fri) — see docs/runbook-recovery.md
 0 20 * * 1-5 cd /home/jay/dev/algo/ && task db:backup >> logs/backup.log 2>&1
