@@ -279,7 +279,15 @@ def _precheck_sell_against_alpaca(
         # submitting on stale state during Alpaca degradation is not.
         return _reject(f"live availability check failed ({e})")
 
-    if available is None or available >= decision.quantity:
+    if available is None:
+        # A.1: None means Alpaca has no position at all — strictly worse than
+        # the zero-available case below, so it must reject too. Previously it
+        # short-circuited to True: a stale DB row (position sync failures are
+        # non-fatal) could put a market sell for an unheld symbol on a live
+        # margin account, opening an unintended short.
+        return _reject(f"Alpaca reports no position (DB said {held})")
+
+    if available >= decision.quantity:
         return True
 
     if available <= Decimal("0.0001"):

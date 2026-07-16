@@ -1545,6 +1545,39 @@ class TestAlpacaPrecheck:
             run_trading_session(dry_run=False)
         mocks["update_playbook_action_status"].assert_called_with(42, "skipped")
 
+    def test_no_position_at_alpaca_rejects_sell(self, mock_db, mock_cursor):
+        """A.1: get_live_available_qty returns None specifically when Alpaca
+        says the position does not exist — strictly worse than '0 available',
+        which we already reject. Position sync failures are non-fatal, so a
+        stale DB row can outlive a closed position; on a live margin account
+        a market sell of a non-held symbol opens an unintended short.
+        """
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(return_value=None),
+            })
+            result = run_trading_session(dry_run=False)
+        mocks["execute_market_order"].assert_not_called()
+        assert decision.action == "invalid"
+        assert "no position" in decision.reasoning
+        assert result.trades_executed == 0
+        assert result.trades_failed == 1
+
+    def test_no_position_marks_playbook_action_skipped(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="sell",
+                                  intent_type="exit_full", intent_magnitude=None,
+                                  playbook_action_id=42)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]),
+                "get_live_available_qty": MagicMock(return_value=None),
+            })
+            run_trading_session(dry_run=False)
+        mocks["update_playbook_action_status"].assert_called_with(42, "skipped")
+
     def test_sell_trimmed_to_alpaca_available(self, mock_db, mock_cursor):
         """DB says 10 shares but Alpaca reports 4 available → trim to 4."""
         decision = _make_decision(ticker="AAPL", action="sell",
