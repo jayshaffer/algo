@@ -587,7 +587,9 @@ class TestDecisionRejectionTelemetry:
                  filled_qty=mock_order.call_args.kwargs["qty"],
                  filled_avg_price=Decimal("150"))), \
              patch("v2.trader._refresh_buying_power",
-                   return_value=(Decimal("10000"), Decimal("50000"), None)), \
+                   return_value=(Decimal("10000"), Decimal("50000"),
+                                 {"buying_power": Decimal("10000"),
+                                  "portfolio_value": Decimal("50000")})), \
              patch("v2.trader.close_thesis", side_effect=fake_close_thesis), \
              patch("v2.trader.check_sector_concentration", return_value=[]), \
              patch("v2.trader.check_decision_exists", return_value=None):
@@ -2926,3 +2928,78 @@ class TestLlmIdValidation:
             run_trading_session(dry_run=False)
         mocks["close_thesis"].assert_called_once_with(
             thesis_id=3, status="invalidated", reason="broken")
+
+
+class TestPostFillRefreshFailClosed:
+    """C.5(b): the per-fill daily-loss re-check was gated on `if refreshed_info
+    is not None`, so a failed post-fill account refresh silently skipped the
+    breaker and the loop kept submitting — precisely the flaky-API moment a
+    breaker matters most.
+    """
+
+    def test_refresh_failure_after_fill_halts_loop(self, mock_db, mock_cursor):
+        d1 = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        d2 = _make_decision(ticker="MSFT", action="buy", playbook_action_id=8)
+        # Call 1 feeds _snapshot_account; every later call (the post-fill
+        # refresh and its retry) fails.
+        acct = MagicMock(side_effect=(
+            [_DEFAULT_ACCOUNT] + [RuntimeError("alpaca 502")] * 6
+        ))
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[d1, d2], overrides={
+                "get_account_info": acct,
+            })
+            result = run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 1, (
+            "second buy must not be submitted after the refresh failed"
+        )
+        assert result.trades_executed == 1
+        assert any("account refresh failed" in e for e in result.errors)
+
+    def test_refresh_retries_once_before_halting(self, mock_db, mock_cursor):
+        """A single transient blip must not halt the session."""
+        d1 = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        d2 = _make_decision(ticker="MSFT", action="buy", playbook_action_id=8)
+        acct = MagicMock(side_effect=[
+            _DEFAULT_ACCOUNT,              # _snapshot_account
+            RuntimeError("transient"),     # post-fill refresh, attempt 1
+            _DEFAULT_ACCOUNT,              # post-fill refresh, attempt 2 — recovers
+            _DEFAULT_ACCOUNT,              # refresh after the second fill
+        ])
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[d1, d2], overrides={
+                "get_account_info": acct,
+            })
+            result = run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 2
+        assert result.trades_executed == 2
+        assert not [e for e in result.errors if "account refresh failed" in e]
+
+    def test_refresh_failure_emits_risk_block(self, mock_db, mock_cursor):
+        d1 = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        d2 = _make_decision(ticker="MSFT", action="buy", playbook_action_id=8)
+        acct = MagicMock(side_effect=(
+            [_DEFAULT_ACCOUNT] + [RuntimeError("alpaca 502")] * 6
+        ))
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[d1, d2], overrides={
+                "get_account_info": acct,
+            })
+            mock_rec = stack.enter_context(patch("v2.trader.record_event"))
+            run_trading_session(dry_run=False, session_id=3)
+        codes = [
+            c.kwargs.get("payload", {}).get("reason_code")
+            for c in mock_rec.call_args_list
+            if c.kwargs.get("event_type") == "risk_block"
+        ]
+        assert "account_refresh_failed" in codes
+
+    def test_dry_run_uses_local_estimate_and_continues(self, mock_db, mock_cursor):
+        """Dry runs never call Alpaca for a refresh; they must not halt."""
+        d1 = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        d2 = _make_decision(ticker="MSFT", action="buy", playbook_action_id=8)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[d1, d2])
+            result = run_trading_session(dry_run=True)
+        assert mocks["execute_market_order"].call_count == 2
+        assert not [e for e in result.errors if "account refresh failed" in e]

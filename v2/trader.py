@@ -503,16 +503,24 @@ def _refresh_buying_power(
     risk checks — the daily-loss breaker — against live state mid-loop.
     """
     if not dry_run:
-        try:
-            refreshed = get_account_info()
-            return refreshed["buying_power"], refreshed["portfolio_value"], refreshed
-        except Exception as e:
-            logger.warning("Could not refresh buying power: %s — using local estimate", e)
-            if decision.action == "buy":
-                buying_power -= trade_value
-            elif decision.action == "sell":
-                buying_power += trade_value
-            return buying_power, portfolio_value, None
+        # C.5(b): one retry before giving up. A single transient blip must not
+        # halt a session, but flying blind past a failed refresh must not
+        # silently skip the daily-loss re-check either — the caller treats a
+        # None third element on a real run as a mid-session halt.
+        for attempt in (1, 2):
+            try:
+                refreshed = get_account_info()
+                return refreshed["buying_power"], refreshed["portfolio_value"], refreshed
+            except Exception as e:
+                logger.warning(
+                    "Could not refresh buying power (attempt %d/2): %s", attempt, e,
+                )
+        logger.warning("Falling back to local buying-power estimate")
+        if decision.action == "buy":
+            buying_power -= trade_value
+        elif decision.action == "sell":
+            buying_power += trade_value
+        return buying_power, portfolio_value, None
     # Dry run: use local estimate
     if decision.action == "buy":
         buying_power -= trade_value
@@ -1173,6 +1181,28 @@ def _execute_decisions(
                     },
                 )
                 break
+        elif not dry_run:
+            # C.5(b): fail closed. Without live account state the daily-loss
+            # breaker cannot run, and a session that has already filled at
+            # least one order is exactly where an unchecked drawdown compounds.
+            # Stop submitting rather than trade blind.
+            msg = (
+                "Mid-session halt: post-fill account refresh failed after retry "
+                "— cannot verify the daily-loss breaker (failing closed)"
+            )
+            errors.append(msg)
+            logger.error("%s", msg)
+            record_event(
+                session_id=session_id,
+                stage_name="trading",
+                event_type="risk_block",
+                payload={
+                    "reason_code": "account_refresh_failed",
+                    "reason_text": msg,
+                    "trades_executed": totals.trades_executed,
+                },
+            )
+            break
 
     return totals, order_ids, order_results, decision_account_states
 
