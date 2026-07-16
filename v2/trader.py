@@ -26,6 +26,7 @@ from .context import build_executor_input
 from .database.trading_db import (
     check_decision_exists,
     close_thesis,
+    get_active_theses,
     get_pending_playbook_action_for_ticker,
     get_positions,
     insert_decision,
@@ -518,6 +519,103 @@ def _refresh_buying_power(
     elif decision.action == "sell":
         buying_power += trade_value
     return buying_power, portfolio_value, None
+
+
+def _validate_llm_ids(response, executor_input, session_id: int | None = None) -> None:
+    """A.6/D.3: validate the two LLM-authored DB pointers before they are used.
+
+    `signal_refs` are validated against the DB and tickers are normalized, but
+    thesis_id and playbook_action_id were passed straight through to
+    update_playbook_action_status() and close_thesis(). A hallucinated or
+    transposed integer could therefore mark an arbitrary historical action
+    executed, or close/invalidate an unrelated *active* thesis — silently
+    deleting a trade idea and its signal citations, with the strategist simply
+    finding it gone next session.
+
+    The executor is given thesis_id integers but no thesis text, invalidation
+    criteria, or exit triggers, so it cannot meaningfully reason about ids it
+    was never shown. Anything it did not see in today's playbook (or that the
+    DB doesn't confirm as an active thesis for that ticker) is dropped with a
+    logged warning — never fatal, mirroring how signal_refs degrade.
+    """
+    actions_by_id = {a.id: a for a in (executor_input.playbook_actions or [])}
+    known_thesis_ids = {
+        a.thesis_id for a in (executor_input.playbook_actions or [])
+        if a.thesis_id is not None
+    }
+
+    for decision in response.decisions:
+        action = None
+        if decision.playbook_action_id is not None:
+            action = actions_by_id.get(decision.playbook_action_id)
+            if action is None or action.ticker != decision.ticker:
+                logger.warning(
+                    "%s: playbook_action_id=%s is not in today's playbook for "
+                    "this ticker — treating as off-playbook",
+                    decision.ticker, decision.playbook_action_id,
+                )
+                record_event(
+                    session_id=session_id,
+                    stage_name="trading",
+                    event_type="id_validation",
+                    payload={
+                        "ticker": decision.ticker,
+                        "field": "playbook_action_id",
+                        "value": decision.playbook_action_id,
+                    },
+                )
+                decision.playbook_action_id = None
+                decision.is_off_playbook = True
+                action = None
+
+        if decision.thesis_id is not None:
+            valid = action is not None and action.thesis_id == decision.thesis_id
+            if not valid:
+                # Off-playbook exits are legitimate, so fall back to "is this
+                # an active thesis for this ticker?" rather than rejecting.
+                try:
+                    active = get_active_theses(ticker=decision.ticker)
+                    valid = any(t.get("id") == decision.thesis_id for t in active)
+                except Exception as e:
+                    logger.warning(
+                        "Could not verify thesis_id %s for %s: %s — dropping",
+                        decision.thesis_id, decision.ticker, e,
+                    )
+                    valid = False
+            if not valid:
+                logger.warning(
+                    "%s: thesis_id=%s matches neither the playbook action nor "
+                    "an active thesis for this ticker — dropping",
+                    decision.ticker, decision.thesis_id,
+                )
+                record_event(
+                    session_id=session_id,
+                    stage_name="trading",
+                    event_type="id_validation",
+                    payload={
+                        "ticker": decision.ticker,
+                        "field": "thesis_id",
+                        "value": decision.thesis_id,
+                    },
+                )
+                decision.thesis_id = None
+
+    kept = []
+    for inv in response.thesis_invalidations:
+        if inv.thesis_id in known_thesis_ids:
+            kept.append(inv)
+            continue
+        logger.warning(
+            "Dropping thesis invalidation for id=%s — not visible in today's "
+            "playbook, so the executor never saw its criteria", inv.thesis_id,
+        )
+        record_event(
+            session_id=session_id,
+            stage_name="trading",
+            event_type="id_validation",
+            payload={"field": "thesis_invalidation", "value": inv.thesis_id},
+        )
+    response.thesis_invalidations = kept
 
 
 def _handle_thesis_invalidations(invalidations, errors: list[str]) -> None:
@@ -1414,6 +1512,9 @@ def run_trading_session(
     response = _get_decisions(executor_input, model, errors, session_id=session_id)
     if response is None:
         return _empty_result(timestamp, positions_synced, orders_synced, snapshot_id, errors)
+
+    # A.6/D.3: scrub LLM-authored DB pointers before anything acts on them.
+    _validate_llm_ids(response, executor_input, session_id=session_id)
 
     # Step 5: Validate and execute trades
     logger.info("[Step 5] Executing trades")

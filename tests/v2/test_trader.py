@@ -45,12 +45,68 @@ def _make_decision(
     )
 
 
+def _playbook_actions_for(decisions, invalidations=None):
+    """Build the PlaybookActions the executor would have been shown.
+
+    One per decision citing a playbook_action_id, matching on ticker/action/
+    thesis_id so the A.6 id validator recognizes them as real. Decisions whose
+    thesis_id is meant to come from an active thesis rather than the playbook
+    still validate via the get_active_theses fallback.
+
+    Invalidated thesis ids get a carrier action too: the executor can only
+    invalidate a thesis it was shown, so a test invalidating thesis N implies
+    N was in today's playbook.
+    """
+    from v2.agent import PlaybookAction
+
+    actions = []
+    for d in decisions or []:
+        if d.playbook_action_id is None:
+            continue
+        actions.append(PlaybookAction(
+            id=d.playbook_action_id,
+            ticker=d.ticker,
+            action=d.action,
+            thesis_id=d.thesis_id,
+            reasoning="from playbook",
+            confidence="high",
+            intent_type=d.intent_type,
+            intent_magnitude=d.intent_magnitude,
+            priority=len(actions) + 1,
+        ))
+
+    known = {a.thesis_id for a in actions}
+    for inv in invalidations or []:
+        if inv.thesis_id in known:
+            continue
+        known.add(inv.thesis_id)
+        actions.append(PlaybookAction(
+            id=9000 + len(actions),
+            ticker="ZZZ",
+            action="hold",
+            thesis_id=inv.thesis_id,
+            reasoning="carries the invalidated thesis into the executor's view",
+            confidence="medium",
+            intent_type=None,
+            intent_magnitude=None,
+            priority=len(actions) + 1,
+        ))
+    return actions
+
+
 def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
     """Enter all default trader.py happy-path patches on `stack`.
 
     Returns a dict of the mocks keyed by the dependency name so tests can
     make assertions on them. `overrides` is a dict mapping dependency name
     (unqualified — patched at v2.trader.<name>) to MagicMock.
+
+    The default ExecutorInput carries a matching PlaybookAction for every
+    decision that cites a playbook_action_id, mirroring production: the
+    executor's decisions reference actions build_executor_input actually
+    showed it. Without this the A.6 validator would (correctly) treat every
+    decision in the suite as citing a hallucinated id and null it out. Tests
+    that want to simulate a hallucination override build_executor_input.
     """
     overrides = overrides or {}
     defaults = {
@@ -60,7 +116,8 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
         "get_account_info": MagicMock(return_value=_DEFAULT_ACCOUNT),
         "take_account_snapshot": MagicMock(return_value=1),
         "build_executor_input": MagicMock(return_value=ExecutorInput(
-            playbook_actions=[], positions=[], account={},
+            playbook_actions=_playbook_actions_for(decisions, invalidations),
+            positions=[], account={},
             attribution_summary={}, recent_outcomes=[],
             market_outlook="", risk_notes="",
         )),
@@ -86,6 +143,7 @@ def _happy_path(stack, *, decisions=None, invalidations=None, overrides=None):
         "insert_decision_signals_batch": MagicMock(),
         "validate_signal_refs": MagicMock(side_effect=lambda refs: refs),
         "close_thesis": MagicMock(),
+        "get_active_theses": MagicMock(return_value=[]),
         "format_decisions_for_logging": MagicMock(return_value={}),
         "check_sector_concentration": MagicMock(return_value=[]),
         "update_playbook_action_status": MagicMock(),
@@ -209,8 +267,11 @@ class TestDecisionRejectionTelemetry:
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -292,8 +353,11 @@ class TestDecisionRejectionTelemetry:
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("10000"), "cash": Decimal("5000"), "buying_power": Decimal("5000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -343,8 +407,11 @@ class TestDecisionRejectionTelemetry:
              patch("v2.trader.get_positions", return_value=[{"ticker": "AAPL", "shares": Decimal("5")}]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("10000"), "cash": Decimal("5000"), "buying_power": Decimal("5000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -443,8 +510,11 @@ class TestDecisionRejectionTelemetry:
              patch("v2.trader.close_thesis") as mock_close:
 
             mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            # A.6: the executor may only invalidate a thesis it was shown, so
+            # thesis 5 must be present in today's playbook for this to apply.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([], [inv]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="", risk_notes="",
             )
@@ -915,8 +985,11 @@ class TestFillConfirmation:
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -957,8 +1030,11 @@ class TestFillConfirmation:
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -999,8 +1075,11 @@ class TestFillConfirmation:
              patch("v2.trader.get_positions", return_value=[]):
 
             mock_acct.return_value = {"portfolio_value": Decimal("100000"), "cash": Decimal("50000"), "buying_power": Decimal("50000")}
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -1053,8 +1132,11 @@ class TestBuyingPowerRefresh:
              patch("v2.trader.insert_decision_signals_batch"), \
              patch("v2.trader.get_positions", return_value=[]):
 
+            # The playbook must contain the action the decision cites, or the
+            # A.6 validator correctly treats the id as hallucinated and nulls it.
             mock_build.return_value = ExecutorInput(
-                playbook_actions=[], positions=[], account={},
+                playbook_actions=_playbook_actions_for([decision]),
+                positions=[], account={},
                 attribution_summary={}, recent_outcomes=[],
                 market_outlook="Neutral", risk_notes="",
             )
@@ -2704,3 +2786,143 @@ class TestFailedOrderLogging:
         logged = mocks["insert_decision"].call_args.kwargs
         assert logged["action"] not in ("buy", "sell")
         assert logged["order_id"] is None
+
+
+class TestLlmIdValidation:
+    """A.6/D.3: thesis_id and playbook_action_id are LLM-authored and were the
+    only such pointers written to the DB unvalidated — signal_refs get DB
+    validation, tickers get normalization. A hallucinated or transposed id
+    could mark an arbitrary historical playbook action executed, or close /
+    invalidate an unrelated active thesis. Theses are the system's run-to-run
+    memory, and the executor (smallest model, least context) never sees their
+    text — only integers.
+    """
+
+    def _action(self, id=7, ticker="AAPL", thesis_id=3):
+        from v2.agent import PlaybookAction
+        return PlaybookAction(
+            id=id, ticker=ticker, action="buy", thesis_id=thesis_id,
+            reasoning="r", confidence="high", intent_type="invest_dollar",
+            intent_magnitude=Decimal("500"), priority=1,
+        )
+
+    def _input(self, **kw):
+        return ExecutorInput(
+            playbook_actions=[self._action(**kw)], positions=[], account={},
+            attribution_summary={}, recent_outcomes=[],
+            market_outlook="", risk_notes="",
+        )
+
+    def test_hallucinated_playbook_action_id_nulled(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=999)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "build_executor_input": MagicMock(return_value=self._input()),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.playbook_action_id is None
+        assert decision.is_off_playbook is True
+        for call in mocks["update_playbook_action_status"].call_args_list:
+            assert call.args[0] != 999
+
+    def test_ticker_mismatch_nulls_playbook_action_id(self, mock_db, mock_cursor):
+        """Action 7 is AAPL's; a MSFT decision must not claim it."""
+        decision = _make_decision(ticker="MSFT", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[decision], overrides={
+                "build_executor_input": MagicMock(return_value=self._input(ticker="AAPL")),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.playbook_action_id is None
+        assert decision.is_off_playbook is True
+
+    def test_valid_playbook_action_id_kept(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "build_executor_input": MagicMock(return_value=self._input()),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.playbook_action_id == 7
+        assert decision.is_off_playbook is False
+        mocks["update_playbook_action_status"].assert_any_call(7, "executed")
+
+    def test_hallucinated_thesis_id_not_closed_blindly(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="sell", playbook_action_id=None,
+                                  is_off_playbook=True, intent_type="exit_full",
+                                  intent_magnitude=None, thesis_id=555)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "get_active_theses": MagicMock(return_value=[]),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.thesis_id is None
+        mocks["close_thesis"].assert_not_called()
+
+    def test_thesis_id_matching_active_thesis_kept(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="sell", playbook_action_id=None,
+                                  is_off_playbook=True, intent_type="exit_full",
+                                  intent_magnitude=None, thesis_id=42)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "get_active_theses": MagicMock(return_value=[{"id": 42}]),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.thesis_id == 42
+        mocks["close_thesis"].assert_called_once()
+
+    def test_thesis_id_from_playbook_action_kept_without_db_lookup(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="sell", playbook_action_id=7,
+                                  intent_type="exit_full", intent_magnitude=None,
+                                  thesis_id=3)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "build_executor_input": MagicMock(
+                    return_value=ExecutorInput(
+                        playbook_actions=[self._action(id=7, ticker="AAPL", thesis_id=3)],
+                        positions=[], account={}, attribution_summary={},
+                        recent_outcomes=[], market_outlook="", risk_notes="")),
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "get_active_theses": MagicMock(return_value=[]),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.thesis_id == 3
+        mocks["get_active_theses"].assert_not_called()
+
+    def test_thesis_lookup_failure_drops_id(self, mock_db, mock_cursor):
+        """Fail closed: an unverifiable id must not close a thesis."""
+        decision = _make_decision(ticker="AAPL", action="sell", playbook_action_id=None,
+                                  is_off_playbook=True, intent_type="exit_full",
+                                  intent_magnitude=None, thesis_id=42)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("1")}]),
+                "get_active_theses": MagicMock(side_effect=RuntimeError("db down")),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.thesis_id is None
+        mocks["close_thesis"].assert_not_called()
+
+    def test_unknown_thesis_invalidation_dropped(self, mock_db, mock_cursor):
+        from v2.agent import ThesisInvalidation
+        inv = ThesisInvalidation(thesis_id=888, reason="gone")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[], invalidations=[inv], overrides={
+                "build_executor_input": MagicMock(return_value=self._input(thesis_id=3)),
+            })
+            run_trading_session(dry_run=False)
+        mocks["close_thesis"].assert_not_called()
+
+    def test_known_thesis_invalidation_processed(self, mock_db, mock_cursor):
+        """A thesis the executor actually saw may still be invalidated."""
+        from v2.agent import ThesisInvalidation
+        inv = ThesisInvalidation(thesis_id=3, reason="broken")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[], invalidations=[inv], overrides={
+                "build_executor_input": MagicMock(return_value=self._input(thesis_id=3)),
+            })
+            run_trading_session(dry_run=False)
+        mocks["close_thesis"].assert_called_once_with(
+            thesis_id=3, status="invalidated", reason="broken")
