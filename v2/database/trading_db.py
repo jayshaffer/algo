@@ -751,12 +751,28 @@ def replace_playbook_actions_atomic(
         """, (playbook_date, market_outlook, Json(priority_actions), watch_list, risk_notes))
         playbook_id = cur.fetchone()["id"]
 
+        # A.5: only clear actions still awaiting execution. This function runs
+        # on every write_playbook, including the strategist re-run triggered by
+        # a --force retry after a partial session. Deleting *all* actions there
+        # destroyed rows already marked executed by the earlier run and nulled
+        # their decisions.playbook_action_id — silently erasing
+        # playbook_action_history, outcome_class, and carry-forward context for
+        # trades that really filled, while leaving the decision rows claiming
+        # is_off_playbook=false with no action to point at.
         cur.execute(
             "UPDATE decisions SET playbook_action_id = NULL "
-            "WHERE playbook_action_id IN (SELECT id FROM playbook_actions WHERE playbook_id = %s)",
+            "WHERE playbook_action_id IN ("
+            "    SELECT id FROM playbook_actions "
+            "     WHERE playbook_id = %s "
+            "       AND (status = 'pending' OR status IS NULL))",
             (playbook_id,),
         )
-        cur.execute("DELETE FROM playbook_actions WHERE playbook_id = %s", (playbook_id,))
+        cur.execute(
+            "DELETE FROM playbook_actions "
+            " WHERE playbook_id = %s "
+            "   AND (status = 'pending' OR status IS NULL)",
+            (playbook_id,),
+        )
 
         from decimal import Decimal as _Decimal
         for i, action in enumerate(actions):

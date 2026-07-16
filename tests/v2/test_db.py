@@ -1584,3 +1584,59 @@ class TestLlmCallContexts:
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO llm_call_contexts" in sql
         assert "tool_definitions" in sql
+
+
+class TestReplacePlaybookActionsAtomic:
+    """A.5: a --force retry re-runs the strategist (completed_stages is always
+    empty — there is no cross-run resume), and write_playbook calls this
+    function. It used to DELETE every action for the playbook, including rows
+    already marked executed by the earlier run, after nulling their
+    decisions.playbook_action_id.
+
+    The documented retry flow makes this routine: executor fills 3 trades →
+    dashboard stage fails → session marked failed → operator retries with
+    --force. Dedup stops the trades from repeating, so nothing looks wrong;
+    meanwhile playbook_action_history, outcome_class, and carry-forward
+    context permanently lose the record that those actions were ever taken,
+    and the decision rows keep is_off_playbook=false while pointing at
+    nothing.
+    """
+
+    def _call(self, mock_cursor):
+        from v2.database.trading_db import replace_playbook_actions_atomic
+        mock_cursor.fetchone.return_value = {"id": 11}
+        return replace_playbook_actions_atomic(
+            date(2026, 7, 15), "outlook", [], "watch", "risk",
+            [{"ticker": "AAPL", "action": "buy", "thesis_id": 3,
+              "reasoning": "r", "confidence": "high",
+              "intent_type": "invest_dollar", "intent_magnitude": "500"}],
+        )
+
+    def _statements(self, mock_cursor):
+        return [c.args[0] for c in mock_cursor.execute.call_args_list]
+
+    def test_only_pending_actions_are_deleted(self, mock_db, mock_cursor):
+        self._call(mock_cursor)
+        delete = next(
+            s for s in self._statements(mock_cursor)
+            if s.strip().startswith("DELETE FROM playbook_actions")
+        )
+        assert "status = 'pending'" in delete
+        assert "status IS NULL" in delete
+
+    def test_only_pending_decision_links_are_severed(self, mock_db, mock_cursor):
+        self._call(mock_cursor)
+        unlink = next(
+            s for s in self._statements(mock_cursor)
+            if "SET playbook_action_id = NULL" in s
+        )
+        assert "status = 'pending'" in unlink
+        assert "status IS NULL" in unlink
+
+    def test_still_upserts_playbook_and_inserts_actions(self, mock_db, mock_cursor):
+        playbook_id, count = self._call(mock_cursor)
+        stmts = self._statements(mock_cursor)
+        assert playbook_id == 11
+        assert count == 1
+        assert any("INSERT INTO playbooks" in s for s in stmts)
+        assert any("INSERT INTO playbook_actions" in s for s in stmts)
