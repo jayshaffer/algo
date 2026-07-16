@@ -2610,3 +2610,97 @@ class TestIntraBatchDedup:
             for c in mock_rec.call_args_list
         ]
         assert "intra_batch_duplicate" in codes
+
+
+class TestFailedOrderLogging:
+    """A.3: submit/fill failures left decision.action untouched, unlike every
+    pre-submit rejection path (which stamps [REJECTED:] + action='invalid').
+    _log_decisions then inserted a real buy/sell row with a quantity and a
+    fresh trade price — a trade that never happened, eligible for backfill
+    (action IN ('buy','sell') AND price IS NOT NULL) and attribution. The
+    phantom row also tripped pre-submit dedup, so even --force couldn't place
+    the intended trade that day.
+    """
+
+    def test_failed_submit_stamped_invalid(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, error="insufficient buying power",
+                    duplicate_client_order_id=False)),
+            })
+            result = run_trading_session(dry_run=False)
+        assert decision.action == "invalid"
+        assert "[FAILED:" in decision.reasoning
+        assert result.trades_executed == 0
+        assert result.trades_failed == 1
+        assert mocks["insert_decision"].call_args.kwargs["action"] == "invalid"
+
+    def test_failed_submit_marks_playbook_action_failed(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, error="rejected", duplicate_client_order_id=False)),
+            })
+            run_trading_session(dry_run=False)
+        mocks["update_playbook_action_status"].assert_called_with(7, "failed")
+
+    def test_failed_fill_stamped_invalid(self, mock_db, mock_cursor):
+        """The 4 PM queue/timeout case: submitted, never filled, cancelled."""
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=False, error="timeout after 30s", order_id="ord-1",
+                    filled_qty=None, filled_avg_price=None)),
+            })
+            result = run_trading_session(dry_run=False)
+        assert decision.action == "invalid"
+        assert "[FAILED:" in decision.reasoning
+        assert result.trades_executed == 0
+        assert mocks["insert_decision"].call_args.kwargs["action"] == "invalid"
+
+    def test_failed_fill_marks_playbook_action_failed(self, mock_db, mock_cursor):
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "wait_for_fill": MagicMock(return_value=MagicMock(
+                    success=False, error="timeout", order_id="ord-1",
+                    filled_qty=None, filled_avg_price=None)),
+            })
+            run_trading_session(dry_run=False)
+        mocks["update_playbook_action_status"].assert_called_with(7, "failed")
+
+    def test_duplicate_client_order_id_not_stamped(self, mock_db, mock_cursor):
+        """P1.6 race-loser stays a benign skip — the winner's row is the real
+        record, and stamping the loser would write a bogus rejection row.
+        """
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, error="duplicate client_order_id",
+                    duplicate_client_order_id=True)),
+            })
+            run_trading_session(dry_run=False)
+        assert decision.action == "buy"
+        assert "[FAILED:" not in decision.reasoning
+        for call in mocks["update_playbook_action_status"].call_args_list:
+            assert call.args[1] != "failed"
+
+    def test_failed_order_not_eligible_for_backfill(self, mock_db, mock_cursor):
+        """The point of the fix: backfill selects action IN ('buy','sell'),
+        so an invalid row can never become a phantom outcome.
+        """
+        decision = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[decision], overrides={
+                "execute_market_order": MagicMock(return_value=MagicMock(
+                    success=False, error="boom", duplicate_client_order_id=False)),
+            })
+            run_trading_session(dry_run=False)
+        logged = mocks["insert_decision"].call_args.kwargs
+        assert logged["action"] not in ("buy", "sell")
+        assert logged["order_id"] is None

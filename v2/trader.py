@@ -414,6 +414,14 @@ def _execute_decision_order(
                 update_playbook_action_status(decision.playbook_action_id, "failed")
             except Exception:
                 pass
+        # A.3: stamp like every pre-submit rejection path. Without this,
+        # _log_decisions writes a real buy/sell row for an order that never
+        # executed — backfill (action IN ('buy','sell') AND price IS NOT NULL)
+        # then assigns it 7d/30d outcomes and attribution joins it, teaching
+        # the learner from a trade that never happened. The phantom row also
+        # trips pre-submit dedup, locking out same-day --force retries.
+        decision.reasoning = f"[FAILED: {result.error}] {decision.reasoning}"
+        decision.action = "invalid"
         return _DecisionOutcome(False, None, None, None, Decimal(0))
 
     # Wait for fill confirmation (skip for dry run — fills are instant)
@@ -422,6 +430,17 @@ def _execute_decision_order(
         if not fill.success:
             errors.append(f"{decision.ticker} fill failed: {fill.error}")
             logger.error("  %s: fill failed: %s", decision.ticker, fill.error)
+            # A.3: same treatment as a failed submit. This is the 4 PM case —
+            # a DAY order submitted after the close queues, wait_for_fill times
+            # out at 30s and cancels, and the never-executed trade was being
+            # recorded as real with a fresh trade price.
+            if decision.playbook_action_id:
+                try:
+                    update_playbook_action_status(decision.playbook_action_id, "failed")
+                except Exception:
+                    pass
+            decision.reasoning = f"[FAILED: {fill.error}] {decision.reasoning}"
+            decision.action = "invalid"
             return _DecisionOutcome(False, None, None, None, Decimal(0))
         result = fill  # Use fill data
 
