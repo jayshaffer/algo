@@ -18,3 +18,7 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
 0 5 * * 0 /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
+
+# Nightly DB backups (8 PM MST, Mon-Fri) — see docs/runbook-recovery.md
+0 20 * * 1-5 cd /home/jay/dev/algo/ && task db:backup >> logs/backup.log 2>&1
+5 20 * * 1-5 cd /home/jay/dev/algo/ && task paper:db:backup >> logs_paper/backup.log 2>&1
