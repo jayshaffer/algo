@@ -301,6 +301,57 @@ def _precheck_sell_against_alpaca(
     return True
 
 
+def _reject_intra_batch_duplicates(response, session_id: int | None = None) -> int:
+    """A.2: reject duplicate (ticker, action) decisions within one response.
+
+    The three existing dedup layers all miss this case:
+      - pre-submit DB dedup reads `decisions` rows, but those are only written
+        in Step 6, after the whole execution loop;
+      - client_order_id is signed with the playbook_action_id, so a playbook
+        buy and an off-playbook buy of the same ticker get different keys and
+        Alpaca accepts both;
+      - tool_write_playbook's uniqueness check can't see off-playbook adds.
+
+    Both duplicates filled (double position size) and only one got a decision
+    row — the second was silently dropped at logging time by the dedup skip or
+    the idx_decisions_dedup partial index, leaving an untracked order with no
+    reasoning, no signal links, and no backfilled outcome.
+
+    The playbook-backed decision wins regardless of batch order so signal and
+    thesis linkage survive. Returns the number rejected.
+    """
+    rejected = 0
+    seen: dict[tuple[str, str], ExecutorDecision] = {}
+    for decision in response.decisions:
+        if decision.action not in ("buy", "sell"):
+            continue
+        key = (decision.ticker, decision.action)
+        prior = seen.get(key)
+        if prior is None:
+            seen[key] = decision
+            continue
+        if prior.playbook_action_id is None and decision.playbook_action_id is not None:
+            loser, seen[key] = prior, decision
+        else:
+            loser = decision
+        reason = (
+            f"duplicate {loser.action} for {loser.ticker} within one executor "
+            "batch"
+        )
+        logger.warning("%s: SKIP - %s", loser.ticker, reason)
+        _record_decision_rejection(
+            session_id=session_id,
+            stage_name="trading",
+            decision=loser,
+            reason_code="intra_batch_duplicate",
+            reason_text=reason,
+        )
+        loser.reasoning = f"[REJECTED: {reason}] {loser.reasoning}"
+        loser.action = "invalid"
+        rejected += 1
+    return rejected
+
+
 @dataclass
 class _DecisionOutcome:
     executed: bool
@@ -888,6 +939,10 @@ def _execute_decisions(
     portfolio_value = account_info["portfolio_value"]
 
     totals = _ExecutionTotals()
+    # A.2: stamp intra-batch duplicates invalid before the loop, so the
+    # rejection is visible to _log_decisions as an audit row rather than
+    # producing a second untracked fill.
+    totals.trades_failed += _reject_intra_batch_duplicates(response, session_id=session_id)
     max_trades_per_session = 10
     order_ids: dict = {}
     order_results: dict = {}
@@ -913,6 +968,13 @@ def _execute_decisions(
         if decision.action == "hold":
             logger.info("%s: HOLD - %s...", decision.ticker, decision.reasoning[:50])
             _handle_hold_playbook_status(decision, session_date)
+            continue
+
+        # A.2: already stamped invalid before the loop (intra-batch duplicate).
+        # It is counted in trades_failed and kept in the list so Step 6 logs the
+        # rejection audit row — but resolving its intent would raise IntentError
+        # ("unsupported action: invalid") and double-count the failure.
+        if decision.action == "invalid":
             continue
 
         if totals.trades_executed >= max_trades_per_session:

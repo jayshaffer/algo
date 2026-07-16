@@ -458,10 +458,14 @@ class TestDecisionRejectionTelemetry:
         mock_close.assert_called_once_with(thesis_id=5, status="invalidated", reason="Conditions changed")
 
     def test_positions_dict_refreshed_after_each_fill(self, mock_db, mock_cursor):
-        """Two sequential sells of the same ticker must see the post-fill
-        share count, not the pre-loop snapshot. The thesis-lifecycle close
-        test depends on `held_before - decision.quantity == 0` after a full
-        sell across multiple decisions.
+        """A later decision for a ticker must see the post-fill share count,
+        not the pre-loop snapshot — the thesis-lifecycle close depends on
+        `held_before - filled_qty == 0`.
+
+        Exercised with buy-then-sell: A.2 now rejects two same-action
+        decisions for one ticker as an intra-batch duplicate (the DB's
+        idx_decisions_dedup could never record both anyway), so buy→sell is
+        the remaining way two fills touch the same ticker in one batch.
         """
         from datetime import date
         from decimal import Decimal
@@ -472,15 +476,15 @@ class TestDecisionRejectionTelemetry:
 
         decisions = [
             ExecutorDecision(
-                ticker="AAPL", action="sell",
-                reasoning="first half", thesis_id=42,
-                intent_type="exit_partial_pct", intent_magnitude=Decimal("50"),
+                ticker="AAPL", action="buy",
+                reasoning="add 10 shares", thesis_id=42,
+                intent_type="invest_dollar", intent_magnitude=Decimal("1500"),
                 playbook_action_id=None, is_off_playbook=False,
                 confidence="high",
             ),
             ExecutorDecision(
                 ticker="AAPL", action="sell",
-                reasoning="second half", thesis_id=42,
+                reasoning="exit everything", thesis_id=42,
                 intent_type="exit_full", intent_magnitude=None,
                 playbook_action_id=None, is_off_playbook=False,
                 confidence="high",
@@ -490,7 +494,9 @@ class TestDecisionRejectionTelemetry:
             decisions=decisions, market_summary="", risk_assessment="",
             thesis_invalidations=[],
         )
-        positions = {"AAPL": Decimal("100")}
+        # 10 shares @ $150 = $1,500 of a $50,000 book — well under the
+        # max-position cap, so the buy resolves rather than clamping to 0.
+        positions = {"AAPL": Decimal("10")}
         account_info = {"buying_power": Decimal("10000"), "portfolio_value": Decimal("50000")}
         errors: list[str] = []
 
@@ -499,35 +505,40 @@ class TestDecisionRejectionTelemetry:
         def fake_close_thesis(*, thesis_id, status, reason):
             closed_thesis_ids.append(thesis_id)
 
+        def fake_order(*, ticker, side, qty, dry_run, simulated_price, client_order_id):
+            return MagicMock(success=True, order_id="O1", error=None,
+                             filled_qty=qty, filled_avg_price=Decimal("150"))
+
         with patch("v2.trader.get_latest_price_with_reason", return_value=(Decimal("150"), None)), \
              patch("v2.trader._precheck_sell_against_alpaca", return_value=True), \
-             patch("v2.trader.execute_market_order") as mock_order, \
-             patch("v2.trader.wait_for_fill") as mock_wait, \
+             patch("v2.trader.execute_market_order", side_effect=fake_order) as mock_order, \
+             patch("v2.trader.wait_for_fill", side_effect=lambda oid: MagicMock(
+                 success=True, order_id=oid, error=None,
+                 filled_qty=mock_order.call_args.kwargs["qty"],
+                 filled_avg_price=Decimal("150"))), \
              patch("v2.trader._refresh_buying_power",
                    return_value=(Decimal("10000"), Decimal("50000"), None)), \
              patch("v2.trader.close_thesis", side_effect=fake_close_thesis), \
+             patch("v2.trader.check_sector_concentration", return_value=[]), \
              patch("v2.trader.check_decision_exists", return_value=None):
-            order_result = MagicMock(success=True, order_id="O1",
-                                     filled_qty=Decimal("50"),
-                                     filled_avg_price=Decimal("150"))
-            mock_order.return_value = order_result
-            mock_wait.return_value = order_result
 
             _execute_decisions(
                 response, positions, account_info, MagicMock(),
                 False, errors, date(2026, 5, 3),
             )
 
-        # After both sells, the second sell's thesis-lifecycle must compute
-        # remaining=0 and close thesis 42. With the bug present, the second
-        # sell sees positions["AAPL"]=100 (stale), remaining=50, and the
-        # thesis stays open.
+        # $1,500 / $150 = 10 shares bought → 20 held. The exit_full must size
+        # against 20, not the stale pre-loop 10.
+        sell_qty = mock_order.call_args_list[1].kwargs["qty"]
+        assert sell_qty == Decimal("20"), (
+            f"exit_full should size against the post-buy 20 shares, got {sell_qty}. "
+            "positions dict was not refreshed between decisions."
+        )
         assert 42 in closed_thesis_ids, (
-            "Thesis 42 should close after two 50-share sells from a 100-share "
-            "position. positions dict was not refreshed between decisions."
+            "Thesis 42 should close once the full position is sold."
         )
         assert positions["AAPL"] == Decimal("0"), (
-            f"positions['AAPL'] should be 0 after both sells, got {positions['AAPL']}"
+            f"positions['AAPL'] should be 0 after the exit, got {positions['AAPL']}"
         )
 
 
@@ -2479,3 +2490,123 @@ class TestClientOrderIdPlumbing:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1
+
+
+class TestIntraBatchDedup:
+    """A.2: all three dedup layers are blind to duplicates *within one*
+    executor response — decision rows are only written after the execution
+    loop, and a playbook buy vs an off-playbook buy of the same ticker sign
+    different client_order_ids, so Alpaca accepts both. Both filled; only one
+    got a decision row (the second hit the dedup skip at logging time).
+    """
+
+    def test_duplicate_buys_execute_once_playbook_wins(self, mock_db, mock_cursor):
+        off = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                             is_off_playbook=True)
+        pb = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[off, pb])
+            result = run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 1
+        assert off.action == "invalid"
+        assert "duplicate" in off.reasoning
+        assert pb.action == "buy"
+        assert result.trades_executed == 1
+        assert result.trades_failed == 1
+
+    def test_duplicate_buys_playbook_first_still_keeps_playbook(self, mock_db, mock_cursor):
+        """Order within the batch must not decide the winner."""
+        pb = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        off = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                             is_off_playbook=True)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[pb, off])
+            run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 1
+        assert off.action == "invalid"
+        assert pb.action == "buy"
+
+    def test_two_off_playbook_duplicates_keep_first(self, mock_db, mock_cursor):
+        a = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                           is_off_playbook=True, reasoning="first")
+        b = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                           is_off_playbook=True, reasoning="second")
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[a, b])
+            run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 1
+        assert a.action == "buy"
+        assert b.action == "invalid"
+
+    def test_buy_and_sell_same_ticker_not_deduped(self, mock_db, mock_cursor):
+        """Different actions are not duplicates — only (ticker, action) pairs."""
+        buy = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        sell = _make_decision(ticker="MSFT", action="sell", playbook_action_id=8,
+                              intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[buy, sell], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "MSFT", "shares": Decimal("5")}]),
+            })
+            run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 2
+
+    def test_duplicate_holds_not_rejected(self, mock_db, mock_cursor):
+        """Holds submit no orders; dedup'ing them would lose override reasoning."""
+        h1 = _make_decision(ticker="AAPL", action="hold", playbook_action_id=None)
+        h2 = _make_decision(ticker="AAPL", action="hold", playbook_action_id=None)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[h1, h2])
+            run_trading_session(dry_run=False)
+        assert h1.action == "hold"
+        assert h2.action == "hold"
+
+    def test_staged_same_ticker_sells_rejected(self, mock_db, mock_cursor):
+        """A 'staged exit' (exit_partial_pct then exit_full for one ticker in
+        one batch) is a duplicate, not a feature: tool_write_playbook already
+        rejects duplicate (ticker, action) pairs, and idx_decisions_dedup —
+        UNIQUE (date, ticker, action) for buy/sell — means the second could
+        never be recorded. Executing it produced an untracked fill.
+        """
+        first = _make_decision(ticker="AAPL", action="sell", playbook_action_id=None,
+                               is_off_playbook=True, thesis_id=42,
+                               intent_type="exit_partial_pct",
+                               intent_magnitude=Decimal("50"))
+        second = _make_decision(ticker="AAPL", action="sell", playbook_action_id=None,
+                                is_off_playbook=True, thesis_id=42,
+                                intent_type="exit_full", intent_magnitude=None)
+        with ExitStack() as stack:
+            mocks = _happy_path(stack, decisions=[first, second], overrides={
+                "get_positions": MagicMock(return_value=[{"ticker": "AAPL", "shares": Decimal("100")}]),
+            })
+            run_trading_session(dry_run=False)
+        assert mocks["execute_market_order"].call_count == 1
+        assert first.action == "sell"
+        assert second.action == "invalid"
+
+    def test_rejected_duplicate_not_double_counted(self, mock_db, mock_cursor):
+        """The stamped-invalid loser must be skipped by the execution loop —
+        resolving its intent would raise IntentError ('unsupported action:
+        invalid') and count the same rejection twice.
+        """
+        off = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                             is_off_playbook=True)
+        pb = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[off, pb])
+            result = run_trading_session(dry_run=False)
+        assert result.trades_failed == 1
+        assert not [e for e in result.errors if "intent error" in e.lower()]
+
+    def test_dedup_emits_telemetry(self, mock_db, mock_cursor):
+        off = _make_decision(ticker="AAPL", action="buy", playbook_action_id=None,
+                             is_off_playbook=True)
+        pb = _make_decision(ticker="AAPL", action="buy", playbook_action_id=7)
+        with ExitStack() as stack:
+            _happy_path(stack, decisions=[off, pb])
+            mock_rec = stack.enter_context(patch("v2.trader.record_event"))
+            run_trading_session(dry_run=False, session_id=11)
+        codes = [
+            c.kwargs.get("payload", {}).get("reason_code")
+            for c in mock_rec.call_args_list
+        ]
+        assert "intra_batch_duplicate" in codes
