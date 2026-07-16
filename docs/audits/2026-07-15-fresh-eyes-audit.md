@@ -58,26 +58,53 @@ negative.
 
 ---
 
+## Status as of 2026-07-15 (post-audit work)
+
+Done on branch `fresh-eyes-audit-2026-07`: the three same-day items (0.1,
+3.1, 3.3) and **all of Tier 1** (1.1–1.6), each TDD'd — suite 1,965 → 2,050
+tests, all passing. 3.4 partly addressed by the new recovery runbook.
+
+The money path is now safe to re-enable *mechanically*, but the two questions
+that actually decide the project's future are untouched and deliberately so:
+
+- **0.2 (economics)** — still open, and still the gating decision. Nothing
+  above changes the arithmetic: ~$150–250 of inference against ≈−$35 of
+  lifetime gross trading P&L. Fixing money-path bugs does not create an edge.
+- **Tier 2 (the ratchet)** — still open. The all-hold fixed point is
+  architectural (D.1/D.2/D.4); the system will resume, hold, and learn
+  nothing until inaction produces a learning signal. Note 1.3's fix slightly
+  *reduces* recorded trade count going forward, since phantom fills no longer
+  enter the data — the true trade count was always lower than 99.
+
+Do not read "Tier 1 green" as "ready to trade": it means the known ways the
+system could lose money incorrectly are closed, not that it can make any.
+Resuming still requires the 0.2 decision (see the `HALT` file).
+
+---
+
 ## Ranked findings
 
 ### Tier 0 — Decisions, not code
 
 | # | Sev | Finding | Lens |
 |---|-----|---------|------|
-| 0.1 | 🔴 | Installed crontab has the prod session line commented out (uncommitted, undated). **Resolved 2026-07-15: the owner confirmed this is a deliberate hiatus.** Remaining action: make the hiatus visible — commit the crontab state (or document the hiatus + resume procedure) and add a proper halt mechanism (C.5) so future halts aren't ambiguous | ops |
+| 0.1 | ✅ | Installed crontab has the prod session line commented out (uncommitted, undated). **Resolved 2026-07-15: the owner confirmed this is a deliberate hiatus.** **Fixed 2026-07-15 (cf1b5be):** repo crontab synced to installed reality with the reason annotated; `HALT` sentinel file documents the hiatus and stops `run-docker.sh`; `ALGO_TRADING_HALTED` is the in-container twin; resume procedure in `docs/runbook-recovery.md` | ops |
 | 0.2 | 🔴 | Structural economics: scale deployed capital ~20–50×, cut strategist cost ~10× (Opus is 94–95% of tracked spend), or reframe as research with an explicit cost budget | econ |
 | 0.3 | 🟠 | 3 open positions (~$1,174 cost basis) have been unmonitored by the learning loop for a month. **Resolved 2026-07-15: owner fully liquidated the prod account (positions closed, cash withdrawn) — no live exposure remains.** The prod DB's `positions` table and final snapshots no longer reflect reality | econ |
 
 ### Tier 1 — Money-path safety (fix before re-enabling trading)
 
+**All six fixed 2026-07-15** (branch `fresh-eyes-audit-2026-07`). Each fix is
+TDD'd; suite went 1,965 → 2,050 tests, all passing.
+
 | # | Sev | Finding | Lens |
 |---|-----|---------|------|
-| 1.1 | 🟠 | Sell precheck passes when Alpaca reports *no position at all* — stale-state sell can reach the broker, possibly opening a short (Appendix A.1) | code |
-| 1.2 | 🟠 | Intra-batch duplicate (ticker, action) decisions all execute; second fill gets no decision row (A.2) | code |
-| 1.3 | 🟠 | Broker-rejected/timed-out orders logged as ordinary buy/sell rows — phantom trades in learning data + same-day retry lockout (A.3) | code |
-| 1.4 | 🟡 | LLM-authored `thesis_id`/`playbook_action_id` used unvalidated in DB writes; executor can close/invalidate theses it never sees (A.6, D.3) | code+arch |
-| 1.5 | 🟡 | Daily-loss breaker's per-fill re-check silently skipped when the post-fill account refresh fails (C.5) | ops |
-| 1.6 | 🟡 | `--force` retry deletes already-executed playbook actions and severs decision linkage (A.5) | code |
+| 1.1 | ✅ | Sell precheck passes when Alpaca reports *no position at all* — stale-state sell can reach the broker, possibly opening a short (Appendix A.1). **Fixed (8291e1d):** `available is None` now rejects like the zero-available branch | code |
+| 1.2 | ✅ | Intra-batch duplicate (ticker, action) decisions all execute; second fill gets no decision row (A.2). **Fixed (864c263):** `_reject_intra_batch_duplicates` stamps losers invalid before the loop, playbook-backed decision wins — extends the invariant `tool_write_playbook` already enforces | code |
+| 1.3 | ✅ | Broker-rejected/timed-out orders logged as ordinary buy/sell rows — phantom trades in learning data + same-day retry lockout (A.3). **Fixed (368a651):** both failure paths stamp `[FAILED: ...]` + `action="invalid"`, keeping them out of backfill/attribution | code |
+| 1.4 | ✅ | LLM-authored `thesis_id`/`playbook_action_id` used unvalidated in DB writes; executor can close/invalidate theses it never sees (A.6, D.3). **Fixed (8ba6ecb):** `_validate_llm_ids` drops ids not in today's playbook / not an active thesis for the ticker; invalidations limited to theses the executor was shown | code+arch |
+| 1.5 | ✅ | Daily-loss breaker's per-fill re-check silently skipped when the post-fill account refresh fails (C.5). **Fixed (60c7399):** one retry, then fail closed with an `account_refresh_failed` risk_block. (C.5a — breaker fails open on missing `last_equity` — remains open by design) | ops |
+| 1.6 | ✅ | `--force` retry deletes already-executed playbook actions and severs decision linkage (A.5). **Fixed (ea9091d):** only pending/NULL-status actions are cleared | code |
 
 ### Tier 2 — Restore the learning gradient
 
@@ -94,10 +121,10 @@ negative.
 
 | # | Sev | Finding | Lens |
 |---|-----|---------|------|
-| 3.1 | 🔴 | Zero DB backups — entire learning history is one docker volume inside the WSL2 VHD (C.1) | ops |
+| 3.1 | ✅ | Zero DB backups — entire learning history is one docker volume inside the WSL2 VHD (C.1). **Fixed 2026-07-15 (785a612):** `task db:backup` / `paper:db:backup` (`pg_dump -Fc`, keep 14, optional `ALGO_BACKUP_COPY_DIR` off-WSL copy), nightly cron, restore procedure rehearsed — both dumps verified readable (27 `TABLE DATA` entries) | ops |
 | 3.2 | 🟠 | Alerting configured nowhere; paper cron bypasses the alert wrapper; no "session didn't run today" detection (C.2, C.3) | ops |
-| 3.3 | 🟠 | Prod DB missing migrations 013–015: Opus priced 3× high, fable-5 supervisor unpriced and untracked, cost ceiling miscounting (B.4) | econ |
-| 3.4 | 🟠 | Machine loss is unrecoverable-by-documentation: secrets ×4 vendors, Task Scheduler cron-start trick, true crontab state all host-only (C.4, C.6) | ops |
+| 3.3 | ✅ | Prod DB missing migrations 013–015: Opus priced 3× high, fable-5 supervisor unpriced and untracked, cost ceiling miscounting (B.4). **Fixed 2026-07-15:** `task db:migrate` applied 013–015; `claude-fable-5` now priced ($10/$50), Opus 4.x corrected $15/$75 → $5/$25. Paper was already current — the drift was prod-only | econ |
+| 3.4 | 🟡 | Machine loss is unrecoverable-by-documentation: secrets ×4 vendors, Task Scheduler cron-start trick, true crontab state all host-only (C.4, C.6). **Partly fixed 2026-07-15 (785a612):** `docs/runbook-recovery.md` adds the secrets inventory, host bootstrap (incl. the Task Scheduler dependency), and restore path. Remaining: an encrypted off-host copy of the env files — nothing backs up `.env`/`.env.paper` | ops |
 | 3.5 | 🟡 | All Python deps float (`>=`), base images/wrangler unpinned, no restart policies, unbounded docker json logs (C.7–C.9) | ops |
 
 ### Tier 4 — Worth a ticket, not urgent
@@ -149,7 +176,7 @@ see D.7).
 # Appendix A — Code correctness (v2 money path)
 
 ### A.1 Sell precheck passes when Alpaca reports *no position at all* — stale-state sell can reach the broker (and can open an unintended short)
-**Severity: high**
+**Severity: high** · **FIXED 2026-07-15 (8291e1d)**
 
 `v2/trader.py:275-293`:
 ```python
@@ -178,7 +205,7 @@ or broker rejection (which then triggers A.3's phantom decision row).
 `_reject("Alpaca reports no position (DB said {held})")`.
 
 ### A.2 Duplicate same-ticker/same-action decisions within one executor response all execute, but only one gets a decision row
-**Severity: high**
+**Severity: high** · **FIXED 2026-07-15 (864c263)**
 
 All three dedup layers share the same blind spot for intra-batch duplicates:
 - Pre-submit DB dedup (`trader.py:823-843`) checks `check_decision_exists`, but
@@ -207,7 +234,7 @@ the playbook-backed one), or track an in-memory `submitted` set alongside
 `check_decision_exists`.
 
 ### A.3 Broker-rejected / timed-out / failed-fill orders are logged as ordinary buy/sell decision rows — phantom trades in the learning data, and same-day retry lockout
-**Severity: high**
+**Severity: high** · **FIXED 2026-07-15 (368a651)**
 
 When `execute_market_order` fails or `wait_for_fill` returns failure
 (`trader.py:337-366`), the code appends to `errors` and returns
@@ -250,7 +277,7 @@ baked permanently into `signal_attribution`, rules, and reflection.
 completed daily bar.
 
 ### A.5 `--force` re-run after a partially completed session destroys the day's executed playbook_action rows and severs decision linkage
-**Severity: medium**
+**Severity: medium** · **FIXED 2026-07-15 (ea9091d)**
 
 `_check_and_record_session` always returns `completed_stages = set()`
 (`session.py:165-200`), so a `--force` retry re-runs the strategist. The
@@ -271,7 +298,7 @@ double-trading; the learning-data damage is silent.
 when any action for the date is non-pending.
 
 ### A.6 LLM-authored `thesis_id` / `playbook_action_id` are used unvalidated in DB writes
-**Severity: medium**
+**Severity: medium** · **FIXED 2026-07-15 (8ba6ecb)** — see `_validate_llm_ids` in `v2/trader.py`
 
 - `agent.py:369-380`: both IDs accepted raw — no check that they exist, belong
   to today's playbook, or match the ticker.
@@ -434,7 +461,7 @@ Gross P&L ≈ −$35 lifetime vs ~$150–250 inference: **the system has spent
 4–7× more on inference than the absolute value of everything it has ever made
 or lost trading.**
 
-## B-4. Prod DB missing migrations 013–015 (finding, high)
+## B-4. Prod DB missing migrations 013–015 (finding, high) — **FIXED 2026-07-15**
 
 `schema_migrations` max = `012_supervisor_memos.sql` (2026-05-28);
 `db/migrations/013–015` exist on disk, including
@@ -494,7 +521,7 @@ question.
 # Appendix C — Ops resilience
 
 ### C.1 Prod Postgres has zero backups — the entire learning history is one file on one WSL2 VHD
-**Severity: critical**
+**Severity: critical** · **FIXED 2026-07-15 (785a612)** — `task db:backup` / `paper:db:backup` + nightly cron + `docs/runbook-recovery.md`
 
 `grep -rn "pg_dump|pg_restore|backup"` hits only `RotatingFileHandler
 (backupCount=3)` (`v2/log_config.py:49`, `trading/log_config.py:40`,
@@ -551,7 +578,7 @@ idempotency gate makes this safe); C.2's dead-man's switch covers residual
 risk.
 
 ### C.5 No documented human kill switch; two breaker gaps
-**Severity: medium**
+**Severity: medium** · **PARTLY FIXED 2026-07-15** — kill switch added (cf1b5be: `HALT` file + `ALGO_TRADING_HALTED`); gap (b) post-fill refresh now fails closed (60c7399). Gap (a) — fails open on missing `last_equity` — stands, as does 'breaker halts new orders but never cancels open ones'
 
 The 432dfb5 "kill switches" are automated breakers only:
 `check_daily_loss_limit` (`v2/risk.py:114`) and the loop cost ceiling
@@ -570,7 +597,7 @@ matters. Breaker halts new orders only; never cancels open orders.
 retry-then-halt) when the post-fill refresh fails after a real fill.
 
 ### C.6 Machine loss is unrecoverable-by-documentation
-**Severity: high**
+**Severity: high** · **PARTLY FIXED 2026-07-15 (785a612)** — `docs/runbook-recovery.md` covers secrets inventory, host bootstrap, restore. Still missing: an encrypted off-host copy of `.env`/`.env.paper`
 
 `.env`/`.env.paper` (gitignored) hold Alpaca live keys, Anthropic key,
 Cloudflare account/token/project, DB creds — no secrets inventory or setup
