@@ -93,7 +93,9 @@ full set of keys.
 Cloning the repo is not enough. In order:
 
 1. **Secrets:** restore `.env` and `.env.paper` from the encrypted off-host copy
-   (or re-issue per the table above).
+   (or re-issue per the table above). Also create `.env.host` from
+   `.env.host.example` — host-side scripts read it, and it is where alerting
+   and the dead-man's switch are configured.
 2. **Stacks:** `docker compose up -d db` / `task paper:up`.
 3. **Schema:** `task db:migrate` and `task paper:db:migrate`. Fresh volumes run
    `db/init/` automatically, but long-lived volumes drift — this is the third
@@ -105,8 +107,13 @@ Cloning the repo is not enough. In order:
    **Windows Task Scheduler** to fire at login. Re-create that entry — without
    it the system goes permanently, silently quiet, and nothing alerts (audit
    C.4). This is the single least-obvious dependency in the whole setup.
-6. **Backups:** set `ALGO_BACKUP_COPY_DIR` and confirm `task db:backup` writes
-   both locally and to the off-host directory.
+6. **Backups:** set `ALGO_BACKUP_COPY_DIR` in `.env.host` and confirm
+   `task db:backup` writes both locally and to the off-host directory.
+7. **Monitoring:** set `ALGO_ALERT_WEBHOOK_URL` and per-job
+   `ALGO_HEARTBEAT_URL_*` in `.env.host`, then confirm a ping lands. Steps 4–6
+   are all silent when they fail; this is the step that makes them audible.
+   Verify with `./cron-wrap.sh smoke-test true` (success ping) and
+   `./cron-wrap.sh --ignore-halt smoke-test false` (alert + failure ping).
 
 ## Halt / Resume
 
@@ -118,15 +125,21 @@ unnoticed failure (audit 0.1, C.2).
 **Halt:**
 
 ```bash
-touch HALT      # run-docker.sh exits 0 before starting containers
+touch HALT      # cron-wrap.sh / run-docker.sh exit 0 before starting containers
 ```
 
 and/or set `ALGO_TRADING_HALTED=1` in `.env` (checked at session start inside
 the container, so it also covers `task session` / manual `python -m v2.session`
-invocations that bypass `run-docker.sh`).
+invocations that bypass the host scripts).
 
 Both paths log loudly and **exit 0** — a deliberate halt is not a failure and
-must not trip the failure alerting in `run-docker.sh`.
+must not trip the failure alerting. A halted job *does* still send its liveness
+ping: the dead-man's switch answers "is this host up and is cron firing", and
+during a hiatus the answer is yes. Without that, going quiet on purpose would
+page you exactly as loudly as going quiet by accident, and you would learn to
+ignore both.
+
+The nightly backups run under `--ignore-halt` and keep going through a hiatus.
 
 **Resume:**
 

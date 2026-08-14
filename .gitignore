@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.paper
+.env.host
 
 # Python
 __pycache__/
