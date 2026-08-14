@@ -54,6 +54,30 @@ file) → host off Jul 22–Aug 13 → nothing alerted at any step.
 
 ---
 
+## Status (updated 2026-08-13, branch `fresh-eyes-audit-2026-08`)
+
+Work started against the recommended sequence. This branch is rebased onto
+`fresh-eyes-audit-2026-07`, so the July Tier-1 fixes are underneath it and
+findings 1.1–1.6 are carried here pending that branch's merge.
+
+| Finding | Status | Where |
+|---|---|---|
+| 0.1 July branch stranded | **blocked on you** — `gh` token lacks `createPullRequest`; PR body prepared, branch verified fast-forward | — |
+| 0.2 hiatus only in local state | **fixed** (July `cf1b5be` + crontab installed) | `crontab`, `HALT` |
+| 0.3 no alerting anywhere | **fixed in code, needs your URLs** | `e60c0ba` |
+| 2.2 `db/init` can't reproduce live schema | **fixed + enforced** | `213f82c` |
+| 2.3 backups stale / in-repo | **fixed** — off-WSL copies verified, cron installed | `1feba0a`, `d03a0e0` |
+| hygiene: tracked `settings.local.json`, un-gitignored dirs | **fixed** | `d03a0e0` |
+| Stale-but-live weekly `v2.learn` cron | **fixed** — line retired, crontab installed | `crontab` |
+
+Still open and untouched: 0.4, 1.7–1.10, the July carryovers (A.7, A.9), 2.1,
+2.4–2.8, and all of Tier 3.
+
+Two things still need you, and nothing below is safe to resume without them:
+open the `fresh-eyes-audit-2026-07` PR, and fill in `.env.host` with a real
+webhook URL and per-job heartbeat URLs. The alerting code is inert until those
+values exist — which is precisely the failure mode this audit is about.
+
 ## Tier 0 — before anything else runs
 
 ### 0.1 (P0) The July safety layer is stranded on an unmerged branch
