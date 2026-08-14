@@ -28,6 +28,9 @@ htmlcov/
 # Local dashboard data snapshots — published artifacts, not source
 public_dashboard/data/
 
+# Cloudflare Wrangler local state (dashboard publish)
+.wrangler/
+
 # IDE
 .vscode/
 .idea/
@@ -46,6 +49,7 @@ backups/
 
 # Claude
 .claude/settings.local.json
+.claude/worktrees/
 
 # Superpowers brainstorm artifacts
 .superpowers/
