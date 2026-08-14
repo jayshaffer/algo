@@ -1,5 +1,9 @@
 -- 005_drop_audit_tables.sql
 --
+-- mirror-check: no-init-mirror — nothing for a fresh volume to do. Current
+-- db/init/ never creates these tables, so there is no init counterpart to
+-- write; the DROP IF EXISTS statements are a harmless no-op there.
+--
 -- Drops the audit-related tables. The audit is being rewritten as a
 -- Claude Code /loop driven by docs/audit-playbook.md; Jira is the
 -- canonical store for findings now.

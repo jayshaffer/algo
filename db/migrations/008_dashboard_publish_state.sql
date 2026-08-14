@@ -1,4 +1,4 @@
--- db/migrations/008_dashboard_publish_state.sql
+-- db/migrations/008_dashboard_publish_state.sql (mirror of db/init/030)
 -- Persistent dashboard publish state for incremental public changelog ranges.
 
 CREATE TABLE IF NOT EXISTS dashboard_publish_state (

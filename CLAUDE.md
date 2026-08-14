@@ -130,11 +130,29 @@ The strategist maintains continuity between sessions via:
 - `supervisor_memos` — Free-form markdown critiques from `python -m v2.supervisor`
 
 **Migration convention:** `db/init/` only runs on a FRESH Postgres volume —
-long-lived prod/paper volumes never re-run it. Every new `db/init/NNN_*.sql`
-file MUST get a `db/migrations/*.sql` mirror, applied to live DBs with
-`task db:migrate` / `task paper:db:migrate` (tracked in `schema_migrations`).
-Skipping the mirror is how prod silently missed the fable-5 pricing row and
-the opus repricing (init/036–037) until 2026-06-10.
+long-lived prod/paper volumes never re-run it. The two directories must stay
+mirrored **in both directions**:
+
+- Every new `db/init/NNN_*.sql` needs a `db/migrations/*.sql` mirror, applied
+  to live DBs with `task db:migrate` / `task paper:db:migrate` (tracked in
+  `schema_migrations`). Skipping it is how prod silently missed the fable-5
+  pricing row and the opus repricing (init/036–037) until 2026-06-10.
+- Every new `db/migrations/*.sql` needs a `db/init/NNN_*.sql` mirror. Skipping
+  it is how `thesis_signals` and `llm_call_contexts` existed only on live
+  volumes for three months: CI seeds from `db/init/*` alone, so it was testing
+  a schema structurally different from prod, and a DR restore onto a fresh
+  volume came up missing tables the strategist writes (audit 2.2).
+
+Each file names its counterpart in a header comment (`-- mirror of
+db/init/036`). Two checks enforce this:
+
+- `tests/test_schema_mirror.py` — runs in the normal suite, checks that every
+  file declares its counterpart. Opt out with `-- mirror-check: no-init-mirror`
+  (nothing for a fresh volume to do) or `-- mirror-check: skip` (cannot be
+  replayed at all), always with a reason.
+- `db/check_mirror.sh` — runs in CI against a real Postgres. Applies every
+  migration on top of an init-seeded scratch database and fails if the schema
+  changes. Migrations must therefore be idempotent.
 
 ## Commands
 
