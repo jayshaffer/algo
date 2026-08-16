@@ -1,6 +1,11 @@
 -- db/migrations/004_audit_llm_calls.sql
 -- Per-LLM-call token accounting for audit runs.
 -- See docs/superpowers/specs/2026-05-12-opus-audit-ideation-design.md
+--
+-- mirror-check: skip — superseded by 005_drop_audit_tables.sql. Kept only as
+-- applied history. It references audit_runs, a table no longer created
+-- anywhere, so it cannot be replayed; db/check_mirror.sh skips it rather than
+-- reporting an unfixable non-idempotency.
 
 CREATE TABLE IF NOT EXISTS audit_llm_calls (
     id                      SERIAL PRIMARY KEY,
