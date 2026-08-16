@@ -174,6 +174,15 @@ Required in `.env`:
 - `ANTHROPIC_API_KEY` — Anthropic API key for Claude
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — Database credentials
 
+Kill switches (see `docs/runbook-recovery.md`, "Halt / Resume"):
+- `ALGO_TRADING_HALTED` — set to `1`/`true`/`yes` and every session becomes a
+  no-op: logs the halt and exits 0 (a deliberate halt is not a failure). Unlike
+  the knobs below it is read **at session start**, so it applies on the next run
+  with no container restart. Host-side twin: a `HALT` file in the repo root,
+  checked by `run-docker.sh` before it starts containers — that one also covers
+  the weekly `v2.learn` job. **The system is currently halted**; the repo `HALT`
+  file explains why and how to resume.
+
 Optional knobs (read at module import — container restart required after changing):
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.

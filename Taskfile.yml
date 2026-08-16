@@ -192,6 +192,34 @@ tasks:
             | psql_exec -v ON_ERROR_STOP=1 --single-transaction -f -
         done
 
+  db:backup:
+    desc: pg_dump the prod db to backups/ (keeps newest 14; set ALGO_BACKUP_COPY_DIR for an off-WSL copy)
+    deps: [docker:up]
+    cmds:
+      - |
+        mkdir -p backups
+        f="backups/prod-$(date +%Y%m%d-%H%M%S).dump"
+        docker compose exec -T db pg_dump -U algo -d trading -Fc > "$f"
+        echo "==> wrote $f ($(du -h "$f" | cut -f1))"
+        ls -t backups/prod-*.dump | tail -n +15 | xargs -r rm --
+        if [ -n "${ALGO_BACKUP_COPY_DIR:-}" ]; then
+          mkdir -p "$ALGO_BACKUP_COPY_DIR" && cp "$f" "$ALGO_BACKUP_COPY_DIR"/ && echo "==> copied to $ALGO_BACKUP_COPY_DIR"
+        fi
+
+  paper:db:backup:
+    desc: pg_dump the paper db to backups/ (keeps newest 14; set ALGO_BACKUP_COPY_DIR for an off-WSL copy)
+    deps: [paper:up]
+    cmds:
+      - |
+        mkdir -p backups
+        f="backups/paper-$(date +%Y%m%d-%H%M%S).dump"
+        docker compose -f docker-compose.yml -f docker-compose.paper.yml exec -T db-paper pg_dump -U algo -d trading -Fc > "$f"
+        echo "==> wrote $f ($(du -h "$f" | cut -f1))"
+        ls -t backups/paper-*.dump | tail -n +15 | xargs -r rm --
+        if [ -n "${ALGO_BACKUP_COPY_DIR:-}" ]; then
+          mkdir -p "$ALGO_BACKUP_COPY_DIR" && cp "$f" "$ALGO_BACKUP_COPY_DIR"/ && echo "==> copied to $ALGO_BACKUP_COPY_DIR"
+        fi
+
   # ---------------------------------------------------------------------------
   # Audit (driven by docs/audit-playbook.md + Claude Code /loop)
   # ---------------------------------------------------------------------------

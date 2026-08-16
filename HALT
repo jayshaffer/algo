@@ -1,0 +1,28 @@
+Trading hiatus — deliberate halt.
+
+Since:   2026-06 (owner decision; confirmed 2026-07-15 during the fresh-eyes audit)
+
+Why:     The prod Alpaca account was fully liquidated — positions closed, cash
+         withdrawn, account inert. Economics are under review (audit finding
+         0.2: lifetime gross trading P&L ~= -$35 against ~$150-250 of API
+         spend), and the Tier 1 money-path fixes were prerequisites for
+         re-enabling the cron.
+
+Effect:  run-docker.sh exits 0 while this file exists, so the cron session and
+         weekly learn jobs are no-ops. ALGO_TRADING_HALTED in .env is the
+         in-container twin, covering `task session` and manual invocations.
+         Neither is a failure: both log loudly and exit 0.
+
+Before this file existed, the halt lived only in a hand-edited installed
+crontab — uncommitted, undated, and identical in appearance to a system that
+had silently stalled. That ambiguity is the thing this file exists to remove.
+
+Resume:  docs/runbook-recovery.md, "Halt / Resume". Short version: review the
+         audit's Tier 1 / 0.2 status, `rm HALT`, clear ALGO_TRADING_HALTED,
+         uncomment the session lines in `crontab`, reinstall with
+         `crontab /home/jay/dev/algo/crontab`, and commit — a resume should be
+         as visible in git as the halt.
+
+         Note: re-depositing capital will read as a giant equity jump to the
+         dashboard and the reflection stage, which cannot distinguish deposits
+         from performance (audit B.6/2.6).

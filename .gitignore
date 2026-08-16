@@ -38,6 +38,9 @@ public_dashboard/data/
 # Data
 *.db
 
+# DB backups (task db:backup / paper:db:backup) — see docs/runbook-recovery.md
+backups/
+
 # Git worktrees
 .worktrees/
 

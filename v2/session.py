@@ -14,6 +14,7 @@ subsequent stages from running.
 
 import argparse
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -160,6 +161,21 @@ def _log_session_costs(session_id: int | None) -> None:
         logger.info("  %-12s $%.4f  (%s)", r["stage_name"] + ":", float(r["cost_usd"]), r["model"])
     total = sum(float(r["cost_usd"]) for r in priced)
     logger.info("  Total: $%.4f", total)
+
+
+def _trading_halted() -> bool:
+    """C.5: read the operator kill switch.
+
+    Read at call time (not import) so `docker compose exec` invocations pick
+    up an .env change without a container restart — unlike the other ALGO_*
+    knobs, a halt must take effect on the next session, immediately.
+
+    Deliberately strict: only unambiguous affirmatives halt. A typo'd value
+    running the session is a better failure than one silently halting it.
+    """
+    return os.environ.get("ALGO_TRADING_HALTED", "").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 def _check_and_record_session(force: bool, session_date) -> tuple[int | None, set, str | None]:
@@ -538,6 +554,24 @@ def run_session(
     force: bool = False,
 ) -> SessionResult:
     start = time.monotonic()
+
+    # C.5: explicit operator kill switch. Deliberate halts previously had no
+    # mechanism besides hand-editing the installed crontab — invisible to git
+    # and indistinguishable from an unnoticed failure. Checked before any
+    # stage, DB write, or LLM call, and before the dry-run promotion below:
+    # a dry run still spends on the pipeline/executor, so a halt stops it too.
+    # Reuses idempotent_skip so main() logs loudly and exits 0 — a deliberate
+    # halt is not a failure and must not trip run-docker.sh's alerting.
+    # Host-side twin: the HALT sentinel file checked by run-docker.sh.
+    if _trading_halted():
+        result = SessionResult()
+        result.idempotent_skip = (
+            "ALGO_TRADING_HALTED is set — session skipped "
+            "(halt/resume procedure: docs/runbook-recovery.md)"
+        )
+        logger.warning("%s", result.idempotent_skip)
+        result.duration_seconds = time.monotonic() - start
+        return result
 
     # P1.12: --dry-run was misleading — it only gated the executor's order
     # submission, leaving the strategist (writes theses/playbooks/memos) and

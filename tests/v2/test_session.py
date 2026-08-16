@@ -1630,3 +1630,72 @@ class TestSupervisorStage:
         assert result.supervisor_memo_id is None
         assert result.supervisor_error is None
         assert result.skipped_supervisor is False
+
+
+class TestTradingHalted:
+    """C.5: an explicit, git-visible operator kill switch.
+
+    The 2026-06 hiatus was implemented by hand-editing the *installed*
+    crontab — invisible to the repo and indistinguishable from an
+    unnoticed failure. ALGO_TRADING_HALTED is the in-container half of the
+    replacement (the HALT sentinel in run-docker.sh is the host half).
+    """
+
+    def test_halted_env_skips_session(self, monkeypatch):
+        monkeypatch.setenv("ALGO_TRADING_HALTED", "1")
+        with patch("v2.session.insert_session_record") as mock_insert, \
+             patch("v2.session.expire_stale_playbook_actions") as mock_expire, \
+             patch("v2.session.run_backfill") as mock_backfill, \
+             patch("v2.session.run_trading_session") as mock_trade:
+            result = run_session(dry_run=False)
+
+        assert result.idempotent_skip
+        assert "ALGO_TRADING_HALTED" in result.idempotent_skip
+        mock_insert.assert_not_called()
+        mock_expire.assert_not_called()
+        mock_backfill.assert_not_called()
+        mock_trade.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "  1  "])
+    def test_halt_truthy_values(self, monkeypatch, value):
+        monkeypatch.setenv("ALGO_TRADING_HALTED", value)
+        with patch("v2.session.run_trading_session") as mock_trade:
+            result = run_session(dry_run=False)
+        assert result.idempotent_skip
+        mock_trade.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no"])
+    def test_halt_falsy_values_do_not_skip(self, monkeypatch, value):
+        """A halt must be unambiguous — anything else runs the session."""
+        monkeypatch.setenv("ALGO_TRADING_HALTED", value)
+        with patch("v2.session.expire_stale_playbook_actions"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session") as mock_trade:
+            result = run_session(dry_run=False)
+        assert result.idempotent_skip is None
+        mock_trade.assert_called_once()
+
+    def test_unset_env_does_not_skip(self, monkeypatch):
+        monkeypatch.delenv("ALGO_TRADING_HALTED", raising=False)
+        with patch("v2.session.expire_stale_playbook_actions"), \
+             patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session") as mock_trade:
+            result = run_session(dry_run=False)
+        assert result.idempotent_skip is None
+        mock_trade.assert_called_once()
+
+    def test_halt_blocks_dry_run_too(self, monkeypatch):
+        """The halt is a whole-session stop: a dry run still costs LLM spend."""
+        monkeypatch.setenv("ALGO_TRADING_HALTED", "1")
+        with patch("v2.session.run_pipeline") as mock_pipeline:
+            result = run_session(dry_run=True)
+        assert result.idempotent_skip
+        mock_pipeline.assert_not_called()
