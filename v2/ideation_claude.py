@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -27,6 +28,18 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Strategist model. Fable 5 as of 2026-08-15 (was claude-opus-4-8); the
+# supervisor has run on it since 2026-05-27, so the agentic loop is already
+# exercised against its API surface. Read at module import — a container
+# restart is required after changing ALGO_STRATEGIST_MODEL.
+#
+# Fable 5 is priced 2x Opus 4.8 ($10/$50 per MTok). Historical strategist
+# runs averaged ~$1.42 and peaked at ~$1.94 on Opus 4.8, so ~$2.85/~$3.90
+# on Fable 5 — well under the $30 ALGO_LOOP_COST_CEILING_USD default.
+# Any model set here MUST have a model_pricing row, or the loop's cost
+# ceiling silently disables itself (claude_client._run_agentic_loop).
+DEFAULT_STRATEGIST_MODEL = os.environ.get("ALGO_STRATEGIST_MODEL", "claude-fable-5")
 
 
 CLAUDE_IDEATION_SYSTEM = """You are an autonomous investment research agent. Your job is to generate and manage trade theses using your knowledge of markets, companies, and current conditions.
@@ -322,7 +335,7 @@ def _print_cost_summary(label, result, model, created, updated, closed, summary,
 
 
 def run_ideation_claude(
-    model: str = "claude-opus-4-8",
+    model: str = DEFAULT_STRATEGIST_MODEL,
     max_turns: int = 20,
     session_id: int | None = None,
 ) -> ClaudeIdeationResult:
@@ -414,7 +427,7 @@ be reasoned about or learned from."""
 
 
 def run_strategist_loop(
-    model: str = "claude-opus-4-8",
+    model: str = DEFAULT_STRATEGIST_MODEL,
     max_turns: int = 25,
     system_prompt: str = None,
     attribution_constraints: str = "",
@@ -477,7 +490,7 @@ When you've completed your work, provide a summary of your findings and actions.
 
 
 def run_strategist_session(
-    model: str = "claude-opus-4-8",
+    model: str = DEFAULT_STRATEGIST_MODEL,
     max_turns: int = 25,
     attribution_constraints: str = "",
 ) -> ClaudeIdeationResult:
@@ -494,7 +507,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run Claude strategist session")
     parser.add_argument(
         "--model",
-        default="claude-opus-4-8",
+        default=DEFAULT_STRATEGIST_MODEL,
         help="Claude model to use",
     )
     parser.add_argument(

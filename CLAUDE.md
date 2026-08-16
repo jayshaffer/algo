@@ -184,6 +184,7 @@ Kill switches (see `docs/runbook-recovery.md`, "Halt / Resume"):
   file explains why and how to resume.
 
 Optional knobs (read at module import — container restart required after changing):
+- `ALGO_STRATEGIST_MODEL` — overrides the strategist (stage 2) model. Defaults to `claude-fable-5` (was `claude-opus-4-8` until 2026-08-15). Any value set here needs a `model_pricing` row, or the loop's cost ceiling silently disables itself.
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
 - `ALGO_DAILY_LOSS_LIMIT_PCT` — daily-loss circuit breaker (default `3.0`). Halts the trading stage when account equity is down more than this % vs the previous close (Alpaca `last_equity`); re-checked after every fill. `<= 0` disables.

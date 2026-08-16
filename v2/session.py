@@ -41,7 +41,11 @@ from .database.trading_db import (
     insert_strategy_memo,
     mark_session_market_closed,
 )
-from .ideation_claude import ClaudeIdeationResult, run_strategist_loop
+from .ideation_claude import (
+    DEFAULT_STRATEGIST_MODEL,
+    ClaudeIdeationResult,
+    run_strategist_loop,
+)
 from .log_config import setup_logging
 from .pipeline import PipelineStats, run_pipeline
 from .strategy import DEFAULT_REFLECTION_MODEL, StrategyReflectionResult, run_strategy_reflection
@@ -540,7 +544,7 @@ def _finalize_session(result: SessionResult, session_id: int | None) -> None:
 
 def run_session(
     dry_run: bool = False,
-    model: str = "claude-opus-4-8",
+    model: str = DEFAULT_STRATEGIST_MODEL,
     executor_model: str = DEFAULT_EXECUTOR_MODEL,
     max_turns: int = 25,
     skip_supervisor: bool = False,
@@ -631,7 +635,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run consolidated daily trading session")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--model", default="claude-opus-4-8")
+    parser.add_argument("--model", default=DEFAULT_STRATEGIST_MODEL)
     parser.add_argument("--executor-model", default=DEFAULT_EXECUTOR_MODEL)
     parser.add_argument("--max-turns", type=int, default=25)
     parser.add_argument("--skip-supervisor", action="store_true")
