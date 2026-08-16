@@ -8,10 +8,28 @@ Why:     The prod Alpaca account was fully liquidated — positions closed, cash
          spend), and the Tier 1 money-path fixes were prerequisites for
          re-enabling the cron.
 
-Effect:  run-docker.sh exits 0 while this file exists, so the cron session and
-         weekly learn jobs are no-ops. ALGO_TRADING_HALTED in .env is the
+Effect:  cron-wrap.sh and run-docker.sh exit 0 while this file exists, so every
+         scheduled job is a no-op. ALGO_TRADING_HALTED in .env is the
          in-container twin, covering `task session` and manual invocations.
          Neither is a failure: both log loudly and exit 0.
+
+         SCOPE CHANGE 2026-08-13: this now halts the PAPER session too. It did
+         not before, only because the paper cron called `task paper:session`
+         directly and never touched run-docker.sh — an accident of wiring, not
+         a decision. Routing every job through cron-wrap.sh (audit 0.3) made
+         the halt uniform. Paper risks no capital but does spend Anthropic
+         credits, and the system's actual cause of death was running out of
+         them, so a halt covering paper is the safer default. To let paper keep
+         running during a hiatus, add --ignore-halt to its crontab line:
+             ./cron-wrap.sh --ignore-halt paper-session task paper:session
+
+         A halted job still sends its dead-man's-switch ping. The switch
+         answers "is this host up and is cron firing", and during a deliberate
+         hiatus the answer is yes — going quiet on purpose must not look
+         identical to going quiet by accident.
+
+         The nightly backups run with --ignore-halt and continue through the
+         hiatus.
 
 Before this file existed, the halt lived only in a hand-edited installed
 crontab — uncommitted, undated, and identical in appearance to a system that

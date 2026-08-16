@@ -1,5 +1,12 @@
 version: "3"
 
+# Host-side config (ALGO_BACKUP_COPY_DIR, alerting, heartbeat URLs). Optional —
+# Task tolerates the file being absent. cron-wrap.sh sources the same file, so
+# a scheduled `task db:backup` and a hand-run one see identical settings; that
+# divergence is how the off-host backup copy stayed unconfigured. Container
+# config stays in .env / .env.paper via compose env_file.
+dotenv: [".env.host"]
+
 tasks:
   # ---------------------------------------------------------------------------
   # Infrastructure

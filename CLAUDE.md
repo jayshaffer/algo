@@ -130,11 +130,29 @@ The strategist maintains continuity between sessions via:
 - `supervisor_memos` — Free-form markdown critiques from `python -m v2.supervisor`
 
 **Migration convention:** `db/init/` only runs on a FRESH Postgres volume —
-long-lived prod/paper volumes never re-run it. Every new `db/init/NNN_*.sql`
-file MUST get a `db/migrations/*.sql` mirror, applied to live DBs with
-`task db:migrate` / `task paper:db:migrate` (tracked in `schema_migrations`).
-Skipping the mirror is how prod silently missed the fable-5 pricing row and
-the opus repricing (init/036–037) until 2026-06-10.
+long-lived prod/paper volumes never re-run it. The two directories must stay
+mirrored **in both directions**:
+
+- Every new `db/init/NNN_*.sql` needs a `db/migrations/*.sql` mirror, applied
+  to live DBs with `task db:migrate` / `task paper:db:migrate` (tracked in
+  `schema_migrations`). Skipping it is how prod silently missed the fable-5
+  pricing row and the opus repricing (init/036–037) until 2026-06-10.
+- Every new `db/migrations/*.sql` needs a `db/init/NNN_*.sql` mirror. Skipping
+  it is how `thesis_signals` and `llm_call_contexts` existed only on live
+  volumes for three months: CI seeds from `db/init/*` alone, so it was testing
+  a schema structurally different from prod, and a DR restore onto a fresh
+  volume came up missing tables the strategist writes (audit 2.2).
+
+Each file names its counterpart in a header comment (`-- mirror of
+db/init/036`). Two checks enforce this:
+
+- `tests/test_schema_mirror.py` — runs in the normal suite, checks that every
+  file declares its counterpart. Opt out with `-- mirror-check: no-init-mirror`
+  (nothing for a fresh volume to do) or `-- mirror-check: skip` (cannot be
+  replayed at all), always with a reason.
+- `db/check_mirror.sh` — runs in CI against a real Postgres. Applies every
+  migration on top of an init-seeded scratch database and fails if the schema
+  changes. Migrations must therefore be idempotent.
 
 ## Commands
 
@@ -179,15 +197,30 @@ Kill switches (see `docs/runbook-recovery.md`, "Halt / Resume"):
   no-op: logs the halt and exits 0 (a deliberate halt is not a failure). Unlike
   the knobs below it is read **at session start**, so it applies on the next run
   with no container restart. Host-side twin: a `HALT` file in the repo root,
-  checked by `run-docker.sh` before it starts containers — that one also covers
-  the weekly `v2.learn` job. **The system is currently halted**; the repo `HALT`
-  file explains why and how to resume.
+  checked by `cron-wrap.sh` and `run-docker.sh` before they start containers —
+  that one also covers the weekly `v2.learn` job. **The system is currently
+  halted**; the repo `HALT` file explains why and how to resume.
 
-Optional knobs (read at module import — container restart required after changing):
+Optional in-container knobs (read at module import — container restart required after changing):
 - `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
 - `ALGO_DAILY_LOSS_LIMIT_PCT` — daily-loss circuit breaker (default `3.0`). Halts the trading stage when account equity is down more than this % vs the previous close (Alpaca `last_equity`); re-checked after every fill. `<= 0` disables.
 - `ALGO_LOOP_COST_CEILING_USD` — per-agentic-loop cost ceiling (default `30`). The strategist/reflection/supervisor loops abort with `stop_reason="cost_ceiling"` once cumulative token cost (priced via `model_pricing`) crosses the cap. `<= 0` disables.
-- `ALGO_ALERT_WEBHOOK_URL` — optional JSON webhook (Slack/Discord/ntfy-style). `run-docker.sh` POSTs a short alert when a cron session exits nonzero; failures also append to `logs/session_failures.log`.
+
+**Host-side** variables in `.env.host` (gitignored; copy `.env.host.example`).
+These are read by scripts running on the host, *not* in a container — putting
+them in `.env`/`.env.paper` has no effect, since compose `env_file` only feeds
+containers. That exact mismatch is why alerting was documented but never
+actually wired up (audit 0.3):
+- `ALGO_ALERT_WEBHOOK_URL` — JSON webhook (Slack/Discord/ntfy-style). `cron-wrap.sh` POSTs a short alert when a wrapped job exits nonzero; failures also append to `logs/session_failures.log`.
+- `ALGO_HEARTBEAT_URL` — dead-man's switch (healthchecks.io-style). `cron-wrap.sh` pings `<URL>/start` before a job, `<URL>` on success, `<URL>/<exit-status>` on failure. The webhook tells you a job *ran and failed*; only a missing heartbeat catches "the host is off" or "cron stopped firing" — the failure mode that actually kept the system dead for two months. Per-job override: `ALGO_HEARTBEAT_URL_<LABEL>` (label uppercased, `-`→`_`); give each job its own check so one live job can't mask a dead one.
+- `ALGO_BACKUP_COPY_DIR` — off-WSL copy target for `task db:backup` / `paper:db:backup`.
+
+**Cron:** every scheduled job goes through `./cron-wrap.sh <label> <command...>`,
+which owns the HALT check, heartbeat, failure log, and alert webhook. Never add
+a bare line to `crontab` — a job outside the wrapper is a job whose failure
+nobody hears. Pass `--ignore-halt` for jobs that protect the system rather than
+trade with it (the nightly backups): HALT means "do not trade", not "do not
+protect the data".
 
 **Audit:** the audit runs as a Claude Code `/loop 24h` session driven by `docs/audit-playbook.md`. It files Jira tickets via the Atlassian MCP (no `JIRA_*` env vars required). See spec `docs/superpowers/specs/2026-05-12-audit-loop-mcp-design.md`.

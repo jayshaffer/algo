@@ -28,8 +28,14 @@ fi
 # tore the containers down and cron discarded the nonzero exit. On failure
 # we now append to logs/session_failures.log and, when ALGO_ALERT_WEBHOOK_URL
 # is set (Slack/Discord/ntfy-style JSON webhook), POST a short alert.
+#
+# cron-wrap.sh owns alerting (plus the dead-man's-switch ping) for every
+# scheduled job and sets ALGO_CRON_WRAPPED so we don't double-report. This
+# fallback stays for direct/manual invocations: the audit's recurring lesson is
+# that the un-wrapped path is exactly the one that quietly stops being covered.
 notify_failure() {
     local status="$1"
+    [ -z "${ALGO_CRON_WRAPPED:-}" ] || return 0
     local msg="[$(date -Is)] run-docker.sh failed (exit ${status}): ${CMD_DESC}"
     mkdir -p "$SCRIPT_DIR/logs"
     echo "$msg" | tee -a "$FAILURE_LOG" >&2
@@ -42,13 +48,18 @@ notify_failure() {
     fi
 }
 
+# `set -e` is still in force inside the trap, so the teardown must not be able
+# to abort the handler before it reports: a `docker compose down` that fails
+# (daemon restarting, network already gone) would otherwise kill the shell and
+# swallow the real exit status along with the alert. Report first, tear down
+# with an explicit `|| true`.
 cleanup() {
     local status=$?
-    echo "Stopping containers..."
-    docker compose down
     if [ "$status" -ne 0 ]; then
         notify_failure "$status"
     fi
+    echo "Stopping containers..."
+    docker compose down || echo "[$(date -Is)] docker compose down failed" >&2
     exit "$status"
 }
 

@@ -29,7 +29,10 @@ services:
       - ./logs:/app/logs
       - ./tests:/app/tests:ro
       - ./pytest.ini:/app/pytest.ini:ro
-      - ./db/init:/app/db/init:ro
+      # Whole db/ tree, not just init/: tests/test_schema_mirror.py compares
+      # db/init against db/migrations, and mounting only one half made the
+      # check pass vacuously in the container while failing in CI.
+      - ./db:/app/db:ro
     command: ["sleep", "infinity"]
 
   dashboard:
