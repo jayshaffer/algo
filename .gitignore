@@ -54,3 +54,6 @@ backups/
 
 # Superpowers brainstorm artifacts
 .superpowers/
+
+# Prepared PR bodies (local only)
+.pr-bodies/
