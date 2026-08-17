@@ -60,6 +60,17 @@ jobs:
             psql -h localhost -U algo -d trading -v ON_ERROR_STOP=1 -f "$f"
           done
 
+      # This job seeds Postgres from db/init/* only (above), so without this
+      # check CI silently tests a schema that differs from the long-lived prod
+      # and paper volumes — which is exactly what happened with thesis_signals
+      # and llm_call_contexts for three months (audit 2.2). Proves the two
+      # directories agree by showing that replaying every migration onto an
+      # init-seeded database changes nothing.
+      - name: Schema mirror check (db/init vs db/migrations)
+        env:
+          PGPASSWORD: algo
+        run: db/check_mirror.sh -h localhost -U algo
+
       - name: Ruff
         run: ruff check .
 

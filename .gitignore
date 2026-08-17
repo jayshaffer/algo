@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.paper
+.env.host
 
 # Python
 __pycache__/
@@ -28,6 +29,9 @@ htmlcov/
 # Local dashboard data snapshots — published artifacts, not source
 public_dashboard/data/
 
+# Cloudflare Wrangler local state (dashboard publish)
+.wrangler/
+
 # IDE
 .vscode/
 .idea/
@@ -46,6 +50,10 @@ backups/
 
 # Claude
 .claude/settings.local.json
+.claude/worktrees/
 
 # Superpowers brainstorm artifacts
 .superpowers/
+
+# Prepared PR bodies (local only)
+.pr-bodies/

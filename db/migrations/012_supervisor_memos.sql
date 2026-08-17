@@ -1,4 +1,4 @@
--- 012_supervisor_memos.sql
+-- 012_supervisor_memos.sql (mirror of db/init/033)
 -- Strategy supervisor memos. Observer-only critic output, one row per run.
 
 CREATE TABLE IF NOT EXISTS supervisor_memos (
