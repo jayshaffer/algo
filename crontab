@@ -11,7 +11,10 @@
 PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 
 # Paper trading session (12:30 PM MST / 2:30 PM ET, Mon-Fri)
-30 12 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh paper-session task paper:session
+# --ignore-halt since 2026-08-17: paper resumed (credits refilled) while the
+# prod hiatus continues — HALT here means "do not trade the live account".
+# Remove the flag to pull paper back under the halt. See HALT for scope notes.
+30 12 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt paper-session task paper:session
 
 # HIATUS since 2026-06 — the two jobs below are deliberately commented out.
 # See the HALT file in the repo root for why, and docs/runbook-recovery.md

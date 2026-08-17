@@ -31,6 +31,12 @@ Effect:  cron-wrap.sh and run-docker.sh exit 0 while this file exists, so every
          The nightly backups run with --ignore-halt and continue through the
          hiatus.
 
+         SCOPE CHANGE 2026-08-17: paper is exempted again — its crontab line
+         now carries --ignore-halt. Credits were refilled and the owner wants
+         the paper pipeline running through the prod hiatus. This file now
+         means exactly "do not trade the live account". Remove the flag from
+         the paper line to re-halt paper.
+
 Before this file existed, the halt lived only in a hand-edited installed
 crontab — uncommitted, undated, and identical in appearance to a system that
 had silently stalled. That ambiguity is the thing this file exists to remove.
