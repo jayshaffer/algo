@@ -1698,6 +1698,14 @@ class TestTradingHalted:
         assert result.idempotent_skip is None
         mock_trade.assert_called_once()
 
+    def test_halt_blocks_dry_run_too(self, monkeypatch):
+        """The halt is a whole-session stop: a dry run still costs LLM spend."""
+        monkeypatch.setenv("ALGO_TRADING_HALTED", "1")
+        with patch("v2.session.run_pipeline") as mock_pipeline:
+            result = run_session(dry_run=True)
+        assert result.idempotent_skip
+        mock_pipeline.assert_not_called()
+
 
 class TestDashboardPublishGate:
     """Stage 5 is opt-in per instance: ALGO_DASHBOARD_PUBLISH must be truthy.
@@ -1755,11 +1763,3 @@ class TestDashboardPublishGate:
             result = run_session(dry_run=False, skip_dashboard=True)
         mock_dashboard.assert_not_called()
         assert result.skipped_dashboard is True
-
-    def test_halt_blocks_dry_run_too(self, monkeypatch):
-        """The halt is a whole-session stop: a dry run still costs LLM spend."""
-        monkeypatch.setenv("ALGO_TRADING_HALTED", "1")
-        with patch("v2.session.run_pipeline") as mock_pipeline:
-            result = run_session(dry_run=True)
-        assert result.idempotent_skip
-        mock_pipeline.assert_not_called()
