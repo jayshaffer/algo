@@ -209,8 +209,8 @@ Uses the `mcp` Python SDK (new dependency in `v2/requirements.txt`).
   and its watchlist items are buffered until the memo row exists. The
   server adds `write_supervisor_memo(content)`: inserts the row with
   `status='ok'`, flushes the buffered `record_watchlist_item` calls with
-  `source_memo_id`, and returns the id. `stage-end` marks `max_turns` if the
-  cap fired before the memo was written.
+  `source_memo_id`, and returns the id. `stage-end` fails the stage (`[validator]`) if
+  the cap fired before the memo was written.
 - Every tool call is appended to a per-process JSONL the server writes to
   `/app/logs/…/<stage>/tools.jsonl` (name, args, success, error,
   duration_ms, output_chars) — the same fields `run_agentic_loop` puts in
