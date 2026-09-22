@@ -46,7 +46,7 @@ backups/paper-20260715-200500.dump
 
 ```bash
 task db:restore INSTANCE=live FILE=backups/live-<stamp>.dump
-task db:migrate INSTANCE=live   # re-apply any migrations newer than the dump; expect no output
+task db:migrate INSTANCE=live   # re-apply any migrations newer than the dump; "==> skipping" lines are normal, only "==> applying" is a red flag
 ```
 
 `task db:restore` brings the instance's stack up if it isn't already running,
@@ -114,17 +114,24 @@ Cloning the repo is not enough. In order:
    INSTANCE=paper`. Fresh volumes run `db/init/` automatically, but
    long-lived volumes drift — this is the third time that drift has bitten
    (audit 3.3). If restoring data, do the restore first, then migrate.
-4. **Cron:** `crontab /home/jay/dev/algo/crontab`.
-5. **Make cron actually run:** WSL2 does not start cron on boot. It runs only
+4. **Log directories:** `mkdir -p logs/live logs/paper` (or whichever
+   instances this host runs) *before* installing cron. The nightly backup
+   lines redirect with `>> logs/<instance>/backup.log`, and that shell
+   redirect happens before `cron-wrap.sh` runs — if `docker compose` creates
+   the directory first (as root, via the bind mount), the redirect fails
+   silently before the wrapper's HALT/heartbeat/alert logic ever gets a
+   chance to run.
+5. **Cron:** `crontab /home/jay/dev/algo/crontab`.
+6. **Make cron actually run:** WSL2 does not start cron on boot. It runs only
    because `start-wsl-cron.bat` (`wsl -u root service cron start`) is wired into
    **Windows Task Scheduler** to fire at login. Re-create that entry — without
    it the system goes permanently, silently quiet, and nothing alerts (audit
    C.4). This is the single least-obvious dependency in the whole setup.
-6. **Backups:** set `ALGO_BACKUP_COPY_DIR` in `.env.host` and confirm
+7. **Backups:** set `ALGO_BACKUP_COPY_DIR` in `.env.host` and confirm
    `task db:backup INSTANCE=<name>` writes both locally and to the off-host
    directory, for each instance this host runs.
-7. **Monitoring:** set `ALGO_ALERT_WEBHOOK_URL` and per-job
-   `ALGO_HEARTBEAT_URL_*` in `.env.host`, then confirm a ping lands. Steps 4–6
+8. **Monitoring:** set `ALGO_ALERT_WEBHOOK_URL` and per-job
+   `ALGO_HEARTBEAT_URL_*` in `.env.host`, then confirm a ping lands. Steps 5–7
    are all silent when they fail; this is the step that makes them audible.
    Verify with `./cron-wrap.sh smoke-test true` (success ping) and
    `./cron-wrap.sh --ignore-halt smoke-test false` (alert + failure ping).

@@ -185,9 +185,15 @@ def _dashboard_publish_enabled() -> bool:
     this code — publish must be something an instance's env file asks for,
     not a default it forgets to turn off. Read at call time (not import) so
     a flip takes effect on the next session without a container restart,
-    matching ALGO_TRADING_HALTED. Strict-affirmative like _trading_halted,
-    but in the opposite safety direction: a typo'd value skipping the
-    publish is a better failure than one publishing publicly.
+    matching ALGO_TRADING_HALTED — but that "no restart" property only holds
+    per-session-start when the container is actually recreated (ephemeral
+    run-docker.sh runs do this every invocation). On a long-running stack
+    (`task up`), an env-file edit needs a container recreate
+    (`task up INSTANCE=<name>`) before this function sees it, since the
+    process only re-reads its own environment, not the file on disk.
+    Strict-affirmative like _trading_halted, but in the opposite safety
+    direction: a typo'd value skipping the publish is a better failure than
+    one publishing publicly.
     """
     return os.environ.get("ALGO_DASHBOARD_PUBLISH", "").strip().lower() in (
         "1", "true", "yes",

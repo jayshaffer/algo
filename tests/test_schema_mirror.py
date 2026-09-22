@@ -87,8 +87,7 @@ def test_init_files_are_mirrored_into_migrations():
         + ".\ndb/init only runs on a fresh volume, so these changes will never "
         "reach the long-lived prod/paper databases. Add a db/migrations/*.sql "
         "mirror whose header names the init file (e.g. '-- mirror of "
-        "db/init/036'), then apply it with `task db:migrate` / "
-        "`task paper:db:migrate`."
+        "db/init/036'), then apply it with `task db:migrate INSTANCE=<name>`."
     )
 
 

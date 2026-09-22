@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# cron-wrap.sh <label> <command> [args...]
+# cron-wrap.sh [--ignore-halt] [--instance <name>] <label> <command...>
 #
 # The single cron entry point for every scheduled job in this repo. It exists
 # because the 2026-08-13 audit found the system had been dead for two months

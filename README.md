@@ -63,7 +63,9 @@ You'll need an Alpaca account (paper trading is fine for trying it), an Anthropi
 ```bash
 git clone https://github.com/jayshaffer/algo.git pinchy
 cd pinchy
-cp instances/example.env instances/paper.env   # fill in ALPACA_*, ANTHROPIC_API_KEY, POSTGRES_*
+cp instances/example.env instances/paper.env   # fill in ALPACA_*, ANTHROPIC_API_KEY, POSTGRES_*,
+                                                # and set INSTANCE=paper, unique DB_HOST_PORT/
+                                                # DASHBOARD_HOST_PORT, and LOGS_DIR=./logs/paper
 task up INSTANCE=paper
 task session:dry-run INSTANCE=paper
 ```

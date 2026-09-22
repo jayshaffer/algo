@@ -29,6 +29,9 @@ PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # 0 13 * * 1-5 /home/jay/dev/algo/cron-wrap.sh --instance live live-session /home/jay/dev/algo/run-docker.sh live trading python -m v2.session
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
+# Label kept as `weekly-learn` deliberately (not renamed to `live-learn` for
+# instance-genericisation consistency) — renaming it would orphan the
+# existing ALGO_HEARTBEAT_URL_WEEKLY_LEARN heartbeat check's continuity.
 # 0 5 * * 0 /home/jay/dev/algo/cron-wrap.sh --instance live weekly-learn /home/jay/dev/algo/run-docker.sh live trading python -m v2.learn --days 60
 
 # Nightly DB backups (8 PM MST, Mon-Fri) — see docs/runbook-recovery.md.

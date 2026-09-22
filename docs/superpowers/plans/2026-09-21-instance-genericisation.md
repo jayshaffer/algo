@@ -1135,6 +1135,7 @@ git commit -m "Docs: paper/prod duality replaced by named instances"
 **Interfaces:**
 - Consumes: everything above, merged to `main`.
 - Timing: run outside 12:20–13:30 MST (paper session) and 19:55–20:20 MST (backups). Prod is halted, so only paper timing matters.
+- Timing constraint, merge to cutover: once this branch merges to `main`, the INSTALLED (old) crontab's jobs — the paper session and both nightly backups — will fail loudly, because they call removed `paper:*`/un-instanced Taskfile targets that no longer exist on `main`. Merge and cutover must therefore happen in one sitting: morning MST, before the 12:30 paper session, or at absolute latest before the 20:00 backups.
 
 This task is a checklist, not code — execute it interactively with the operator, verifying each step's output before the next.
 

@@ -215,9 +215,13 @@ interpolation as well as the container):
 - `DB_HOST_PORT`, `DASHBOARD_HOST_PORT` — host-bound ports, unique per instance
 - `LOGS_DIR` — host directory bind-mounted at `/app/logs`
 - `ALGO_DASHBOARD_PUBLISH` — opt-in (`1`/`true`/`yes`; default false) publish
-  gate for stage 5. Read at session start, no restart needed. Exactly one
-  instance should have this set — it's what makes an instance "the" public
-  dashboard. `--skip-dashboard`/`--dry-run` on the CLI still win over it.
+  gate for stage 5. Read at session start, no restart needed — but on a
+  long-running stack the env-file edit still needs a container recreate
+  (`task up INSTANCE=<name>`) to reach the container; only ephemeral
+  run-docker.sh runs (which recreate the container each invocation) pick it
+  up without one. Exactly one instance should have this set — it's what makes
+  an instance "the" public dashboard. `--skip-dashboard`/`--dry-run` on the
+  CLI still win over it.
 
 Kill switches (see `docs/runbook-recovery.md`, "Halt / Resume"):
 - `ALGO_TRADING_HALTED` — set to `1`/`true`/`yes` in an instance's env file and

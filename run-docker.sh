@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if [ $# -lt 2 ]; then
+if [ $# -lt 3 ]; then
     echo "Usage: $0 <instance> <service> <command> [args...]"
     echo "Example: $0 live trading python -m v2.session"
     exit 1
@@ -15,6 +15,10 @@ shift
 ENV_FILE="$SCRIPT_DIR/instances/$INSTANCE.env"
 if [ ! -f "$ENV_FILE" ]; then
     echo "No such instance: instances/$INSTANCE.env" >&2
+    exit 2
+fi
+if ! grep -qx "INSTANCE=$INSTANCE" "$ENV_FILE"; then
+    echo "instances/$INSTANCE.env must contain the line INSTANCE=$INSTANCE (self-naming; a mismatch would load another instance's env)" >&2
     exit 2
 fi
 # Project-scoped compose invocation: `down` below must only ever touch THIS
