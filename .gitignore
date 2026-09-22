@@ -1,7 +1,15 @@
 # Environment
+# (.env / .env.paper retired 2026-09 — instance genericisation; see
+# docs/superpowers/specs/2026-09-21-instance-genericisation-design.md)
 .env
 .env.paper
 .env.host
+
+# Instance configs hold secrets. The committed example is the reference;
+# *.HALT sentinels stay tracked so a halt/resume is visible in git.
+instances/*
+!instances/example.env
+!instances/*.HALT
 
 # Python
 __pycache__/
