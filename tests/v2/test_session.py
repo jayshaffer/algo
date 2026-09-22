@@ -12,7 +12,7 @@ from v2.trader import TradingSessionResult
 
 
 @pytest.fixture(autouse=True)
-def _bypass_session_idempotency():
+def _bypass_session_idempotency(monkeypatch):
     """All tests in this module should exercise run_session as if no prior session exists today.
 
     The production idempotency check reads the live Postgres `sessions` row for
@@ -22,7 +22,13 @@ def _bypass_session_idempotency():
     (added to catch max_tokens / max_turns early-exits that leave no playbook)
     passes by default. Tests that want to simulate "strategist wrote no
     playbook" patch get_playbook to return None inside the test body.
+
+    Also opts this module into dashboard publishing: ALGO_DASHBOARD_PUBLISH
+    defaults to false (spec 2026-09-21 instance genericisation), and the
+    pre-existing stage-5 tests were written when publish was the default.
+    Tests exercising the gate itself delete/override the var in their bodies.
     """
+    monkeypatch.setenv("ALGO_DASHBOARD_PUBLISH", "true")
     with patch("v2.session.get_session_for_date", return_value=None), \
          patch("v2.session.get_playbook", return_value={"id": 1}):
         yield
@@ -1691,6 +1697,64 @@ class TestTradingHalted:
             result = run_session(dry_run=False)
         assert result.idempotent_skip is None
         mock_trade.assert_called_once()
+
+
+class TestDashboardPublishGate:
+    """Stage 5 is opt-in per instance: ALGO_DASHBOARD_PUBLISH must be truthy.
+
+    There is exactly one public Cloudflare Pages site; a freshly configured
+    instance must not publish over it by accident. Spec:
+    docs/superpowers/specs/2026-09-21-instance-genericisation-design.md §3.
+    """
+
+    def _run(self):
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_supervisor"), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage") as mock_dashboard:
+            result = run_session(dry_run=False)
+        return result, mock_dashboard
+
+    def test_unset_skips_publish(self, monkeypatch):
+        monkeypatch.delenv("ALGO_DASHBOARD_PUBLISH", raising=False)
+        result, mock_dashboard = self._run()
+        mock_dashboard.assert_not_called()
+        assert result.skipped_dashboard is True
+        assert result.has_errors is False
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "", "  ", "banana"])
+    def test_non_truthy_skips_publish(self, monkeypatch, value):
+        monkeypatch.setenv("ALGO_DASHBOARD_PUBLISH", value)
+        result, mock_dashboard = self._run()
+        mock_dashboard.assert_not_called()
+        assert result.skipped_dashboard is True
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", " TRUE "])
+    def test_truthy_publishes(self, monkeypatch, value):
+        monkeypatch.setenv("ALGO_DASHBOARD_PUBLISH", value)
+        result, mock_dashboard = self._run()
+        mock_dashboard.assert_called_once()
+        assert result.skipped_dashboard is False
+
+    def test_cli_skip_wins_over_enabled(self, monkeypatch):
+        monkeypatch.setenv("ALGO_DASHBOARD_PUBLISH", "true")
+        with patch("v2.session.run_backfill"), \
+             patch("v2.session.compute_signal_attribution", return_value=[]), \
+             patch("v2.session.build_attribution_constraints", return_value=""), \
+             patch("v2.session.run_supervisor"), \
+             patch("v2.session.run_pipeline"), \
+             patch("v2.session.run_strategist_loop"), \
+             patch("v2.session.run_trading_session"), \
+             patch("v2.session.run_strategy_reflection"), \
+             patch("v2.session.run_dashboard_stage") as mock_dashboard:
+            result = run_session(dry_run=False, skip_dashboard=True)
+        mock_dashboard.assert_not_called()
+        assert result.skipped_dashboard is True
 
     def test_halt_blocks_dry_run_too(self, monkeypatch):
         """The halt is a whole-session stop: a dry run still costs LLM spend."""

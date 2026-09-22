@@ -178,6 +178,22 @@ def _trading_halted() -> bool:
     )
 
 
+def _dashboard_publish_enabled() -> bool:
+    """Instance-level opt-in for the public dashboard publish (stage 5).
+
+    There is exactly one public Cloudflare Pages site, but N instances run
+    this code — publish must be something an instance's env file asks for,
+    not a default it forgets to turn off. Read at call time (not import) so
+    a flip takes effect on the next session without a container restart,
+    matching ALGO_TRADING_HALTED. Strict-affirmative like _trading_halted,
+    but in the opposite safety direction: a typo'd value skipping the
+    publish is a better failure than one publishing publicly.
+    """
+    return os.environ.get("ALGO_DASHBOARD_PUBLISH", "").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
 def _check_and_record_session(force: bool, session_date) -> tuple[int | None, set, str | None]:
     """Returns (session_id, completed_stages, early_error).
 
@@ -483,11 +499,15 @@ def _run_strategy_stage(
 
 
 def _run_dashboard_stage_wrapper(
-    result: SessionResult, session_id: int | None, completed_stages: set, skip: bool,
+    result: SessionResult, session_id: int | None, completed_stages: set,
+    skip: bool, skip_reason: str | None = None,
 ) -> None:
     if skip or "dashboard" in completed_stages:
-        logger.info("[Stage 5] Dashboard publish — SKIPPED%s",
-                    " (completed in prior run)" if "dashboard" in completed_stages else "")
+        logger.info(
+            "[Stage 5] Dashboard publish — SKIPPED (%s)",
+            "completed in prior run" if "dashboard" in completed_stages
+            else (skip_reason or "unspecified"),
+        )
         result.skipped_dashboard = True
         return
     logger.info("[Stage 5] Publishing public dashboard")
@@ -585,6 +605,14 @@ def run_session(
         skip_strategy = True
         skip_dashboard = True
 
+    if skip_dashboard:
+        skip_dashboard_reason = "--skip-dashboard/--dry-run"
+    elif not _dashboard_publish_enabled():
+        skip_dashboard = True
+        skip_dashboard_reason = "ALGO_DASHBOARD_PUBLISH not enabled for this instance"
+    else:
+        skip_dashboard_reason = None
+
     result = SessionResult(
         skipped_supervisor=skip_supervisor,
         skipped_pipeline=skip_pipeline, skipped_ideation=skip_ideation,
@@ -618,7 +646,7 @@ def run_session(
         )
         _run_executor_stage(result, session_id, completed_stages, skip_executor, dry_run, executor_model, today)
         _run_strategy_stage(result, session_id, completed_stages, skip_strategy)
-        _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard)
+        _run_dashboard_stage_wrapper(result, session_id, completed_stages, skip_dashboard, skip_dashboard_reason)
     finally:
         result.duration_seconds = time.monotonic() - start
         _finalize_session(result, session_id)
