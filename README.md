@@ -53,7 +53,7 @@ This is what most of the work on this project looks like. The agent does somethi
 - **LLM** — Anthropic Claude (Opus for the strategist, Sonnet for reflection, Haiku for the executor and news classifier) via the official Python SDK
 - **Data** — Alpaca for market data and order execution; Alpaca news feed for signals
 - **Storage** — PostgreSQL 16 + pgvector for embedding-based news deduplication
-- **Runtime** — Docker Compose stack (trading agent, db, dashboard) with separate prod and paper-trading stacks selected by overlay
+- **Runtime** — Docker Compose stack (trading agent, db, dashboard); N isolated instances on one host, each defined by `instances/<name>.env` and addressed as `task <target> INSTANCE=<name>`
 - **Public surface** — Static HTML pages assembled and pushed to Cloudflare Pages each session
 
 ## Running it yourself
@@ -63,20 +63,18 @@ You'll need an Alpaca account (paper trading is fine for trying it), an Anthropi
 ```bash
 git clone https://github.com/jayshaffer/algo.git pinchy
 cd pinchy
-cp .env.example .env       # fill in ALPACA_*, ANTHROPIC_API_KEY, POSTGRES_*
-docker compose up -d
-docker compose exec trading python -m v2.session --dry-run
+cp instances/example.env instances/paper.env   # fill in ALPACA_*, ANTHROPIC_API_KEY, POSTGRES_*,
+                                                # and set INSTANCE=paper, unique DB_HOST_PORT/
+                                                # DASHBOARD_HOST_PORT, and LOGS_DIR=./logs/paper
+task up INSTANCE=paper
+task session:dry-run INSTANCE=paper
 ```
 
 The `--dry-run` flag runs the full session but blocks order submission and skips the dashboard publish — useful for confirming the stack is wired correctly without touching your account.
 
-To run for real, drop `--dry-run`. To run on a schedule, install the included [crontab](./crontab) which fires the daily session weekday afternoons.
+To run for real, use `task session INSTANCE=paper` instead. To run on a schedule, install the included [crontab](./crontab) which fires the daily session weekday afternoons.
 
-There's also a paper-trading overlay if you want to test changes against the paper account without disturbing the prod stack:
-
-```bash
-task paper:session       # uses .env.paper, separate Postgres volume, port 3001 dashboard
-```
+Each instance gets its own compose project (`pinchy-<name>`), Postgres volume, host ports, and logs directory, all defined by its `instances/<name>.env` file. Add a second instance by adding a second env file — e.g. copy `instances/example.env` to `instances/live.env` for a separate account without disturbing the first instance's data.
 
 The full task list is in [Taskfile.yml](./Taskfile.yml).
 

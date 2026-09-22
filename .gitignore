@@ -1,6 +1,15 @@
 # Environment
+# (.env / .env.paper retired 2026-09 — instance genericisation; see
+# docs/superpowers/specs/2026-09-21-instance-genericisation-design.md)
 .env
 .env.paper
+.env.host
+
+# Instance configs hold secrets. The committed example is the reference;
+# *.HALT sentinels stay tracked so a halt/resume is visible in git.
+instances/*
+!instances/example.env
+!instances/*.HALT
 
 # Python
 __pycache__/
@@ -28,6 +37,9 @@ htmlcov/
 # Local dashboard data snapshots — published artifacts, not source
 public_dashboard/data/
 
+# Cloudflare Wrangler local state (dashboard publish)
+.wrangler/
+
 # IDE
 .vscode/
 .idea/
@@ -46,6 +58,10 @@ backups/
 
 # Claude
 .claude/settings.local.json
+.claude/worktrees/
 
 # Superpowers brainstorm artifacts
 .superpowers/
+
+# Prepared PR bodies (local only)
+.pr-bodies/

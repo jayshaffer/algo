@@ -1,10 +1,17 @@
+# Generic per-instance stack. Never `docker compose up` this file bare —
+# always through the Taskfile (or run-docker.sh), which supply
+#   -p pinchy-<instance> --env-file instances/<instance>.env
+# The --env-file feeds the ${...} interpolations below (it does NOT reach the
+# containers; the env_file: entries do that). Every interpolation is the
+# required form ${VAR:?} so a bare invocation fails loudly instead of
+# binding empty ports or mounting empty paths.
 services:
   db:
     image: postgres:16
     env_file:
-      - .env
+      - instances/${INSTANCE:?}.env
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_HOST_PORT:?}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d
@@ -20,27 +27,30 @@ services:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - instances/${INSTANCE:?}.env
     volumes:
       - ./trading:/app/trading:ro
       - ./v2:/app/v2:ro
       - ./dashboard:/app/dashboard:ro
       - ./public_dashboard:/app/public_dashboard:ro
-      - ./logs:/app/logs
+      - ${LOGS_DIR:?}:/app/logs
       - ./tests:/app/tests:ro
       - ./pytest.ini:/app/pytest.ini:ro
-      - ./db/init:/app/db/init:ro
+      # Whole db/ tree, not just init/: tests/test_schema_mirror.py compares
+      # db/init against db/migrations, and mounting only one half made the
+      # check pass vacuously in the container while failing in CI.
+      - ./db:/app/db:ro
     command: ["sleep", "infinity"]
 
   dashboard:
     build: ./dashboard
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:?}:3000"
     depends_on:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - instances/${INSTANCE:?}.env
     volumes:
       # queries.py imports v2.market_calendar (single source of truth for the
       # NYSE calendar); the dashboard image builds only ./dashboard, so mount v2.
