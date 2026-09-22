@@ -42,15 +42,27 @@ cd "$SCRIPT_DIR"
 # --ignore-halt is for jobs that protect the system rather than trade with it
 # (backups, health checks). HALT means "do not trade", not "do not protect the
 # data" — a hiatus is precisely when an unnoticed backup gap would hurt most.
+# --instance <name> additionally honors instances/<name>.HALT, the
+# per-instance halt: "this instance trades nothing" without stopping the rest.
 IGNORE_HALT=
-if [ "${1:-}" = "--ignore-halt" ]; then
-    IGNORE_HALT=1
-    shift
-fi
+INSTANCE=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --ignore-halt) IGNORE_HALT=1; shift ;;
+        --instance)
+            INSTANCE="${2:-}"
+            if [ -z "$INSTANCE" ]; then
+                echo "--instance requires a name" >&2
+                exit 2
+            fi
+            shift 2 ;;
+        *) break ;;
+    esac
+done
 
 if [ $# -lt 2 ]; then
-    echo "Usage: $0 [--ignore-halt] <label> <command> [args...]" >&2
-    echo "Example: $0 paper-session task paper:session" >&2
+    echo "Usage: $0 [--ignore-halt] [--instance <name>] <label> <command> [args...]" >&2
+    echo "Example: $0 --instance paper paper-session task session INSTANCE=paper" >&2
     exit 2
 fi
 
@@ -108,10 +120,17 @@ notify_failure() {
 # of the dead-man's switch is "is this host alive and is cron firing", and the
 # answer during a hiatus is yes. Losing that distinction is how a halt starts
 # looking like an outage again.
-if [ -z "$IGNORE_HALT" ] && [ -f "$SCRIPT_DIR/HALT" ]; then
-    echo "[$(date -Is)] cron-wrap[$LABEL] HALT sentinel present — skipping: $CMD_DESC"
-    ping_heartbeat
-    exit 0
+if [ -z "$IGNORE_HALT" ]; then
+    if [ -f "$SCRIPT_DIR/HALT" ]; then
+        echo "[$(date -Is)] cron-wrap[$LABEL] HALT sentinel present — skipping: $CMD_DESC"
+        ping_heartbeat
+        exit 0
+    fi
+    if [ -n "$INSTANCE" ] && [ -f "$SCRIPT_DIR/instances/$INSTANCE.HALT" ]; then
+        echo "[$(date -Is)] cron-wrap[$LABEL] instances/$INSTANCE.HALT present — skipping: $CMD_DESC"
+        ping_heartbeat
+        exit 0
+    fi
 fi
 
 ping_heartbeat /start
