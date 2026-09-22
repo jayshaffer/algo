@@ -1,42 +1,39 @@
-# Algo Trading Crontab (v2)
+# Pinchy Crontab (v2, instance-genericised)
 # Install with: crontab /home/jay/dev/algo/crontab
 # All times are MST (America/Denver, UTC-7)
 #
-# Every job runs through cron-wrap.sh <label> <command...>, which adds the HALT
-# sentinel check, the dead-man's-switch ping, failure logging, and the alert
-# webhook. Do not add a bare cron line here — a job outside the wrapper is a job
-# whose failure nobody hears, which is exactly how the system sat dead from
-# 2026-06-15 to 2026-08-13 (audit 0.3). Host-side config lives in .env.host.
+# Every job runs through cron-wrap.sh [flags] <label> <command...>, which adds
+# the HALT sentinel checks (global HALT file + per-instance
+# instances/<name>.HALT via --instance), the dead-man's-switch ping, failure
+# logging, and the alert webhook. Do not add a bare cron line here — a job
+# outside the wrapper is a job whose failure nobody hears, which is exactly
+# how the system sat dead from 2026-06-15 to 2026-08-13 (audit 0.3).
+# Host-side config lives in .env.host. Labels are <instance>-<job>; per-job
+# heartbeat overrides key off them (ALGO_HEARTBEAT_URL_<LABEL>).
 
 PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 
-# Paper trading session (12:30 PM MST / 2:30 PM ET, Mon-Fri)
-# --ignore-halt since 2026-08-17: paper resumed (credits refilled) while the
-# prod hiatus continues — HALT here means "do not trade the live account".
-# Remove the flag to pull paper back under the halt. See HALT for scope notes.
-30 12 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt paper-session task paper:session
+# Paper session (12:30 PM MST / 2:30 PM ET, Mon-Fri).
+# The live-account hiatus is expressed as instances/live.HALT, so this line
+# needs no --ignore-halt: paper halts only via the global HALT file or its
+# own instances/paper.HALT.
+30 12 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --instance paper paper-session task session INSTANCE=paper
 
-# HIATUS since 2026-06 — the two jobs below are deliberately commented out.
-# See the HALT file in the repo root for why, and docs/runbook-recovery.md
-# "Halt / Resume" for the procedure. The HALT sentinel makes them no-ops even
-# if uncommented; both must be reversed to resume. This mirrors the installed
-# crontab rather than drifting from it (audit 0.1).
+# HIATUS since 2026-06 — the two live-instance jobs below are deliberately
+# commented out AND instances/live.HALT is present; both must be reversed to
+# resume. See instances/live.HALT and docs/runbook-recovery.md "Halt / Resume".
+# This mirrors the installed crontab rather than drifting from it (audit 0.1).
 #
-# Daily session (1 PM MST / 3 PM ET, Mon-Fri)
-# Stage 0: backfill outcomes + compute attribution + build constraints
-# Stage 1: news pipeline (fetch, Haiku classify, store)
-# Stage 2: Claude Opus strategist (thesis management, playbook generation)
-# Stage 3: Claude Haiku executor (validate, execute, log)
-# Stage 4: strategy reflection (memo, identity, rule proposals)
-# Stage 5: dashboard publish
-# 0 13 * * 1-5 /home/jay/dev/algo/cron-wrap.sh prod-session /home/jay/dev/algo/run-docker.sh trading python -m v2.session
+# Live daily session (1 PM MST / 3 PM ET, Mon-Fri) — ephemeral stack:
+# run-docker.sh brings the instance up, runs the session, tears it down.
+# 0 13 * * 1-5 /home/jay/dev/algo/cron-wrap.sh --instance live live-session /home/jay/dev/algo/run-docker.sh live trading python -m v2.session
 
 # Weekly deep learning analysis (5 AM MST / 7 AM ET, Sunday)
-# 0 5 * * 0 /home/jay/dev/algo/cron-wrap.sh weekly-learn /home/jay/dev/algo/run-docker.sh trading python -m v2.learn --days 60
+# 0 5 * * 0 /home/jay/dev/algo/cron-wrap.sh --instance live weekly-learn /home/jay/dev/algo/run-docker.sh live trading python -m v2.learn --days 60
 
 # Nightly DB backups (8 PM MST, Mon-Fri) — see docs/runbook-recovery.md.
-# --ignore-halt: these stay active through the trading hiatus. HALT means "do
-# not trade", not "do not protect the data" — a hiatus is exactly when an
+# --ignore-halt: these stay active through any hiatus. HALT means "do not
+# trade", not "do not protect the data" — a hiatus is exactly when an
 # unnoticed backup gap would cost the most.
-0 20 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt prod-backup task db:backup >> logs/backup.log 2>&1
-5 20 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt paper-backup task paper:db:backup >> logs_paper/backup.log 2>&1
+0 20 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt live-backup task db:backup INSTANCE=live >> logs/live/backup.log 2>&1
+5 20 * * 1-5 cd /home/jay/dev/algo/ && ./cron-wrap.sh --ignore-halt paper-backup task db:backup INSTANCE=paper >> logs/paper/backup.log 2>&1
