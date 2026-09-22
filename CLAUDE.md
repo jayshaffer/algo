@@ -15,21 +15,30 @@ Pinchy — an agentic trading system that uses Claude (via Anthropic API) to int
 - **`tests/`** — Test suite covering both v1 and v2.
 - **`dashboard/`** — Legacy v1 dashboard (Flask on port 3000). v2 dashboard lives in `v2/dashboard/`.
 
-## Pipelines: Paper vs Prod
+## Instances
 
-The same v2 code runs against two isolated pipelines selected by docker-compose overlay and env file:
+The same v2 code and one generic `docker-compose.yml` run any number of named
+instances on one host. An instance is `instances/<name>.env`: it holds all
+container config (Alpaca account, Anthropic key, Postgres credentials) plus
+the deployment shape — `INSTANCE` (self-naming, must match the filename),
+`DB_HOST_PORT`, `DASHBOARD_HOST_PORT`, `LOGS_DIR`, and `ALGO_DASHBOARD_PUBLISH`
+(whether this instance owns the public dashboard publish). `instances/` is
+gitignored except `instances/example.env` (the template) and `*.HALT`
+sentinel files.
 
-| | Prod | Paper |
-|---|---|---|
-| Compose files | `docker-compose.yml` | `docker-compose.yml` + `docker-compose.paper.yml` |
-| Env file | `.env` | `.env.paper` |
-| Trading service | `trading` | `trading-paper` |
-| Database service | `db` (Postgres `:5432`) | `db-paper` (Postgres `:5433`) |
-| Dashboard | `dashboard` (`:3000`) | `dashboard-paper` (`:3001`) |
-| Logs | `./logs` | `./logs_paper` |
-| Alpaca account | Live account | Paper account |
+Invocation shape: `docker compose -p pinchy-<name> --env-file
+instances/<name>.env`. Every Taskfile target that touches a stack requires
+`INSTANCE=<name>` explicitly — there is no default instance, so a forgotten
+flag fails loudly instead of silently hitting whichever account was last
+used. Targets are unprefixed (`up`, `down`, `session`, `db:migrate`,
+`db:backup`, `db:restore INSTANCE=x FILE=...`, `test`, etc.); there is no
+`paper:*` or `docker:*` target family.
 
-Paper runs skip the public-dashboard stage by default (`--skip-dashboard`). Taskfile targets prefixed `paper:*` (e.g. `paper:up`, `paper:session`, `paper:session:dry-run`) exercise the paper pipeline; the unprefixed targets (`session`, `trade`, etc.) run against prod. The two stacks use separate Postgres volumes, so data never crosses between them.
+Planned instances at cutover: `live` (`DB_HOST_PORT=5432`,
+`DASHBOARD_HOST_PORT=3000`, publishes the public dashboard) and `paper`
+(`5433`/`3001`, does not publish). Each instance has its own compose
+project, Postgres volume, ports, and logs directory, so data never crosses
+between instances.
 
 ## Project Goals
 
@@ -134,7 +143,7 @@ long-lived prod/paper volumes never re-run it. The two directories must stay
 mirrored **in both directions**:
 
 - Every new `db/init/NNN_*.sql` needs a `db/migrations/*.sql` mirror, applied
-  to live DBs with `task db:migrate` / `task paper:db:migrate` (tracked in
+  to every instance with `task db:migrate INSTANCE=<name>` (tracked in
   `schema_migrations`). Skipping it is how prod silently missed the fable-5
   pricing row and the opus repricing (init/036–037) until 2026-06-10.
 - Every new `db/migrations/*.sql` needs a `db/init/NNN_*.sql` mirror. Skipping
@@ -157,67 +166,94 @@ db/init/036`). Two checks enforce this:
 ## Commands
 
 ```bash
-# Start the stack
-docker compose up -d
+# Start an instance's stack
+task up INSTANCE=paper
 
-# Run full daily session
-docker compose exec trading python -m v2.session
+# Run full daily session (Taskfile target brings the stack up first)
+task session INSTANCE=paper
 
-# Skip individual stages (there is no --stage flag; stages are opted OUT of)
-docker compose exec trading python -m v2.session --skip-supervisor
-docker compose exec trading python -m v2.session --skip-pipeline --skip-ideation
-docker compose exec trading python -m v2.session --dry-run   # also skips ideation/strategy/dashboard
+# Skip individual stages (there is no --stage flag; stages are opted OUT of;
+# extra args after -- pass through as CLI_ARGS)
+task session INSTANCE=paper -- --skip-supervisor
+task session INSTANCE=paper -- --skip-pipeline --skip-ideation
+task session:dry-run INSTANCE=paper   # also skips ideation/strategy/dashboard
 
 # Re-run a session for a date that already has a session row (any status)
-docker compose exec trading python -m v2.session --force
+task session INSTANCE=paper -- --force
 
 # Run learning loop standalone
-docker compose exec trading python -m v2.learn
+task learn INSTANCE=paper
 
 # Apply pending DB migrations to a long-lived volume (tracked in schema_migrations)
-task db:migrate          # prod
-task paper:db:migrate    # paper
+task db:migrate INSTANCE=live
+task db:migrate INSTANCE=paper
+
+# Restore a backup into an instance, then re-apply anything newer
+task db:restore INSTANCE=live FILE=backups/live-20260921-200000.dump
+task db:migrate INSTANCE=live
+
+# Raw compose equivalent (rarely needed — the Taskfile targets above wrap this)
+docker compose -p pinchy-paper --env-file instances/paper.env exec trading python -m v2.session
 
 # View public dashboard
-# Published via Cloudflare Pages by stage 5
+# Published via Cloudflare Pages by stage 5, gated on ALGO_DASHBOARD_PUBLISH
 ```
 
 ## Environment Variables
 
-Required in `.env`:
+Required in `instances/<name>.env`:
 - `ALPACA_API_KEY` — Alpaca API key
 - `ALPACA_SECRET_KEY` — Alpaca API secret
 - `ALPACA_BASE_URL` — Alpaca REST endpoint (`https://api.alpaca.markets` for live, `https://paper-api.alpaca.markets` for paper)
-- `ALPACA_PAPER` — `true` or `false`, must agree with `ALPACA_BASE_URL`. Cross-checked at module load — mismatched values raise immediately to prevent silent paper/prod misrouting.
+- `ALPACA_PAPER` — `true` or `false`, must agree with `ALPACA_BASE_URL`. Cross-checked at module load — mismatched values raise immediately to prevent an instance from silently routing orders to the wrong account.
 - `ANTHROPIC_API_KEY` — Anthropic API key for Claude
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — Database credentials
 
+Deployment shape, also required (see "Instances" above; read by compose
+interpolation as well as the container):
+- `INSTANCE` — must match the filename (`instances/live.env` → `INSTANCE=live`)
+- `DB_HOST_PORT`, `DASHBOARD_HOST_PORT` — host-bound ports, unique per instance
+- `LOGS_DIR` — host directory bind-mounted at `/app/logs`
+- `ALGO_DASHBOARD_PUBLISH` — opt-in (`1`/`true`/`yes`; default false) publish
+  gate for stage 5. Read at session start, no restart needed. Exactly one
+  instance should have this set — it's what makes an instance "the" public
+  dashboard. `--skip-dashboard`/`--dry-run` on the CLI still win over it.
+
 Kill switches (see `docs/runbook-recovery.md`, "Halt / Resume"):
-- `ALGO_TRADING_HALTED` — set to `1`/`true`/`yes` and every session becomes a
-  no-op: logs the halt and exits 0 (a deliberate halt is not a failure). Unlike
-  the knobs below it is read **at session start**, so it applies on the next run
-  with no container restart. Host-side twin: a `HALT` file in the repo root,
-  checked by `cron-wrap.sh` and `run-docker.sh` before they start containers —
-  that one also covers the weekly `v2.learn` job. **The system is currently
-  halted**; the repo `HALT` file explains why and how to resume.
+- `ALGO_TRADING_HALTED` — set to `1`/`true`/`yes` in an instance's env file and
+  every session for that instance becomes a no-op: logs the halt and exits 0
+  (a deliberate halt is not a failure). Unlike the knobs below it is read **at
+  session start**, but on a long-running stack the env-file edit still needs a
+  container recreate (`task up INSTANCE=<name>`) to reach the container — env
+  files only apply at container creation. Host-side, no-restart twin: two
+  sentinel files, checked by `cron-wrap.sh` and `run-docker.sh` before they
+  start containers. A repo-root `HALT` file stops every instance; an
+  `instances/<name>.HALT` file stops just that one. **The system is currently
+  halted**; the repo `HALT` file explains why, current scope, and how to
+  resume.
 
 Optional in-container knobs (read at module import — container restart required after changing):
-- `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set in `.env.paper` to flip paper executor independently of prod (e.g. `claude-sonnet-4-6` for the Sonnet pilot).
+- `ALGO_EXECUTOR_MODEL` — overrides the executor model. Defaults to `claude-haiku-4-5-20251001`. Set it in one instance's env file to flip that instance's executor independently of the others (e.g. `claude-sonnet-4-6` for the Sonnet pilot on `paper`).
 - `ALGO_EXECUTOR_MAX_TOKENS` — overrides the executor `max_tokens` cap. Defaults to `8192` (Haiku 4.5's model max). Raise this knob if executor responses are being truncated.
 - `ALGO_DAILY_LOSS_LIMIT_PCT` — daily-loss circuit breaker (default `3.0`). Halts the trading stage when account equity is down more than this % vs the previous close (Alpaca `last_equity`); re-checked after every fill. `<= 0` disables.
 - `ALGO_LOOP_COST_CEILING_USD` — per-agentic-loop cost ceiling (default `30`). The strategist/reflection/supervisor loops abort with `stop_reason="cost_ceiling"` once cumulative token cost (priced via `model_pricing`) crosses the cap. `<= 0` disables.
 
 **Host-side** variables in `.env.host` (gitignored; copy `.env.host.example`).
 These are read by scripts running on the host, *not* in a container — putting
-them in `.env`/`.env.paper` has no effect, since compose `env_file` only feeds
-containers. That exact mismatch is why alerting was documented but never
-actually wired up (audit 0.3):
+them in `instances/<name>.env` has no effect, since compose `env_file` only
+feeds containers. That exact mismatch is why alerting was documented but never
+actually wired up (audit 0.3). They are instance-agnostic — one `.env.host`
+covers every instance:
 - `ALGO_ALERT_WEBHOOK_URL` — JSON webhook (Slack/Discord/ntfy-style). `cron-wrap.sh` POSTs a short alert when a wrapped job exits nonzero; failures also append to `logs/session_failures.log`.
 - `ALGO_HEARTBEAT_URL` — dead-man's switch (healthchecks.io-style). `cron-wrap.sh` pings `<URL>/start` before a job, `<URL>` on success, `<URL>/<exit-status>` on failure. The webhook tells you a job *ran and failed*; only a missing heartbeat catches "the host is off" or "cron stopped firing" — the failure mode that actually kept the system dead for two months. Per-job override: `ALGO_HEARTBEAT_URL_<LABEL>` (label uppercased, `-`→`_`); give each job its own check so one live job can't mask a dead one.
-- `ALGO_BACKUP_COPY_DIR` — off-WSL copy target for `task db:backup` / `paper:db:backup`.
+- `ALGO_BACKUP_COPY_DIR` — off-WSL copy target for `task db:backup INSTANCE=<name>`.
 
-**Cron:** every scheduled job goes through `./cron-wrap.sh <label> <command...>`,
-which owns the HALT check, heartbeat, failure log, and alert webhook. Never add
+**Cron:** every scheduled job goes through `./cron-wrap.sh [--ignore-halt]
+[--instance <name>] <label> <command...>`, which owns the HALT check
+(both the global `HALT` file and, when `--instance` is passed, that
+instance's `instances/<name>.HALT`), heartbeat, failure log, and alert
+webhook. Label convention is `<instance>-<job>` (e.g. `paper-session`,
+`live-backup`) — per-job heartbeat overrides key off this label. Never add
 a bare line to `crontab` — a job outside the wrapper is a job whose failure
 nobody hears. Pass `--ignore-halt` for jobs that protect the system rather than
 trade with it (the nightly backups): HALT means "do not trade", not "do not
