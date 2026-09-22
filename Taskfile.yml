@@ -4,167 +4,255 @@ version: "3"
 # Task tolerates the file being absent. cron-wrap.sh sources the same file, so
 # a scheduled `task db:backup` and a hand-run one see identical settings; that
 # divergence is how the off-host backup copy stayed unconfigured. Container
-# config stays in .env / .env.paper via compose env_file.
+# config lives in instances/<name>.env via compose env_file.
 dotenv: [".env.host"]
+
+# Every stack-touching target requires INSTANCE explicitly — there is no
+# default instance. Real money: "forgot the flag" must fail, not silently
+# target an account. Usage: task session INSTANCE=paper
+#
+# NOTE: COMPOSE is a task-local var (not global) on every stack-touching task
+# below, repeated verbatim like requires/preconditions. go-task 3.48.0
+# resolves global `vars:` templates BEFORE CLI-passed vars are merged in, so
+# a global COMPOSE referencing {{.INSTANCE}} silently resolves to an empty
+# instance name (`pinchy-`) even though {{.INSTANCE}} itself works fine
+# directly in preconditions/cmds. Verified empirically against this task
+# version; task-local vars don't have the problem.
 
 tasks:
   # ---------------------------------------------------------------------------
   # Infrastructure
   # ---------------------------------------------------------------------------
-  docker:up:
-    desc: Start all services
+  up:
+    desc: Start the instance's services (task up INSTANCE=<name>)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
     cmds:
-      - docker compose up -d
-    status:
-      - docker compose ps --status running --format '{{.Name}}' | grep -q trading
+      - "{{.COMPOSE}} up -d"
 
-  docker:down:
-    desc: Stop all services
+  down:
+    desc: Stop the instance's services
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
     cmds:
-      - docker compose down
+      - "{{.COMPOSE}} down"
 
-  docker:build:
-    desc: Rebuild Docker images
+  build:
+    desc: Rebuild the instance's images
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
     cmds:
-      - docker compose build
+      - "{{.COMPOSE}} build"
 
-  docker:logs:
+  logs:
     desc: Follow container logs (pass service name as arg)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
     cmds:
-      - docker compose logs -f {{.CLI_ARGS}}
+      - "{{.COMPOSE}} logs -f {{.CLI_ARGS}}"
 
-  docker:stop:session:
+  stop:session:
     desc: Stop session services (trading); leave db + dashboard running
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
     cmds:
-      - docker compose stop trading
+      - "{{.COMPOSE}} stop trading"
 
   # ---------------------------------------------------------------------------
   # Trading workflows
   # ---------------------------------------------------------------------------
   session:
     desc: Run full consolidated daily session
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.session {{.CLI_ARGS}}
+      # P1.11: session is idempotent per market date; pass --force via
+      # {{.CLI_ARGS}} only for deliberate retries.
+      - "{{.COMPOSE}} exec trading python -m v2.session {{.CLI_ARGS}}"
 
   session:dry-run:
     desc: Dry-run the full daily session
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.session --dry-run {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.session --dry-run {{.CLI_ARGS}}"
 
   trade:
     desc: Run the trader
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.trader {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.trader {{.CLI_ARGS}}"
 
   trade:dry-run:
     desc: Dry-run the trader
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.trader --dry-run {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.trader --dry-run {{.CLI_ARGS}}"
 
   ideation:
     desc: Run Claude strategist ideation
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.ideation_claude {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.ideation_claude {{.CLI_ARGS}}"
 
   pipeline:
     desc: Run news processing pipeline
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.pipeline {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.pipeline {{.CLI_ARGS}}"
 
   learn:
     desc: Run learning loop
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.learn {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.learn {{.CLI_ARGS}}"
 
   supervise:
     desc: Run the strategy supervisor (observer-only critic, persists one memo)
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.supervisor {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.supervisor {{.CLI_ARGS}}"
 
   supervise:dry-run:
     desc: Run the supervisor loop and print the memo without persisting
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.supervisor --dry-run {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.supervisor --dry-run {{.CLI_ARGS}}"
 
   backfill:
     desc: Backfill decision outcomes
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.backfill {{.CLI_ARGS}}"
 
   backfill:decision:
     desc: Re-run 7d+30d backfill for a single decision (pass --decision-id <ID> via CLI_ARGS). Audit auto-fix path for MISSING_OUTCOMES findings.
-    deps: [docker:up]
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -m v2.backfill {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -m v2.backfill {{.CLI_ARGS}}"
 
   dashboard:publish:
-    desc: Publish the public dashboard to Cloudflare Pages (stage 5 only)
-    deps: [docker:up]
+    desc: Publish the public dashboard to Cloudflare Pages (stage 5 only; bypasses the ALGO_DASHBOARD_PUBLISH gate — explicit invocation is the opt-in)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec trading python -c "from v2.dashboard_publish import run_dashboard_stage; r = run_dashboard_stage(); print(r); raise SystemExit(0 if r.published or r.skipped else 1)"
-
-  # ---------------------------------------------------------------------------
-  # Paper trading
-  # ---------------------------------------------------------------------------
-  paper:up:
-    desc: Start all services including paper trading
-    cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml up -d
-
-  paper:down:
-    desc: Stop all services including paper trading
-    cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml down
-
-  paper:session:
-    desc: Run full daily session on paper trading
-    deps: [paper:up]
-    cmds:
-      # P1.11: --force was bypassing session idempotency, duplicating decisions/snapshots/etc on rerun. Pass --force via {{.CLI_ARGS}} when intentional.
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --skip-dashboard {{.CLI_ARGS}}
-
-  paper:session:dry-run:
-    desc: Dry-run the full daily session on paper trading
-    deps: [paper:up]
-    cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.session --dry-run {{.CLI_ARGS}}
-
-  paper:dashboard:
-    desc: Open paper trading dashboard (port 3001)
-    deps: [paper:up]
-    cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml logs -f dashboard-paper
-
-  paper:backfill:decision:
-    desc: Re-run 7d+30d backfill for a single paper decision (pass --decision-id <ID> via CLI_ARGS).
-    deps: [paper:up]
-    cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.paper.yml exec trading-paper python -m v2.backfill {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec trading python -c \"from v2.dashboard_publish import run_dashboard_stage; r = run_dashboard_stage(); print(r); raise SystemExit(0 if r.published or r.skipped else 1)\""
 
   # ---------------------------------------------------------------------------
   # Dev
   # ---------------------------------------------------------------------------
   test:
-    desc: Run tests (in trading container)
-    deps: [docker:up]
+    desc: Run tests (in the instance's trading container; external deps are mocked)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec -T trading python -m pytest tests/ {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec -T trading python -m pytest tests/ {{.CLI_ARGS}}"
 
   test:coverage:
-    desc: Run tests with coverage (in trading container)
-    deps: [docker:up]
+    desc: Run tests with coverage (in the instance's trading container)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
-      - docker compose exec -T trading python -m pytest tests/ --cov=trading --cov=dashboard --cov=v2 {{.CLI_ARGS}}
+      - "{{.COMPOSE}} exec -T trading python -m pytest tests/ --cov=trading --cov=dashboard --cov=v2 {{.CLI_ARGS}}"
 
   lint:
     desc: Run ruff lint (host, no docker)
@@ -181,11 +269,17 @@ tasks:
   # Database
   # ---------------------------------------------------------------------------
   db:migrate:
-    desc: Apply pending db/migrations/*.sql files to prod db (tracked via schema_migrations)
-    deps: [docker:up]
+    desc: Apply pending db/migrations/*.sql to the instance db (tracked via schema_migrations)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
       - |
-        psql_exec() { docker compose exec -T db psql -U algo -d trading "$@"; }
+        psql_exec() { {{.COMPOSE}} exec -T db psql -U algo -d trading "$@"; }
         psql_exec -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());" >/dev/null
         for f in $(ls db/migrations/*.sql | sort); do
           name=$(basename "$f")
@@ -200,32 +294,39 @@ tasks:
         done
 
   db:backup:
-    desc: pg_dump the prod db to backups/ (keeps newest 14; set ALGO_BACKUP_COPY_DIR for an off-WSL copy)
-    deps: [docker:up]
+    desc: pg_dump the instance db to backups/<instance>-<ts>.dump (keeps newest 14; set ALGO_BACKUP_COPY_DIR for an off-WSL copy)
+    requires: { vars: [INSTANCE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+    deps: [up]
     cmds:
       - |
         mkdir -p backups
-        f="backups/prod-$(date +%Y%m%d-%H%M%S).dump"
-        docker compose exec -T db pg_dump -U algo -d trading -Fc > "$f"
+        f="backups/{{.INSTANCE}}-$(date +%Y%m%d-%H%M%S).dump"
+        {{.COMPOSE}} exec -T db pg_dump -U algo -d trading -Fc > "$f"
         echo "==> wrote $f ($(du -h "$f" | cut -f1))"
-        ls -t backups/prod-*.dump | tail -n +15 | xargs -r rm --
+        ls -t backups/{{.INSTANCE}}-*.dump | tail -n +15 | xargs -r rm --
         if [ -n "${ALGO_BACKUP_COPY_DIR:-}" ]; then
           mkdir -p "$ALGO_BACKUP_COPY_DIR" && cp "$f" "$ALGO_BACKUP_COPY_DIR"/ && echo "==> copied to $ALGO_BACKUP_COPY_DIR"
         fi
 
-  paper:db:backup:
-    desc: pg_dump the paper db to backups/ (keeps newest 14; set ALGO_BACKUP_COPY_DIR for an off-WSL copy)
-    deps: [paper:up]
+  db:restore:
+    desc: "pg_restore a dump into the instance db (task db:restore INSTANCE=x FILE=backups/foo.dump). DESTRUCTIVE: --clean drops existing objects first."
+    requires: { vars: [INSTANCE, FILE] }
+    vars:
+      COMPOSE: docker compose -p pinchy-{{.INSTANCE}} --env-file instances/{{.INSTANCE}}.env
+    preconditions:
+      - sh: test -f instances/{{.INSTANCE}}.env
+        msg: "No such instance: instances/{{.INSTANCE}}.env"
+      - sh: test -f {{.FILE}}
+        msg: "No such dump file: {{.FILE}}"
+    deps: [up]
     cmds:
-      - |
-        mkdir -p backups
-        f="backups/paper-$(date +%Y%m%d-%H%M%S).dump"
-        docker compose -f docker-compose.yml -f docker-compose.paper.yml exec -T db-paper pg_dump -U algo -d trading -Fc > "$f"
-        echo "==> wrote $f ($(du -h "$f" | cut -f1))"
-        ls -t backups/paper-*.dump | tail -n +15 | xargs -r rm --
-        if [ -n "${ALGO_BACKUP_COPY_DIR:-}" ]; then
-          mkdir -p "$ALGO_BACKUP_COPY_DIR" && cp "$f" "$ALGO_BACKUP_COPY_DIR"/ && echo "==> copied to $ALGO_BACKUP_COPY_DIR"
-        fi
+      - "{{.COMPOSE}} exec -T db pg_restore -U algo -d trading --clean --if-exists --no-owner < {{.FILE}}"
+      - '{{.COMPOSE}} exec -T db psql -U algo -d trading -tAc "SELECT COUNT(*) FROM schema_migrations" | xargs echo "==> restored; schema_migrations rows:"'
 
   # ---------------------------------------------------------------------------
   # Audit (driven by docs/audit-playbook.md + Claude Code /loop)
@@ -256,22 +357,3 @@ tasks:
     desc: Kill the audit /loop tmux session
     cmds:
       - tmux kill-session -t audit-loop && echo "Stopped." || echo "No session 'audit-loop' running."
-
-  paper:db:migrate:
-    desc: Apply pending db/migrations/*.sql files to paper db (tracked via schema_migrations)
-    deps: [paper:up]
-    cmds:
-      - |
-        psql_exec() { docker compose -f docker-compose.yml -f docker-compose.paper.yml exec -T db-paper psql -U algo -d trading "$@"; }
-        psql_exec -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());" >/dev/null
-        for f in $(ls db/migrations/*.sql | sort); do
-          name=$(basename "$f")
-          applied=$(psql_exec -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$name'")
-          if [ "$applied" = "1" ]; then
-            echo "==> skipping $name (already applied)"
-            continue
-          fi
-          echo "==> applying $name"
-          { cat "$f"; printf "\nINSERT INTO schema_migrations (filename) VALUES ('%s');\n" "$name"; } \
-            | psql_exec -v ON_ERROR_STOP=1 --single-transaction -f -
-        done
