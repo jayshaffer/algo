@@ -1,0 +1,53 @@
+Trading hiatus — deliberate halt of the LIVE instance.
+
+Since:   2026-06 (owner decision; confirmed 2026-07-15 during the fresh-eyes
+         audit). Moved from the repo-root HALT file to this per-instance
+         sentinel 2026-09-22 as part of the instance genericisation cutover
+         (PR #121).
+
+Why:     The live Alpaca account was fully liquidated — positions closed, cash
+         withdrawn, account inert. Economics are under review (audit finding
+         0.2: lifetime gross trading P&L ~= -$35 against ~$150-250 of API
+         spend), and the Tier 1 money-path fixes were prerequisites for
+         re-enabling the cron.
+
+Effect:  cron-wrap.sh (invoked with --instance live) and run-docker.sh skip
+         any live-instance job while this file exists, exiting 0 — a
+         deliberate halt is not a failure. This file halts ONLY the live
+         instance: paper keeps trading, with no --ignore-halt workaround
+         needed (that flag is again reserved for protect-the-data jobs like
+         backups). To halt everything on this host regardless of instance,
+         `touch HALT` in the repo root. To halt paper alone,
+         `touch instances/paper.HALT`.
+
+         In-container twin: ALGO_TRADING_HALTED in instances/live.env —
+         covers `task session INSTANCE=live` and manual invocations, but
+         needs a container recreate on a long-running stack; this sentinel
+         is the no-restart path.
+
+         A halted job still sends its dead-man's-switch ping. The switch
+         answers "is this host up and is cron firing", and during a
+         deliberate hiatus the answer is yes — going quiet on purpose must
+         not look identical to going quiet by accident.
+
+         The nightly backups run with --ignore-halt and continue through the
+         hiatus.
+
+History: Between 2026-08-13 and 2026-09-22 the halt was a repo-root HALT file
+         that covered every job, and paper's exemption was --ignore-halt on
+         its crontab line — a misuse of a flag meant for backups, replaced by
+         this per-instance model. Before 2026-08 the halt lived only in a
+         hand-edited installed crontab — uncommitted, undated, and identical
+         in appearance to a system that had silently stalled. That ambiguity
+         is the thing these sentinel files exist to remove.
+
+Resume:  docs/runbook-recovery.md, "Halt / Resume". Short version: review the
+         audit's Tier 1 / 0.2 status, `git rm instances/live.HALT`, clear any
+         ALGO_TRADING_HALTED in instances/live.env, uncomment the live
+         session lines in `crontab`, reinstall with
+         `crontab /home/jay/dev/algo/crontab`, and commit — a resume should
+         be as visible in git as the halt.
+
+         Note: re-depositing capital will read as a giant equity jump to the
+         dashboard and the reflection stage, which cannot distinguish
+         deposits from performance (audit B.6/2.6).
