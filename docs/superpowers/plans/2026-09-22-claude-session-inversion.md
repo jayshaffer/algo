@@ -1,5 +1,11 @@
 # Claude Session Inversion Implementation Plan
 
+> **Status (2026-09-22): superseded, not for execution.** Split into
+> `2026-09-22-session-seams.md` (Tasks 2–5 of this plan plus `--resume`, no
+> inversion) and `2026-09-22-strategist-pilot.md` (strategist only, isolated
+> non-bare `claude -p`, two-week A/B against the API path). Kept as the
+> reference for the remaining stages if the pilot passes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run every LLM stage of the daily session as a headless `claude -p` call under the operator's Claude subscription, with Python reduced to session bookkeeping, an MCP tool server, and the deterministic order path.

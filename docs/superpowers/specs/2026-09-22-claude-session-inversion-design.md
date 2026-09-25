@@ -1,7 +1,11 @@
 # Claude Session Inversion — Design Spec
 
 **Date:** 2026-09-22
-**Status:** Draft, pending implementation plan
+**Status:** Accepted in two phases (2026-09-22). Phase one, the seams, is
+`docs/superpowers/plans/2026-09-22-session-seams.md`; phase two pilots
+the strategist only (`docs/superpowers/plans/2026-09-22-strategist-pilot.md`)
+before any other stage moves. The full plan
+(`2026-09-22-claude-session-inversion.md`) is the reference for later stages.
 **Scope:** Run every LLM stage of the daily session as a headless Claude Code
 session under the operator's Claude subscription, with Python reduced to
 deterministic tooling. Cron and `cron-wrap.sh` stay the trigger.
